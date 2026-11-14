@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.2.0
+// @version      0.3.0
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -270,9 +270,9 @@ function attachPlayer(candidate) {
   const {kind,video,root,api} = candidate;
   const initialSource=playerFingerprint(candidate);
   let adActive = false;
-  const handlers = [];
+  const handlers = [],subscribers=new Set();
   if (kind === 'jw') for (const [event,value] of [['adRequest',true],['adPlay',true],['adComplete',false],['adSkipped',false],['adError',false]]) {
-    const handler = () => { adActive = value; };
+    const handler = () => { adActive = value;for(const notify of subscribers)notify(); };
     api.on?.(event,handler); handlers.push([event,handler]);
   }
   const isAd = () => adActive || !!video.closest('.jw-flag-ads,.jw-ad-media') || ['loading','playing','paused'].includes(api?.getAdState?.());
@@ -290,13 +290,14 @@ function attachPlayer(candidate) {
     switch (action) {
       case 'seek': if (!finite(value)) return false; if (kind === 'jw') api.seek(clampSeek(value,s.duration)); else video.currentTime = clampSeek(value,s.duration); break;
       case 'rate': if (!finite(value) || value < 0.25 || value > 4) return false; if (kind === 'jw' && typeof api.setPlaybackRate === 'function') api.setPlaybackRate(value); else video.playbackRate = value; break;
-      case 'play': if (kind === 'jw') api.play(true); else video.play().catch(()=>{}); break;
-      case 'pause': if (kind === 'jw') api.pause(true); else video.pause(); break;
+      case 'mute': if(typeof value!=='boolean')return false; if(kind==='jw' && typeof api.setMute==='function')api.setMute(value);else video.muted=value;break;
+      case 'play': if (kind === 'jw' && typeof api.play==='function') api.play(true); else video.play()?.catch(()=>{}); break;
+      case 'pause': if (kind === 'jw' && typeof api.pause==='function') api.pause(true); else video.pause(); break;
       default:return false;
     }
     return true;
   };
-  return {kind,video,root,api,state,command,fingerprint:()=>playerFingerprint(candidate),dispose() { for (const [event,handler] of handlers) api.off?.(event,handler); }};
+  return {kind,video,root,api,state,command,fingerprint:()=>playerFingerprint(candidate),subscribe(notify){subscribers.add(notify);return ()=>subscribers.delete(notify);},dispose() { subscribers.clear();for (const [event,handler] of handlers) api.off?.(event,handler); }};
 }
 function playerFingerprint(candidate) {
   try {
@@ -331,6 +332,8 @@ function createBridge(win, page, feature, callbacks = {}) {
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
   let boundFrame = null;
   let knownSource=false, snapshot=null, pending='', retryAfter=0;
+  const requests=new Map();
+  const clearRequests=()=>{for(const request of requests.values()){win.clearTimeout(request.timer);request.resolve('unavailable');}requests.clear();};
   const referrer = safeURL(win.document.referrer)?.origin;
   const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media});
   const resetRemote = () => { remote = null; media = ''; session = null; generation++; emit(); };
@@ -341,10 +344,14 @@ function createBridge(win, page, feature, callbacks = {}) {
     if (!d || d.channel !== channel) return;
     if (!top && d.type === 'hello') {
       if (event.source !== win.parent || !isSiteOrigin(event.origin) || (referrer && event.origin !== referrer) || !/^[a-f\d]{32}$/.test(d.token) || !Number.isSafeInteger(d.generation)) return;
+      if(!Number.isSafeInteger(d.seq) || d.seq<0)return;
       if (session?.token !== d.token || session?.generation !== d.generation) {
+        clearRequests();
         session = {source:event.source,origin:event.origin,token:d.token,generation:d.generation,seq:-1};sequence = 0;
       }
-      context=bridgeContext(d.context);emit();
+      if(d.seq<=session.seq)return;
+      session.seq=d.seq;
+      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;emit();
       return;
     }
     if (!acceptsPacket(event,session,channel)) return;
@@ -352,10 +359,21 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (!boundFrame?.isConnected || boundFrame.contentWindow !== event.source || boundFrame.src !== session.src || contextKey(context) !== session.key) return;
       if (d.type === 'state' && validState(d.state) && /^[a-f\d]{32}$/.test(d.media)) {
         session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};emit();
-      } else if (d.type === 'request' && d.action === 'next' && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) { session.seq = d.seq;callbacks.request?.('next'); }
+      } else if (d.type === 'request' && d.action === 'next' && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
+        session.seq = d.seq;
+        if(session.requesting && Date.now()<=session.requesting.until)return;
+        const active=session,activeMedia=media,requestMarker={until:Date.now()+11000};active.requesting=requestMarker;
+        const isCurrent=()=>!disposed && session===active && active.requesting===requestMarker && Date.now()<=requestMarker.until && media===activeMedia && boundFrame?.isConnected && boundFrame.contentWindow===active.source && boundFrame.src===active.src && contextKey(context)===active.key && remote?.ready && !remote.ad;
+        Promise.resolve().then(()=>isCurrent()?callbacks.request?.('next',{isCurrent}):'unavailable').then(status=>{
+          if(!isCurrent())return;
+          send({type:'result',id:d.id,media:activeMedia,status:['missing','error','navigating','unavailable'].includes(status)?status:'error'});
+        }).catch(()=>{if(isCurrent())send({type:'result',id:d.id,media:activeMedia,status:'error'});}).finally(()=>{if(active.requesting===requestMarker)active.requesting=null;});
+      }
     } else if (d.type === 'command' && d.media === media) {
       session.seq = d.seq;
       try { local?.command(d.action,d.value); } catch { /* player changed while message was queued */ }
+    } else if(!top && d.type==='result' && d.media===media && requests.has(d.id) && ['missing','error','navigating','unavailable'].includes(d.status)){
+      session.seq=d.seq;const request=requests.get(d.id);requests.delete(d.id);win.clearTimeout(request.timer);request.resolve(d.status);
     }
   };
   const tick = () => {
@@ -398,7 +416,7 @@ function createBridge(win, page, feature, callbacks = {}) {
       let source = '';
       try { source = candidate ? playerFingerprint(candidate) : ''; } catch { /* not ready */ }
       if (candidate?.video !== local?.video || candidate?.api !== local?.api || candidate?.kind !== local?.kind || source !== lastSource) {
-        callbacks.unbind?.(local); local?.dispose();local = candidate ? attachPlayer(candidate) : null;lastSource = source;media = local ? token(win) : '';emit();
+        clearRequests();callbacks.unbind?.(local); local?.dispose();local = candidate ? attachPlayer(candidate) : null;lastSource = source;media = local ? token(win) : '';emit();
       }
       if (local && session) send({type:'state',state:local.state(),media});
       if(local)emit();
@@ -416,24 +434,26 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (!remote?.ready || remote.ad || !media || !session || Date.now() - session.seen > 4000) return false;
       send({type:'command',action,value,media});return true;
     },
-    request(action) { if (!top && action === 'next' && local?.state().ready) send({type:'request',action,media}); },
+    request(action) {
+      if(top || action!=='next' || !local?.state().ready || !session || !context)return false;
+      if(requests.size)return false;
+      const id=token(win);
+      return new Promise(resolve=>{
+        const timer=win.setTimeout(()=>{requests.delete(id);resolve('timeout');},12000);
+        requests.set(id,{resolve,timer});
+        // Flush state so the parent validates the same active resource even
+        // before the first heartbeat.
+        send({type:'state',state:local.state(),media});send({type:'request',action,id,media});
+      });
+    },
     refresh:tick,
-    dispose() { disposed = true;win.clearInterval(timer);offDOM();win.removeEventListener('message',onMessage);boundFrame?.removeEventListener('load',loaded);callbacks.unbind?.(local);local?.dispose(); },
+    dispose() { disposed = true;clearRequests();win.clearInterval(timer);offDOM();win.removeEventListener('message',onMessage);boundFrame?.removeEventListener('load',loaded);callbacks.unbind?.(local);local?.dispose(); },
   };
   return bridge;
 }
 
 
 // ---- lib/ui.js ----
-function uiStyle(doc) {
-  if (doc.getElementById('rp-ui-style')) return;
-  const style = doc.createElement('style');style.id = 'rp-ui-style';
-  style.textContent = `[data-rp-ui]{font:13px/1.5 system-ui,sans-serif;color:#fff;box-sizing:border-box}[data-rp-ui] button,[data-rp-ui] a{font:inherit;cursor:pointer;background:#202735;color:#fff;border:1px solid #68758a;border-radius:6px;padding:6px 9px;text-decoration:none}[data-rp-ui] button:disabled{opacity:.45;cursor:default}[data-rp-ui] button:focus-visible,[data-rp-ui] a:focus-visible{outline:2px solid #ffe08a;outline-offset:2px}[data-rp-ui] input{font:inherit;color:#fff;background:#202735;border:1px solid #68758a;border-radius:4px;width:65px;padding:4px}.rp-tools{position:absolute;top:8px;right:8px;z-index:2147483645;max-width:calc(100% - 16px)}.rp-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:7px;background:#101722ed;border-radius:8px;max-width:600px}.rp-tools>summary{cursor:pointer;list-style:none;background:#101722c9;border:1px solid #68758a;border-radius:6px;width:32px;text-align:center;padding:3px}.rp-toast{display:block;max-width:320px;background:#101722e8;border-radius:6px;margin-top:4px;padding:3px 6px}.rp-page{position:fixed;bottom:14px;left:14px;z-index:2147483645}.rp-panel{position:fixed;inset:8vh max(12px,calc((100vw - 720px)/2));z-index:2147483646;overflow:auto;background:#101722;border:1px solid #68758a;border-radius:12px;padding:14px;box-shadow:0 12px 60px #0009;max-height:84vh}.rp-panel article{padding:10px 0;border-bottom:1px solid #394457}.rp-panel p{margin:4px 0}.rp-panel a{display:inline-block;margin:4px 5px 4px 0}`;
-  style.textContent+='[data-rp-ui][hidden],[data-rp-ui] [hidden]{display:none!important}';
-  style.textContent+='.rp-continue{position:relative;margin:90px 16px 20px;padding:16px;background:#101722;color:#fff;border:1px solid #394457;border-radius:12px;z-index:1}.rp-continue h2{font-size:21px;margin:0 0 12px}.rp-continue h3{font-size:16px;margin:0 0 6px}.rp-history-cards{display:flex;gap:12px;overflow-x:auto;padding:4px 0 10px}.rp-history-cards article{flex:0 0 250px;padding:12px;border:1px solid #394457;border-radius:8px}.rp-history-cards a{display:inline-block;margin:8px 0 0}.rp-history-cards p{margin:4px 0 10px}';
-  style.textContent+='[data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}[data-rp-custom-controls="1"] .loading-screen{pointer-events:none!important}.rp-player-shell{position:absolute;inset:0;z-index:2147483642;pointer-events:none}.rp-gesture-surface{position:absolute;inset:0;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.rp-player-chrome{position:absolute;bottom:0;left:0;right:0;padding:9px;background:linear-gradient(transparent,#000d);pointer-events:auto}.rp-player-line{display:flex;gap:6px;align-items:center}.rp-player-line button,.rp-unlock{min-height:44px;min-width:44px}.rp-player-time{flex:1;text-align:center;font-size:12px}.rp-player-chrome input[type="range"]{display:block;width:100%;box-sizing:border-box;margin:7px 0 0;min-height:32px;padding:0;accent-color:#ffe08a;touch-action:none}.rp-unlock{position:absolute;left:10px;top:10px;pointer-events:auto;background:#101722ed!important}.rp-player-shell>.rp-toast{position:absolute;top:12px;left:50%;transform:translateX(-50%);pointer-events:none}.rp-player-shell [hidden],.rp-player-shell [hidden].rp-unlock{display:none!important}';
-  (doc.head || doc.documentElement).append(style);
-}
 function makeButton(doc, label, action, parent) {
   const b = doc.createElement('button');b.type='button';b.textContent=label;b.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();action(event);});parent?.append(b);return b;
 }
@@ -441,14 +461,6 @@ function toast(host, text) {
   let node = host.querySelector('.rp-toast');
   if (!node) { node=host.ownerDocument.createElement('output');node.className='rp-toast';node.setAttribute('aria-live','polite');host.append(node); }
   node.textContent=text;
-}
-function toolsHost(root) {
-  const doc=root.ownerDocument;uiStyle(doc);
-  const host=doc.createElement('details');host.dataset.rpUi='controls';host.className='rp-tools';
-  const summary=doc.createElement('summary');summary.textContent='RP';summary.title='Thao tác RoPhim';host.append(summary);
-  const row=doc.createElement('div');row.className='rp-row';host.append(row);
-  if (doc.defaultView.getComputedStyle(root).position === 'static') { root.style.position='relative'; }
-  root.append(host);return {host,row};
 }
 
 
@@ -527,33 +539,158 @@ async function historyDestination(row,win) {
 }
 
 
+// ---- lib/history-layout.js ----
+// Content placement follows observed layout contracts, independently of hostname
+// and of advertising. Never prepend UI to body or above the site's navigation.
+function historyPlacement(doc,watch=false) {
+  if(watch){
+    const player=doc.querySelector('#wrapper .watch-player,.watch-player');
+    if(player)return {kind:'watch',parent:player.parentElement,after:player};
+    const frame=doc.querySelector('.player-ratio iframe#embed-player,iframe#player.player-iframe');
+    const ratio=frame?.closest('.player-ratio');
+    return ratio?{kind:'watch',parent:ratio.parentElement,after:ratio}:null;
+  }
+  const hero=doc.querySelector('#top_slider .top-slide-wrap');
+  const content=doc.querySelector('#wrapper.wrapper-w-slide > .fluid-gap');
+  if(hero && content)return {kind:'cinema',parent:content,before:content.firstElementChild};
+  const board=doc.querySelector('#section-first.home-section .container .home-board');
+  if(board)return {kind:'landing',parent:board.parentElement,after:board};
+  // Unknown layouts wait for a real content region instead of guessing at body.
+  const main=doc.querySelector('main');
+  if(main && main.querySelector('a[href^="/phim/"],a[href^="/xem-phim/"]')){
+    const banner=main.querySelector('.hero,.slideshow,[data-hero]');
+    return banner && banner.parentElement===main?{kind:'content',parent:main,after:banner}:{kind:'content',parent:main,before:main.firstElementChild};
+  }
+  return null;
+}
+function placeHistory(node,placement) {
+  if(!placement)return false;
+  node.dataset.rpLayout=placement.kind;
+  if(placement.after){if(node.parentElement!==placement.parent || placement.after.nextElementSibling!==node)placement.after.after(node);}
+  else if(node.parentElement!==placement.parent || placement.before && placement.before!==node && node.nextElementSibling!==placement.before){placement.parent.insertBefore(node,placement.before===node?node.nextSibling:placement.before || null);}
+  return true;
+}
+
+
+// ---- lib/history-ui.js ----
+
+function historyIcon(name){
+  const paths={play:'<path d="M8 5l11 7-11 7z"/>',arrow:'<path d="M5 12h14m-5-5l5 5-5 5"/>',external:'<path d="M14 3h7v7m0-7L10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/>',close:'<path d="M6 6l12 12M18 6L6 18"/>',history:'<path d="M3 11a9 9 0 1 1 2.5 7M3 4v7h7m2-4v5l3 2"/>',trash:'<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>'};
+  return `<svg viewBox="0 0 24 24" fill="${name==='play'?'currentColor':'none'}" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
+}
+function historyEpisode(row){
+  const episode=/^(?:tập\s*)?full$/i.test(row.episode)?'Phim lẻ':/^tập\b/i.test(row.episode)?row.episode:'Tập '+row.episode.replace(/^0+(?=\d)/,'');
+  const lane={subtitle:'Vietsub',dubbed:'Lồng tiếng',voiceover:'Thuyết minh'}[laneKey(row.lane)] || row.lane;
+  return (Number(row.season)>1?'Phần '+row.season+' · ':'')+episode+' · '+lane;
+}
+function historyArtwork(row,doc){
+  const stored=safeURL(row.poster,row.url);if(stored && row.poster)return stored.href;
+  for(const link of doc.querySelectorAll('a[href]')){
+    if(link.closest('[data-rp-ui]'))continue;
+    const url=safeURL(link.href,doc.location?.href),label=link.getAttribute('title') || link.textContent;
+    if(url && (url.pathname.includes('/'+row.movie) || identityText(label)===identityText(row.title))){
+      const image=link.querySelector('img'),raw=image?.getAttribute('data-src') || image?.getAttribute('src');const imageURL=raw?safeURL(raw,url.href):null;if(imageURL)return imageURL.href;
+    }
+  }
+  return '';
+}
+async function loadHistoryArtwork(row,win){
+  if(typeof win.fetch!=='function')return '';
+  const original=safeURL(row.url);let target=original?.origin===win.location.origin?original:null;
+  if(!target){for(const link of win.document.querySelectorAll('a[href]')){if(link.closest('[data-rp-ui]'))continue;const url=safeURL(link.href,win.location.href);if(url?.origin===win.location.origin && /^\/(?:phim|xem-phim)\//.test(url.pathname) && url.pathname.split('/').at(-1)===row.movie){target=url;break;}}}
+  if(!target && /^[a-z0-9-]{1,200}$/i.test(row.movie))target=safeURL('/xem-phim/'+row.movie,win.location.href);
+  if(!target || target.origin!==win.location.origin || !/^\/(?:phim|xem-phim)\//.test(target.pathname))return '';
+  const controller=new win.AbortController(),timer=win.setTimeout(()=>controller.abort(),6000);
+  try{
+    const response=await win.fetch(target.href,{credentials:'same-origin',signal:controller.signal});
+    if(!response.ok || response.url && safeURL(response.url)?.origin!==win.location.origin)return '';
+    const html=await response.text();if(html.length>2_000_000)return '';
+    const doc=new win.DOMParser().parseFromString(html,'text/html'),context=readContext(detectSite(doc,target.href),doc);
+    const title=(doc.querySelector('meta[property="og:title"]')?.content || doc.title).split('|')[0].replace(/\s*-\s*Tập\s*\d+.*$/i,'').trim();
+    if(!(context && sameFilm(row,context)) && identityText(title)!==identityText(row.title))return '';
+    const raw=context?.poster || doc.querySelector('meta[property="og:image"]')?.content;
+    return raw?safeURL(raw,target.href)?.href || '':'';
+  }catch{return '';}finally{win.clearTimeout(timer);}
+}
+function historyCard(doc,row,{onContinue,onRemove}={}){
+  const card=doc.createElement('article');card.className='rp-history-card';
+  const cover=doc.createElement('div');cover.className='rp-history-cover';card.append(cover);
+  const fallback=doc.createElement('span');fallback.className='rp-cover-fallback';fallback.textContent=row.title.slice(0,1);fallback.setAttribute('aria-hidden','true');cover.append(fallback);
+  const src=historyArtwork(row,doc);
+  if(src){const image=doc.createElement('img');image.className='rp-history-poster';image.src=src;image.alt='';image.loading='lazy';image.decoding='async';image.referrerPolicy='no-referrer';image.addEventListener('error',()=>image.remove(),{once:true});cover.append(image);}
+  const action=doc.createElement('button');action.type='button';action.className='rp-cover-action';action.setAttribute('aria-label','Xem tiếp '+row.title);action.innerHTML='<span class="rp-play-badge">'+historyIcon('play')+'</span>';cover.append(action);
+  const remaining=doc.createElement('span');remaining.className='rp-history-remaining';remaining.textContent=row.completed?'Đã xem':'Còn '+Math.max(1,Math.ceil((row.duration-row.time)/60))+' phút';cover.append(remaining);
+  const progress=doc.createElement('div');progress.className='rp-history-progress';progress.setAttribute('role','progressbar');progress.setAttribute('aria-label','Tiến độ '+row.title);progress.setAttribute('aria-valuemin','0');progress.setAttribute('aria-valuemax','100');const percent=Math.max(0,Math.min(100,Math.round(100*row.time/row.duration)));progress.setAttribute('aria-valuenow',String(percent));progress.style.setProperty('--rp-progress',percent+'%');cover.append(progress);
+  const original=doc.createElement('a');original.className='rp-original-link';original.href=row.url;original.setAttribute('aria-label','Mở trang đã xem: '+row.title);original.title='Mở trang đã xem';original.innerHTML=historyIcon('external');cover.append(original);
+  const title=doc.createElement('h3');title.className='rp-history-title';title.textContent=row.title;title.title=row.title;card.append(title);
+  const meta=doc.createElement('p');meta.className='rp-history-meta';meta.textContent=historyEpisode(row);card.append(meta);
+  const footer=doc.createElement('div');footer.className='rp-history-card-footer';card.append(footer);
+  const resume=doc.createElement('button');resume.type='button';resume.className='rp-resume-link';resume.innerHTML=historyIcon('play')+'<span>Xem tiếp</span>';footer.append(resume);
+  const position=doc.createElement('span');position.className='rp-history-position';const format=t=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');position.textContent=format(row.time)+' / '+format(row.duration);footer.append(position);
+  for(const button of [action,resume])button.addEventListener('click',()=>onContinue?.(row,card,resume));
+  if(onRemove){const remove=doc.createElement('button');remove.type='button';remove.className='rp-history-remove';remove.innerHTML=historyIcon('trash');remove.setAttribute('aria-label','Xóa '+row.title+' khỏi lịch sử');remove.title='Xóa khỏi lịch sử';remove.addEventListener('click',()=>onRemove(row,card));footer.append(remove);}
+  return card;
+}
+function historyUIStyle(doc){
+  if(doc.getElementById('rp-history-style'))return;
+  const style=doc.createElement('style');style.id='rp-history-style';style.textContent=`
+  [data-rp-ui="continue"],[data-rp-ui="history"],[data-rp-ui="history-list"]{--rp-accent:#ffd875;--rp-muted:#a4a8b3;--rp-panel:#20232d;color:#f5f5f6;font:inherit;font-size:14px;line-height:1.5;box-sizing:border-box}
+  .rp-history-section *,.rp-history-dialog *,.rp-history-toolbar *{box-sizing:border-box}.rp-history-section[hidden],.rp-history-toolbar[hidden],.rp-history-dialog[hidden],.rp-history-toolbar [hidden]{display:none!important}
+  .rp-history-section{width:100%;min-width:0;margin:0 0 36px;padding:0;background:none;border:0;position:relative}
+  .rp-history-section[data-rp-layout="landing"]{margin-top:36px}.rp-history-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 18px}.rp-history-section .rp-history-heading h2,.rp-history-dialog h2{font-size:clamp(20px,2vw,28px);font-weight:650;line-height:1.25;margin:0;color:inherit;letter-spacing:-.5px}
+  .rp-history-section button,.rp-history-section a,.rp-history-dialog button,.rp-history-dialog a,.rp-history-toolbar button{font:inherit;text-decoration:none;cursor:pointer;letter-spacing:normal}
+  .rp-history-section .rp-history-all,.rp-history-toolbar .rp-history-all,.rp-history-dialog .rp-dialog-close{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;border:0;border-radius:8px;padding:6px 0;background:transparent;color:var(--rp-muted);white-space:nowrap;font-size:13px}
+  .rp-history-all svg,.rp-dialog-close svg,.rp-history-remove svg,.rp-resume-link svg,.rp-original-link svg{width:17px;height:17px;flex:none}.rp-history-all:hover,.rp-history-toolbar .rp-history-all:hover{color:var(--rp-accent)}
+  .rp-history-cards{display:grid;grid-auto-flow:column;grid-auto-columns:clamp(220px,24vw,290px);justify-content:start;gap:20px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;scrollbar-width:thin;scrollbar-color:#454855 transparent;padding:0 0 12px}
+  .rp-history-card{min-width:0;scroll-snap-align:start;background:none;border:0;padding:0;margin:0}.rp-history-cover{position:relative;isolation:isolate;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:linear-gradient(130deg,#383c50,#191c28);margin-bottom:12px}
+  .rp-cover-fallback{position:absolute;inset:0;display:grid;place-items:center;font-size:46px;font-weight:600;color:#ffffff50}.rp-history-poster{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;transition:transform .2s ease}
+  .rp-history-cover:after{content:"";position:absolute;inset:35% 0 0;background:linear-gradient(transparent,#000b);pointer-events:none;z-index:1}
+  .rp-history-cover .rp-cover-action{position:absolute;inset:0;z-index:2;width:100%;height:100%;padding:0;border:0;border-radius:0;background:transparent;color:#fff;display:flex;align-items:flex-end;justify-content:flex-start}
+  .rp-play-badge{display:grid;place-items:center;width:38px;height:38px;margin:0 0 17px 14px;border-radius:50%;background:#ffffffed;color:#171a23;box-shadow:0 2px 12px #0004}.rp-play-badge svg{width:19px;height:19px;margin-left:2px}
+  .rp-history-remaining{position:absolute;right:12px;bottom:22px;color:#fff;font-size:12px;z-index:2;pointer-events:none}.rp-history-progress{position:absolute;bottom:0;left:0;right:0;height:3px;background:#ffffff45;z-index:4}.rp-history-progress:before{content:"";display:block;width:var(--rp-progress);height:100%;background:var(--rp-accent)}
+  .rp-history-cover .rp-original-link{position:absolute;top:10px;right:10px;z-index:3;display:grid;place-items:center;width:30px;height:30px;padding:7px;border:0;border-radius:50%;background:#111621b8;color:#fff;opacity:0;transition:opacity .15s}
+  .rp-history-card:hover .rp-original-link,.rp-original-link:focus-visible{opacity:1}.rp-history-card:hover .rp-history-poster{transform:scale(1.035)}
+  .rp-history-card .rp-history-title{font-size:15px;font-weight:550;color:inherit;margin:0 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.5}.rp-history-meta{font-size:12px;color:var(--rp-muted);margin:0 0 8px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rp-history-card-footer{display:flex;align-items:center;gap:12px;min-width:0}.rp-history-card .rp-resume-link{display:inline-flex;align-items:center;gap:5px;border:0;border-radius:5px;background:none;color:var(--rp-accent);padding:3px 0;font-size:12px;font-weight:550;min-height:28px;white-space:nowrap}.rp-resume-link svg{width:13px;height:13px}.rp-history-position{font-size:11px;color:#858a98;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .rp-history-card .rp-history-remove{display:grid;place-items:center;margin-left:auto;border:0;border-radius:6px;padding:5px;background:transparent;color:#858a98}.rp-history-remove:hover{color:#ff9c9c;background:#ffffff0a}
+  .rp-history-empty{display:flex;align-items:center;gap:14px;border:1px dashed #ffffff1c;border-radius:12px;padding:20px;color:var(--rp-muted);font-size:13px}.rp-history-empty svg{width:24px;height:24px;color:var(--rp-accent);flex:none}.rp-history-empty p{margin:0}
+  .rp-history-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin:12px 0;padding:0 12px;min-height:40px}.rp-history-toolbar .rp-resume-prompt{display:inline-flex;align-items:center;gap:7px;padding:9px 15px;background:var(--rp-accent);color:#171a23;border:0;border-radius:999px;font-size:13px;font-weight:600}
+  .rp-history-toolbar .rp-toast{font-size:12px;color:var(--rp-muted);max-width:420px}.rp-history-toolbar{flex-wrap:wrap}
+  .rp-history-dialog{position:fixed;inset:0;margin:auto;width:min(100% - 48px,1000px);height:fit-content;max-height:85dvh;padding:28px;border:1px solid #ffffff18;border-radius:18px;background:#191c25;color:#f5f5f6;box-shadow:0 20px 100px #0008;overflow:auto;z-index:2147483646}.rp-history-dialog::backdrop{background:#080a10bc;backdrop-filter:blur(5px)}.rp-history-dialog .rp-history-cards{grid-auto-flow:row;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));grid-auto-columns:auto;gap:26px 20px;overflow:visible}.rp-history-dialog .rp-dialog-close{width:36px;background:#ffffff0a;padding:8px}.rp-history-dialog .rp-history-heading{margin-bottom:24px}
+  .rp-history-section :focus-visible,.rp-history-dialog :focus-visible,.rp-history-toolbar :focus-visible{outline:2px solid var(--rp-accent);outline-offset:3px}.rp-history-section button:disabled,.rp-history-dialog button:disabled{opacity:.6;cursor:wait}.rp-history-card .rp-card-status{font-size:12px;margin:6px 0 0;color:var(--rp-accent)}
+  @media(max-width:600px){.rp-history-section{margin-bottom:24px}.rp-history-heading{margin-bottom:14px}.rp-history-cards{grid-auto-columns:72%;gap:14px;scrollbar-width:none}.rp-history-cover{border-radius:10px}.rp-history-card .rp-history-title{font-size:14px}.rp-history-cover .rp-original-link{opacity:1}.rp-history-dialog{width:calc(100% - 24px);padding:18px;max-height:90dvh;border-radius:14px}.rp-history-dialog .rp-history-cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px}.rp-history-dialog .rp-history-card-footer{gap:4px;flex-wrap:wrap}.rp-history-dialog .rp-history-position{font-size:10px}.rp-history-dialog .rp-play-badge{width:30px;height:30px;margin:0 0 12px 10px}.rp-history-dialog .rp-history-remaining{font-size:10px;bottom:16px}.rp-history-dialog .rp-history-meta{font-size:11px}}
+  @media(prefers-reduced-motion:reduce){.rp-history-poster,.rp-original-link{transition:none}}
+  `;(doc.head || doc.documentElement).append(style);
+}
+
+
 // ---- source/rophim-history.js ----
 
 function startHistory(win,page) {
   const doc=win.document,top=win.parent===win,db=createHistoryStore(storageAPI(win));
   let active=null,progress=null,media='',savedAt=0,lastKey='',bar=null,resume=null,panel=null,bridge=null,snapshot=null,continuing=null,cardSignature='',savedSignature='';
+  const artworkRequests=new Set();let stopped=false;
   const format=t=>`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
   function showList(){
-    if(panel){panel.remove();panel=null;return;}
-    panel=doc.createElement('section');panel.dataset.rpUi='history-list';panel.className='rp-panel';panel.setAttribute('role','dialog');panel.setAttribute('aria-label','Lịch sử xem RoPhim');
-    const header=doc.createElement('h2');header.textContent='Lịch sử xem';panel.append(header);
-    makeButton(doc,'Đóng',()=>{panel.remove();panel=null;},panel);
+    if(panel){const opened=panel;panel=null;opened.close?.();opened.remove();return;}
+    historyUIStyle(doc);
+    const dialog=doc.createElement('dialog');panel=dialog;dialog.dataset.rpUi='history-list';dialog.className='rp-history-dialog';dialog.setAttribute('aria-label','Lịch sử xem');
+    const heading=doc.createElement('div');heading.className='rp-history-heading';const title=doc.createElement('h2');title.textContent='Lịch sử xem';heading.append(title);dialog.append(heading);
+    const close=makeButton(doc,'',()=>{dialog.close?.();dialog.remove();if(panel===dialog)panel=null;},heading);close.className='rp-dialog-close';close.innerHTML=historyIcon('close');close.setAttribute('aria-label','Đóng lịch sử');
+    const cards=doc.createElement('div');cards.className='rp-history-cards';dialog.append(cards);
     const rows=db.list().slice(0,300);
-    if(!rows.length){const p=doc.createElement('p');p.textContent='Chưa có tiến độ video nội dung được ghi nhận.';panel.append(p);}
-    for(const row of rows){
-      const article=doc.createElement('article'),title=doc.createElement('strong'),text=doc.createElement('p'),link=doc.createElement('a');
-      title.textContent=row.title;text.textContent=`${row.episode} · ${row.lane} · ${row.server} · ${format(row.time)} / ${format(row.duration)}${row.completed?' · Đã xem':''}`;
-      link.href=row.url;link.textContent='Trang đã xem';article.append(title,text,link);
-      makeButton(doc,'Xem tiếp tại đây',()=>navigate(row,article),article);
-      makeButton(doc,'Xóa mục này',()=>{db.remove(row);if(contextKey(active)===contextKey(row)){snapshot=null;resume.hidden=true;}article.remove();},article);panel.append(article);
-    }
-    const note=doc.createElement('p');note.textContent='Lưu riêng trong trình quản lý userscript; danh sách hiển thị tối đa 300 mục gần nhất.';panel.append(note);doc.body.append(panel);
+    if(!rows.length)emptyHistory(dialog,'Lịch sử xem của bạn sẽ xuất hiện ở đây.');
+    for(const row of rows)cards.append(historyCard(doc,row,{onContinue:navigate,onRemove:(value,card)=>{db.remove(value);if(contextKey(active)===contextKey(value)){snapshot=null;if(resume)resume.hidden=true;}card.remove();cardSignature='';home();if(!cards.children.length)emptyHistory(dialog,'Bạn chưa có phim trong lịch sử.');}}));
+    dialog.addEventListener('close',()=>{dialog.remove();if(panel===dialog)panel=null;});
+    dialog.addEventListener('click',event=>{if(event.target===dialog){const box=dialog.getBoundingClientRect();if(event.clientX<box.left || event.clientX>box.right || event.clientY<box.top || event.clientY>box.bottom)close.click();}});
+    doc.body.append(dialog);if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');
   }
+  function emptyHistory(host,text){const empty=doc.createElement('div');empty.className='rp-history-empty';empty.innerHTML=historyIcon('history');const label=doc.createElement('p');label.textContent=text;empty.append(label);host.append(empty);}
   function ensureUI(){
     if(!doc.body || bar)return;
-    uiStyle(doc);bar=doc.createElement('div');bar.dataset.rpUi='history';bar.className='rp-page rp-row';bar.style.left='auto';bar.style.right='14px';doc.body.append(bar);
-    makeButton(doc,'Lịch sử RP',showList,bar);
-    resume=makeButton(doc,'Tiếp tục',()=>{if(snapshot && bridge?.state()?.ready && snapshot.time<bridge.state().duration-5){if(bridge.command('seek',snapshot.time)){snapshot=null;resume.hidden=true;toast(bar,'Đã chuyển tới mốc đã lưu');}}},bar);resume.hidden=true;
+    historyUIStyle(doc);bar=doc.createElement('div');bar.dataset.rpUi='history';bar.className='rp-history-toolbar';
+    resume=makeButton(doc,'Tiếp tục',()=>{if(snapshot && bridge?.state()?.ready && snapshot.time<bridge.state().duration-5){if(bridge.command('seek',snapshot.time)){snapshot=null;resume.hidden=true;}}},bar);resume.className='rp-resume-prompt';resume.hidden=true;
+    const all=makeButton(doc,'',showList,bar);all.className='rp-history-all';all.innerHTML=historyIcon('history')+'<span>Lịch sử</span>';
   }
   function persist(){
     if(!top || !active || !progress || !media)return;
@@ -562,32 +699,43 @@ function startHistory(win,page) {
     if(row && signature!==savedSignature){try{db.save(row);savedSignature=signature;}catch{if(bar)toast(bar,'Không lưu được lịch sử: kiểm tra quyền userscript');}}
     savedAt=Date.now();
   }
-  async function navigate(row,host){
+  async function navigate(row,host,trigger){
     if(host.dataset.rpNavigating)return;
-    host.dataset.rpNavigating='1';toast(host,'Đang tìm đúng phim, tập và bản dịch trên trang này…');
+    host.dataset.rpNavigating='1';
+    const buttons=[...host.querySelectorAll('button')];for(const button of buttons)button.disabled=true;
+    const original=trigger?.innerHTML;if(trigger){trigger.textContent='Đang mở…';trigger.setAttribute('aria-busy','true');}
+    const status=text=>{let node=host.querySelector('.rp-card-status');if(!node){node=doc.createElement('p');node.className='rp-card-status';node.setAttribute('role','status');host.append(node);}node.textContent=text;};
+    const href=win.location.href;
     try{
       const destination=await historyDestination(row,win);
-      if(!destination){toast(host,'Chưa tìm được đúng phim/tập/bản dịch trên trang này. Bạn có thể mở phim rồi bấm Tiếp tục.');return;}
+      if(win.location.href!==href)return;
+      if(!destination){status('Chưa tìm thấy bản phim này trên trang hiện tại. Dùng biểu tượng mở trang đã xem trên ảnh bìa.');return;}
       if(destination.source==='legacy-panels')doc.cookie=`selectedVidTypeRophim=${laneKey(destination.lane)==='voiceover'?'tm':'vs'}; path=/; SameSite=Lax`;
       win.location.assign(destination.url);
-    }catch{toast(host,'Không đọc được dữ liệu phim của trang này. Hãy thử lại.');}finally{delete host.dataset.rpNavigating;}
+    }catch{status('Chưa mở được phim. Bạn có thể thử lại.');}finally{delete host.dataset.rpNavigating;for(const button of buttons)button.disabled=false;if(trigger){trigger.innerHTML=original;trigger.removeAttribute('aria-busy');}}
   }
   function home(){
     if(!top || !isSiteOrigin(win.location.origin) || !doc.body)return;
-    ensureUI();bar.hidden=false;
-    if(win.location.pathname.startsWith('/xem-phim/')){if(continuing)continuing.hidden=true;return;}
-    if(!continuing?.isConnected){continuing=doc.createElement('section');continuing.dataset.rpUi='continue';continuing.className='rp-continue';doc.body.prepend(continuing);cardSignature='';}
-    continuing.hidden=false;
-    const rows=db.continuing().slice(0,24),signature=JSON.stringify(rows.map(r=>[contextKey(r),r.time,r.updated]));
+    ensureUI();
+    const watch=win.location.pathname.startsWith('/xem-phim/'),placement=historyPlacement(doc,watch);
+    if(watch){if(continuing)continuing.remove();if(placement)placeHistory(bar,placement);else bar.remove();return;}
+    bar.remove();
+    if(!placement){continuing?.remove();return;}
+    if(!continuing){continuing=doc.createElement('section');continuing.dataset.rpUi='continue';continuing.className='rp-history-section';continuing.setAttribute('aria-label','Đang xem');}
+    if(!continuing.isConnected)cardSignature='';placeHistory(continuing,placement);
+    const rows=db.continuing().slice(0,24),signature=JSON.stringify(rows.map(r=>[contextKey(r),r.time,r.updated,r.poster]));
     if(signature===cardSignature)return;cardSignature=signature;continuing.replaceChildren();
-    const heading=doc.createElement('h2');heading.textContent='Đang xem';continuing.append(heading);
-    if(!rows.length){const text=doc.createElement('p');text.textContent='Phim bạn đang xem sẽ xuất hiện tại đây, dùng chung trong Tampermonkey này.';continuing.append(text);}
+    const heading=doc.createElement('div');heading.className='rp-history-heading';const title=doc.createElement('h2');title.textContent='Đang xem';heading.append(title);continuing.append(heading);
+    const all=makeButton(doc,'',showList,heading);all.className='rp-history-all';all.innerHTML='<span>Lịch sử</span>'+historyIcon('arrow');all.setAttribute('aria-label','Mở lịch sử xem');
+    if(!rows.length){emptyHistory(continuing,'Phim đang xem sẽ xuất hiện ở đây.');return;}
     const cards=doc.createElement('div');cards.className='rp-history-cards';continuing.append(cards);
     for(const row of rows){
-      const card=doc.createElement('article');
-      const title=doc.createElement('h3'),description=doc.createElement('p');title.textContent=row.title;description.textContent=`${row.episode} · ${row.lane} · ${format(row.time)} / ${format(row.duration)}`;
-      card.append(title,description);makeButton(doc,'Xem tiếp tại đây',()=>navigate(row,card),card);
-      const source=doc.createElement('a');source.href=row.url;source.textContent='Trang đã xem';card.append(source);cards.append(card);
+      cards.append(historyCard(doc,row,{onContinue:navigate}));
+      const key=contextKey(row);
+      if(!historyArtwork(row,doc) && !artworkRequests.has(key) && artworkRequests.size<4 && typeof win.fetch==='function'){
+        artworkRequests.add(key);
+        loadHistoryArtwork(row,win).then(poster=>{if(stopped || !poster)return;const current=db.read(row);if(current && current.updated===row.updated){try{db.save({...current,poster});cardSignature='';home();}catch{/* Poster enrichment must not affect saved playback. */}}});
+      }
     }
   }
   bridge=createBridge(win,page,'history',{
@@ -598,7 +746,7 @@ function startHistory(win,page) {
       if(nextKey!==lastKey){persist();lastKey=nextKey;snapshot=info.context ? db.read(info.context) : null;active=info.context;progress=null;media='';savedAt=0;savedSignature='';}
       else active=info.context;
       progress=info.state;media=info.media;
-      if(active){ensureUI();bar.hidden=false;}else if(bar)bar.hidden=win.location.pathname.startsWith('/xem-phim/');
+      if(active){ensureUI();bar.hidden=false;placeHistory(bar,historyPlacement(doc,true));}else if(bar)bar.hidden=win.location.pathname.startsWith('/xem-phim/');
       const compatible=snapshot && info.state?.ready && Math.abs(snapshot.duration-info.state.duration)<=Math.max(5,snapshot.duration*.02);
       if(resume){resume.hidden=!(compatible && snapshot.time>=5 && !snapshot.completed && snapshot.time<info.state.duration-5);resume.textContent=snapshot?`Tiếp tục ${format(snapshot.time)}`:'Tiếp tục';}
       if(snapshot && info.state?.ready && !compatible && bar)toast(bar,'Có lịch sử đã lưu, nhưng bản phim này khác thời lượng nên chưa thể tua đúng mốc.');
@@ -607,7 +755,7 @@ function startHistory(win,page) {
   });
   let offHome=()=>{},homeTimer=0;
   if(top && isSiteOrigin(win.location.origin)){doc.addEventListener('visibilitychange',()=>{if(doc.hidden)persist();else home();});win.addEventListener('pagehide',persist);offHome=watchDOM(win,home);homeTimer=win.setInterval(home,3000);home();}
-  win.addEventListener('pagehide',event=>{if(!event.persisted){bridge.dispose();offHome();win.clearInterval(homeTimer);}});
+  win.addEventListener('pagehide',event=>{if(!event.persisted){stopped=true;bridge.dispose();offHome();win.clearInterval(homeTimer);}});
 }
 startHistory(window,typeof unsafeWindow==='undefined' ? window : unsafeWindow);
 

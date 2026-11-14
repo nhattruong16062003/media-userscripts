@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Chặn quảng cáo
 // @namespace    rophim-userscripts.local
-// @version      0.2.0
+// @version      0.3.0
 // @author       zic
 // @description  Chặn quảng cáo cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -57,6 +57,19 @@ function storageAPI(win) {
 function clampSeek(time, duration) { return Math.max(0, Math.min(Math.max(0, duration - 0.25), time)); }
 
 
+// ---- lib/advertising-slots.js ----
+// Shared advertising DOM evidence only; never used to select site/player adapters.
+function sponsorDirectories(doc) {
+  return [...doc.querySelectorAll('.topics-list.topics-grid')].filter(node=>{
+    const headings=[...node.querySelectorAll('.heading-sm,.heading-md,h2,h3')];
+    const named=headings.some(heading=>/nhà\s+(?:cái|tài\s+trợ)\s+uy\s+tín/i.test(heading.textContent || ''));
+    // The named directory plus dedicated sponsor cards remains identifiable
+    // before/after Revive fills a slot, without depending on the ad destination.
+    return named && !!node.querySelector('.row-topic.adserver,.row-topic-ad,ins[data-revive-id]') && !node.querySelector('video,audio,iframe#embed-player,iframe#player,.server-picker,form,a.row-topic:not(.adserver):not(.row-topic-ad)');
+  });
+}
+
+
 // ---- lib/ads.js ----
 
 // Advertising contracts are independent of site/player classification.
@@ -68,7 +81,7 @@ const AD_RULES = [
   {id:'legacy-sponsored-overlay',selector:'#overlay.heroup1',proof:n=>!!n.querySelector('a[rel~="sponsored"]')},
   {id:'legacy-footer',selector:'#footer_fixed_heroes,.hero-sticky-footer-wrapper',proof:n=>!!n.querySelector('a[rel~="sponsored"]')},
   {id:'sponsor-card',selector:'.row-topic.adserver',proof:n=>!!n.querySelector('ins[data-revive-id][data-z],a[rel~="sponsored"]')},
-  {id:'sponsor-directory',selector:'.topics-list.topics-grid',proof:n=>/nhà cái uy tín/i.test(n.querySelector('.heading-sm')?.textContent || '') && !!n.querySelector('.row-topic.adserver ins[data-revive-id][data-z]') && [...n.children].every(child=>child.matches('.row-topic.mask,.row-topic.adserver'))},
+  {id:'sponsor-directory',selector:'.topics-list.topics-grid',proof:n=>sponsorDirectories(n.ownerDocument).includes(n)},
 ];
 function filterAdCarousel(doc) {
   const changed=new Set();
