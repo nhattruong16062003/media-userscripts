@@ -1,4 +1,4 @@
-import {finite, clampSeek} from '../media.js';
+import {finite, clampSeek,audioPreference} from '../media.js';
 
 export function mediaVisible(node, win) {
   if (!node?.isConnected) return false;
@@ -44,9 +44,34 @@ export function selectPlayerTrack(candidate,kind,id){
   if(candidate?.kind!=='jw' || !Object.hasOwn(names,kind) || !Number.isInteger(id) || !playerTracks(candidate)[kind]?.some(item=>item.id===id))return false;
   try{candidate.api[names[kind]](id);return true;}catch{return false;}
 }
-export function attachPlayer(candidate) {
+export function attachPlayer(candidate,{canRestoreAudio=()=>true}={}) {
   const {kind,video,root,api} = candidate;
   const initialSource=playerFingerprint(candidate);
+  let audioGeneration=0;
+  const audio=()=>{
+    try{const muted=kind==='jw' && typeof api.getMute==='function'?api.getMute():video.muted,volume=kind==='jw' && typeof api.getVolume==='function'?api.getVolume()/100:video.volume;return {muted:!!muted,volume:finite(volume) && volume>=0 && volume<=1?volume:1};}
+    catch{return {muted:!!video.muted,volume:finite(video.volume)?video.volume:1};}
+  };
+  const setMute=value=>kind==='jw' && typeof api.setMute==='function'?api.setMute(value):(video.muted=value);
+  const setVolume=value=>kind==='jw' && typeof api.setVolume==='function'?api.setVolume(value*100):(video.volume=value);
+  function restoreAudio(value){
+    const wanted=audioPreference(value);if(!wanted || !canRestoreAudio())return false;
+    const navigator=video.ownerDocument.defaultView.navigator;
+    if(!wanted.muted && wanted.volume>0 && typeof navigator.getAutoplayPolicy==='function'){
+      try{if(navigator.getAutoplayPolicy(video)!=='allowed')return false;}catch{/* unsupported policy query: attempt only the audio setters */}
+    }
+    const previous=audio(),generation=++audioGeneration;
+    const rollback=()=>{
+      if(generation!==audioGeneration || playerFingerprint(candidate)!==initialSource || !video.isConnected || !canRestoreAudio() || !state().ready)return;
+      try{setVolume(previous.volume)?.catch?.(()=>{});}catch{/* denied setter */}
+      try{setMute(previous.muted)?.catch?.(()=>{});}catch{/* denied setter */}
+    };
+    try{
+      setVolume(wanted.volume)?.catch?.(rollback);
+      setMute(wanted.muted)?.catch?.(rollback);
+      return true;
+    }catch{rollback();return false;}
+  }
   let adActive = false;
   const handlers = [],subscribers=new Set();
   if (kind === 'jw') for (const [event,value] of [['adRequest',true],['adPlay',true],['adComplete',false],['adSkipped',false],['adError',false]]) {
@@ -68,8 +93,10 @@ export function attachPlayer(candidate) {
     switch (action) {
       case 'seek': if (!finite(value)) return false; if (kind === 'jw') api.seek(clampSeek(value,s.duration)); else video.currentTime = clampSeek(value,s.duration); break;
       case 'rate': if (!finite(value) || value < 0.25 || value > 4) return false; if (kind === 'jw' && typeof api.setPlaybackRate === 'function') api.setPlaybackRate(value); else video.playbackRate = value; break;
-      case 'mute': if(typeof value!=='boolean')return false; if(kind==='jw' && typeof api.setMute==='function')api.setMute(value);else video.muted=value;break;
+      case 'restore-audio':return restoreAudio(value);
+      case 'mute': if(typeof value!=='boolean')return false;audioGeneration++;setMute(value);break;
       case 'play-audible': {
+        audioGeneration++;
         // Only an explicit Play click uses this action. Autoplay/preparation
         // keeps its existing mute state and cannot consume this user intent.
         if (kind === 'jw' && typeof api.setMute==='function') api.setMute(false); else video.muted=false;
@@ -85,7 +112,7 @@ export function attachPlayer(candidate) {
     }
     return true;
   };
-  return {kind,video,root,api,state,command,tracks:()=>playerTracks(candidate),selectTrack:(group,id)=>state().ready && selectPlayerTrack(candidate,group,id),fingerprint:()=>playerFingerprint(candidate),subscribe(notify){subscribers.add(notify);return ()=>subscribers.delete(notify);},dispose() { subscribers.clear();for (const [event,handler] of handlers) api.off?.(event,handler); }};
+  return {kind,video,root,api,state,command,audio,tracks:()=>playerTracks(candidate),selectTrack:(group,id)=>state().ready && selectPlayerTrack(candidate,group,id),fingerprint:()=>playerFingerprint(candidate),subscribe(notify){subscribers.add(notify);return ()=>subscribers.delete(notify);},dispose() {audioGeneration++;subscribers.clear();for (const [event,handler] of handlers) api.off?.(event,handler); }};
 }
 export function playerFingerprint(candidate) {
   try {

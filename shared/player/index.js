@@ -1,4 +1,5 @@
 export {customPlayerControls} from './custom-controls.js';
+export {audioPreferenceStore} from './audio-preferences.js';
 export {playerUIStyle,playerStartupGuard} from './player-ui.js';
 export {installGestures} from './gestures.js';
 export {fullscreenController} from './fullscreen.js';

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.3
+// @version      6.0.4
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -197,6 +197,7 @@ var SharedPlayer = (() => {
   var index_exports = {};
   __export(index_exports, {
     attachPlayer: () => attachPlayer,
+    audioPreferenceStore: () => audioPreferenceStore,
     childLoading: () => childLoading,
     customPlayerControls: () => customPlayerControls,
     fullscreenController: () => fullscreenController,
@@ -465,6 +466,77 @@ var SharedPlayer = (() => {
     };
   }
 
+  // shared/media.js
+  var finite = (value) => typeof value === "number" && Number.isFinite(value);
+  function clampSeek(time, duration) {
+    return Math.max(0, Math.min(Math.max(0, duration - 0.25), time));
+  }
+  function audioPreference(value) {
+    return value && typeof value === "object" && typeof value.muted === "boolean" && finite(value.volume) && value.volume >= 0 && value.volume <= 1 ? { muted: value.muted, volume: value.volume } : null;
+  }
+
+  // shared/player/audio-preferences.js
+  function audioPreferenceStore(storage, key) {
+    let saved = null;
+    try {
+      const value = JSON.parse(storage?.getItem(key) || "null");
+      if (value?.version === 1) saved = audioPreference(value);
+    } catch {
+    }
+    return {
+      read: () => saved && { ...saved },
+      write(value) {
+        const next = audioPreference(value);
+        if (!next) return false;
+        if (saved && next.muted === saved.muted && next.volume === saved.volume) return true;
+        saved = next;
+        try {
+          storage?.setItem(key, JSON.stringify({ version: 1, ...next }));
+        } catch {
+        }
+        return true;
+      }
+    };
+  }
+  function audioPreferenceSession(win, player, store) {
+    let attempted = false, learning = false;
+    const source = player.fingerprint?.();
+    const current = () => !source || source === player.fingerprint?.();
+    const sound = () => player.audio?.() || { muted: player.video.muted, volume: player.video.volume };
+    return {
+      checkpoint(state, enabled) {
+        if (!enabled || !current() || !state.ready || state.ad) return;
+        const value = audioPreference(sound()), saved = store.read();
+        if (value && (!saved && !value.muted && value.volume > 0 || saved && value.muted === saved.muted)) store.write(value);
+      },
+      intent(muted) {
+        if (!current() || !player.state().ready || player.state().ad) return;
+        attempted = true;
+        learning = false;
+        const value = sound(), volume = Number.isFinite(value.volume) ? value.volume : 1;
+        store.write({ muted, volume: !muted && volume <= 0 ? 1 : volume });
+      },
+      update(state, enabled) {
+        if (!enabled || !current() || !state.ready || state.ad || state.paused || !state.played || win.document.hidden) return;
+        const saved = store.read();
+        if (!attempted) {
+          attempted = true;
+          if (saved) try {
+            player.command("restore-audio", saved);
+          } catch {
+          }
+        }
+        if (!saved || learning) {
+          const value = audioPreference(sound());
+          if (value && !value.muted && value.volume > 0) {
+            learning = true;
+            store.write(value);
+          }
+        }
+      }
+    };
+  }
+
   // shared/player/custom-controls.js
   function customPlayerControls(win, player, options = {}) {
     const { video, root } = player, doc = win.document, nativeRoot = player.nativeRoot || root, element = video.nodeType === 1 ? video : null;
@@ -498,6 +570,7 @@ var SharedPlayer = (() => {
     }
     let disposed = false, locked = false, chromeVisible = true, lockVisible = true, scrubbing = false, nativeOwned = false, lastReady = false, lastPaused = null, context = null, autoPlayAttempted = false;
     let hideTimer = 0, lockTimer = 0, tipTimer = 0, errorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
+    const audio = options.audioPreferences ? audioPreferenceSession(win, player, options.audioPreferences) : null;
     const savedAttributes = new Map(["controls", "playsinline", "webkit-playsinline"].map((name) => [name, element?.getAttribute(name) ?? null]));
     const originalPosition = root.style.position;
     let positioned = false;
@@ -685,13 +758,17 @@ var SharedPlayer = (() => {
       switch (action) {
         case "play":
           autoPlayAttempted = true;
+          if (player.state().paused) audio?.intent(false);
           command(player.state().paused ? "play-audible" : "pause");
           show();
           break;
-        case "mute":
-          command("mute", !video.muted);
+        case "mute": {
+          const muted = !(player.audio?.().muted ?? video.muted);
+          audio?.intent(muted);
+          command("mute", muted);
           show();
           break;
+        }
         case "lock":
           setLocked(true);
           break;
@@ -847,6 +924,13 @@ var SharedPlayer = (() => {
     const changed = () => update();
     const mediaEvents = ["error", "loadedmetadata", "canplay", "timeupdate", "play", "pause", "ratechange", "volumechange", "durationchange", "emptied", "loadstart"];
     for (const name of mediaEvents) video.addEventListener(name, changed);
+    const checkpointAudio = () => {
+      try {
+        audio?.checkpoint(player.state(), !!context && options.canRestoreAudio?.() !== false);
+      } catch {
+      }
+    };
+    win.addEventListener("pagehide", checkpointAudio);
     doc.addEventListener("visibilitychange", changed);
     const offPlayer = player.subscribe?.(changed);
     const lockedKey = (event) => {
@@ -914,8 +998,9 @@ var SharedPlayer = (() => {
         }
         node.setAttribute("aria-label", state.paused ? "Ph\xE1t" : "T\u1EA1m d\u1EEBng");
       }
-      mute.innerHTML = playerIcon(video.muted ? "muted" : "volume");
-      mute.setAttribute("aria-label", video.muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
+      const muted = player.audio?.().muted ?? video.muted;
+      mute.innerHTML = playerIcon(muted ? "muted" : "volume");
+      mute.setAttribute("aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
       fullscreen.innerHTML = playerIcon(inFullscreen() ? "shrink" : "fullscreen");
       fullscreen.setAttribute("aria-label", inFullscreen() ? "Thu nh\u1ECF" : "To\xE0n m\xE0n h\xECnh");
       lock.innerHTML = playerIcon(locked ? "lock" : "unlock");
@@ -944,6 +1029,7 @@ var SharedPlayer = (() => {
         autoPlayAttempted = true;
         if (state.paused && !state.played && !state.ended) command("play");
       }
+      audio?.update(state, !!context && options.canRestoreAudio?.() !== false);
     }
     if (win.getComputedStyle(root).position === "static") {
       root.style.position = "relative";
@@ -972,6 +1058,7 @@ var SharedPlayer = (() => {
       },
       dispose() {
         if (disposed) return;
+        checkpointAudio();
         disposed = true;
         offGestures();
         offPlayer?.();
@@ -985,6 +1072,7 @@ var SharedPlayer = (() => {
         win.removeEventListener("pointerup", releaseScrub);
         win.removeEventListener("keydown", lockedKey, true);
         win.removeEventListener("keyup", lockedKey, true);
+        win.removeEventListener("pagehide", checkpointAudio);
         restoreNative();
         if (positioned) root.style.position = originalPosition;
         shell.remove();
@@ -1247,12 +1335,6 @@ var SharedPlayer = (() => {
     } };
   }
 
-  // shared/media.js
-  var finite = (value) => typeof value === "number" && Number.isFinite(value);
-  function clampSeek(time, duration) {
-    return Math.max(0, Math.min(Math.max(0, duration - 0.25), time));
-  }
-
   // shared/engines/players.js
   function mediaVisible(node, win) {
     if (!node?.isConnected) return false;
@@ -1305,9 +1387,53 @@ var SharedPlayer = (() => {
       return false;
     }
   }
-  function attachPlayer(candidate) {
+  function attachPlayer(candidate, { canRestoreAudio = () => true } = {}) {
     const { kind, video, root, api } = candidate;
     const initialSource = playerFingerprint(candidate);
+    let audioGeneration = 0;
+    const audio = () => {
+      try {
+        const muted = kind === "jw" && typeof api.getMute === "function" ? api.getMute() : video.muted, volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
+        return { muted: !!muted, volume: finite(volume) && volume >= 0 && volume <= 1 ? volume : 1 };
+      } catch {
+        return { muted: !!video.muted, volume: finite(video.volume) ? video.volume : 1 };
+      }
+    };
+    const setMute = (value) => kind === "jw" && typeof api.setMute === "function" ? api.setMute(value) : video.muted = value;
+    const setVolume = (value) => kind === "jw" && typeof api.setVolume === "function" ? api.setVolume(value * 100) : video.volume = value;
+    function restoreAudio(value) {
+      const wanted = audioPreference(value);
+      if (!wanted || !canRestoreAudio()) return false;
+      const navigator = video.ownerDocument.defaultView.navigator;
+      if (!wanted.muted && wanted.volume > 0 && typeof navigator.getAutoplayPolicy === "function") {
+        try {
+          if (navigator.getAutoplayPolicy(video) !== "allowed") return false;
+        } catch {
+        }
+      }
+      const previous = audio(), generation = ++audioGeneration;
+      const rollback = () => {
+        if (generation !== audioGeneration || playerFingerprint(candidate) !== initialSource || !video.isConnected || !canRestoreAudio() || !state().ready) return;
+        try {
+          setVolume(previous.volume)?.catch?.(() => {
+          });
+        } catch {
+        }
+        try {
+          setMute(previous.muted)?.catch?.(() => {
+          });
+        } catch {
+        }
+      };
+      try {
+        setVolume(wanted.volume)?.catch?.(rollback);
+        setMute(wanted.muted)?.catch?.(rollback);
+        return true;
+      } catch {
+        rollback();
+        return false;
+      }
+    }
     let adActive = false;
     const handlers = [], subscribers = /* @__PURE__ */ new Set();
     if (kind === "jw") for (const [event, value] of [["adRequest", true], ["adPlay", true], ["adComplete", false], ["adSkipped", false], ["adError", false]]) {
@@ -1343,12 +1469,15 @@ var SharedPlayer = (() => {
           if (kind === "jw" && typeof api.setPlaybackRate === "function") api.setPlaybackRate(value);
           else video.playbackRate = value;
           break;
+        case "restore-audio":
+          return restoreAudio(value);
         case "mute":
           if (typeof value !== "boolean") return false;
-          if (kind === "jw" && typeof api.setMute === "function") api.setMute(value);
-          else video.muted = value;
+          audioGeneration++;
+          setMute(value);
           break;
         case "play-audible": {
+          audioGeneration++;
           if (kind === "jw" && typeof api.setMute === "function") api.setMute(false);
           else video.muted = false;
           const volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
@@ -1373,10 +1502,11 @@ var SharedPlayer = (() => {
       }
       return true;
     };
-    return { kind, video, root, api, state, command, tracks: () => playerTracks(candidate), selectTrack: (group, id) => state().ready && selectPlayerTrack(candidate, group, id), fingerprint: () => playerFingerprint(candidate), subscribe(notify) {
+    return { kind, video, root, api, state, command, audio, tracks: () => playerTracks(candidate), selectTrack: (group, id) => state().ready && selectPlayerTrack(candidate, group, id), fingerprint: () => playerFingerprint(candidate), subscribe(notify) {
       subscribers.add(notify);
       return () => subscribers.delete(notify);
     }, dispose() {
+      audioGeneration++;
       subscribers.clear();
       for (const [event, handler] of handlers) api.off?.(event, handler);
     } };
@@ -2353,6 +2483,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     get playbackRate() { return this.state.playbackRate || 1; }
     set playbackRate(value) { this.command('rate', value); }
     get muted() { return !!this.state.muted; }
+    get volume() { const value=this.state.volume;return Number.isFinite(value) && value>=0 && value<=1?value:undefined; }
     set muted(value) { this.command('mute', !!value); }
     get isConnected() { return this.frame.isConnected && sites.visible(this.frame) && this.frame.src === this.session.src; }
     closest() { return null; }
@@ -2373,7 +2504,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const page = sites.adapter().read();
       return { position: Number.isFinite(video.currentTime) ? video.currentTime : 0,
         duration: Number.isFinite(video.duration) ? video.duration : 0, paused: video.paused,
-        readyState: video.readyState, playbackRate: video.playbackRate, muted: video.muted,
+        readyState: video.readyState, playbackRate: video.playbackRate, muted: video.muted,volume:video.volume,
         error: video.error ? { code: video.error.code } : null,
         buffered: video.buffered?.length ? video.buffered.end(0) : 0,
         startedAtZero: lastStarted, managed, role: currentRole, nativeGestures,
@@ -2419,6 +2550,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       }
       if (data.type === 'command' && upstream?.token === data.token) {
         if(data.action==='play-audible' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared'))return;
+        if(data.action==='restore-audio' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared' || typeof data.value?.muted!=='boolean' || !Number.isFinite(data.value?.volume) || data.value.volume<0 || data.value.volume>1))return;
         const video = sites.findVideo();
         observeLocal(video);
         if (!video) {const relay=relayRemote();if(data.mediaId && data.mediaId!==relay?.state?.mediaId)return;return relay?.command(data.action,data.value);}
@@ -2426,6 +2558,10 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         if(data.action==='play-audible'){
           if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
           options.playAudible?.(video);return;
+        }
+        if(data.action==='restore-audio'){
+          if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
+          options.restoreAudio?.(video,data.value);return;
         }
         if(typeof data.action==='string' && data.action.startsWith('track-')){
           if(typeof data.mediaId!=='string' || !data.mediaId || data.mediaId!==(video.currentSrc || video.src || '') || video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
@@ -3012,7 +3148,7 @@ function startMotchillPlayerController(sites) {
   const bridge = createMotchillVideoBridge(sites, channel, { includePrepared: true,
     userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
-    playAudible:video=>customUI?.playAudible(video) });
+    playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -3948,6 +4084,8 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
   const waiting=new Map();
+  let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
+  const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');
   function prepareFrames(){
     if(disposed || window.top!==window)return;
     for(const frame of sites.playerFrames()){
@@ -3975,12 +4113,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     const found=candidate();
     const fingerprint=found?SharedPlayer.playerFingerprint(found):'';
     if(probe && (!found || probe.video!==found.video || probe.api!==found.api || probeSource!==fingerprint)){probe.dispose();probe=null;}
-    if(found && !probe){probe=SharedPlayer.attachPlayer(found);probeSource=fingerprint;}
+    if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
     const own=found?.video===video,state=own?probe.state():null;
-    return {customCapable:!!own,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad}: {})};
+    return {customCapable:!!own,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
   }
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
   function playAudible(video){const state=localState(video);return state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
+  function restoreAudio(video,value){const state=localState(video);return state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function update(media,root,page){
     if(disposed)return false;
     guard();prepareFrames();
@@ -4002,15 +4141,17 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
             case 'mute':if(typeof value!=='boolean')return false;media.muted=value;break;
             case 'play':media.play();break;
             case 'play-audible':return media.command('play-audible');
+            case 'restore-audio':return media.command('restore-audio',value);
             case 'pause':media.pause();break;
             default:return false;
           }return true;
         };
-        player={root,video:media,state,command,bounds:()=>root.getBoundingClientRect(),fingerprint:()=>[media.session?.token,media.frame.src,media.state.mediaId].join('|'),tracks:()=>media.state?.tracks || {},selectTrack(group,id){if(!state().ready || !['quality','audio','captions'].includes(group) || !Number.isInteger(id) || !media.state?.tracks?.[group]?.some(item=>item.id===id))return false;media.command('track-'+group,id);return true;}};
+        player={root,video:media,state,command,audio:()=>({muted:media.muted,volume:media.volume}),bounds:()=>root.getBoundingClientRect(),fingerprint:()=>[media.session?.token,media.frame.src,media.state.mediaId].join('|'),tracks:()=>media.state?.tracks || {},selectTrack(group,id){if(!state().ready || !['quality','audio','captions'].includes(group) || !Number.isInteger(id) || !media.state?.tracks?.[group]?.some(item=>item.id===id))return false;media.command('track-'+group,id);return true;}};
       }else{
-        player=SharedPlayer.attachPlayer(local);player.nativeRoot=local.root;player.root=root;
+        player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
       }
       const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,
+        audioPreferences,canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
         introSeconds:hooks.introSeconds,onIntro:hooks.onIntro,onNext:()=>Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
         isFullscreen:hooks.isFullscreen,onFullscreen:hooks.onFullscreen});
       mounted={media,root,signature,player,ui};
@@ -4023,7 +4164,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,localState,commandTrack,playAudible,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }
 
 // END MOTCHILL SITES

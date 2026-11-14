@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - chặn quảng cáo + tối ưu mạng
 // @namespace    motchill-noads
-// @version      6.0.3
+// @version      6.0.4
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
@@ -1092,6 +1092,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     get playbackRate() { return this.state.playbackRate || 1; }
     set playbackRate(value) { this.command('rate', value); }
     get muted() { return !!this.state.muted; }
+    get volume() { const value=this.state.volume;return Number.isFinite(value) && value>=0 && value<=1?value:undefined; }
     set muted(value) { this.command('mute', !!value); }
     get isConnected() { return this.frame.isConnected && sites.visible(this.frame) && this.frame.src === this.session.src; }
     closest() { return null; }
@@ -1112,7 +1113,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const page = sites.adapter().read();
       return { position: Number.isFinite(video.currentTime) ? video.currentTime : 0,
         duration: Number.isFinite(video.duration) ? video.duration : 0, paused: video.paused,
-        readyState: video.readyState, playbackRate: video.playbackRate, muted: video.muted,
+        readyState: video.readyState, playbackRate: video.playbackRate, muted: video.muted,volume:video.volume,
         error: video.error ? { code: video.error.code } : null,
         buffered: video.buffered?.length ? video.buffered.end(0) : 0,
         startedAtZero: lastStarted, managed, role: currentRole, nativeGestures,
@@ -1158,6 +1159,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       }
       if (data.type === 'command' && upstream?.token === data.token) {
         if(data.action==='play-audible' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared'))return;
+        if(data.action==='restore-audio' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared' || typeof data.value?.muted!=='boolean' || !Number.isFinite(data.value?.volume) || data.value.volume<0 || data.value.volume>1))return;
         const video = sites.findVideo();
         observeLocal(video);
         if (!video) {const relay=relayRemote();if(data.mediaId && data.mediaId!==relay?.state?.mediaId)return;return relay?.command(data.action,data.value);}
@@ -1165,6 +1167,10 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         if(data.action==='play-audible'){
           if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
           options.playAudible?.(video);return;
+        }
+        if(data.action==='restore-audio'){
+          if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
+          options.restoreAudio?.(video,data.value);return;
         }
         if(typeof data.action==='string' && data.action.startsWith('track-')){
           if(typeof data.mediaId!=='string' || !data.mediaId || data.mediaId!==(video.currentSrc || video.src || '') || video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;

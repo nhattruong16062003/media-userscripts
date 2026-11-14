@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.4.3
+// @version      0.4.4
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -25,6 +25,9 @@
   var finite = (value) => typeof value === "number" && Number.isFinite(value);
   function clampSeek(time, duration) {
     return Math.max(0, Math.min(Math.max(0, duration - 0.25), time));
+  }
+  function audioPreference(value) {
+    return value && typeof value === "object" && typeof value.muted === "boolean" && finite(value.volume) && value.volume >= 0 && value.volume <= 1 ? { muted: value.muted, volume: value.volume } : null;
   }
 
   // rophim/lib/core.js
@@ -478,9 +481,53 @@
       return false;
     }
   }
-  function attachPlayer(candidate) {
+  function attachPlayer(candidate, { canRestoreAudio = () => true } = {}) {
     const { kind, video, root, api } = candidate;
     const initialSource = playerFingerprint(candidate);
+    let audioGeneration = 0;
+    const audio = () => {
+      try {
+        const muted = kind === "jw" && typeof api.getMute === "function" ? api.getMute() : video.muted, volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
+        return { muted: !!muted, volume: finite(volume) && volume >= 0 && volume <= 1 ? volume : 1 };
+      } catch {
+        return { muted: !!video.muted, volume: finite(video.volume) ? video.volume : 1 };
+      }
+    };
+    const setMute = (value) => kind === "jw" && typeof api.setMute === "function" ? api.setMute(value) : video.muted = value;
+    const setVolume = (value) => kind === "jw" && typeof api.setVolume === "function" ? api.setVolume(value * 100) : video.volume = value;
+    function restoreAudio(value) {
+      const wanted = audioPreference(value);
+      if (!wanted || !canRestoreAudio()) return false;
+      const navigator = video.ownerDocument.defaultView.navigator;
+      if (!wanted.muted && wanted.volume > 0 && typeof navigator.getAutoplayPolicy === "function") {
+        try {
+          if (navigator.getAutoplayPolicy(video) !== "allowed") return false;
+        } catch {
+        }
+      }
+      const previous = audio(), generation = ++audioGeneration;
+      const rollback = () => {
+        if (generation !== audioGeneration || playerFingerprint(candidate) !== initialSource || !video.isConnected || !canRestoreAudio() || !state().ready) return;
+        try {
+          setVolume(previous.volume)?.catch?.(() => {
+          });
+        } catch {
+        }
+        try {
+          setMute(previous.muted)?.catch?.(() => {
+          });
+        } catch {
+        }
+      };
+      try {
+        setVolume(wanted.volume)?.catch?.(rollback);
+        setMute(wanted.muted)?.catch?.(rollback);
+        return true;
+      } catch {
+        rollback();
+        return false;
+      }
+    }
     let adActive = false;
     const handlers = [], subscribers = /* @__PURE__ */ new Set();
     if (kind === "jw") for (const [event, value] of [["adRequest", true], ["adPlay", true], ["adComplete", false], ["adSkipped", false], ["adError", false]]) {
@@ -516,12 +563,15 @@
           if (kind === "jw" && typeof api.setPlaybackRate === "function") api.setPlaybackRate(value);
           else video.playbackRate = value;
           break;
+        case "restore-audio":
+          return restoreAudio(value);
         case "mute":
           if (typeof value !== "boolean") return false;
-          if (kind === "jw" && typeof api.setMute === "function") api.setMute(value);
-          else video.muted = value;
+          audioGeneration++;
+          setMute(value);
           break;
         case "play-audible": {
+          audioGeneration++;
           if (kind === "jw" && typeof api.setMute === "function") api.setMute(false);
           else video.muted = false;
           const volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
@@ -546,10 +596,11 @@
       }
       return true;
     };
-    return { kind, video, root, api, state, command, tracks: () => playerTracks(candidate), selectTrack: (group, id) => state().ready && selectPlayerTrack(candidate, group, id), fingerprint: () => playerFingerprint(candidate), subscribe(notify) {
+    return { kind, video, root, api, state, command, audio, tracks: () => playerTracks(candidate), selectTrack: (group, id) => state().ready && selectPlayerTrack(candidate, group, id), fingerprint: () => playerFingerprint(candidate), subscribe(notify) {
       subscribers.add(notify);
       return () => subscribers.delete(notify);
     }, dispose() {
+      audioGeneration++;
       subscribers.clear();
       for (const [event, handler] of handlers) api.off?.(event, handler);
     } };

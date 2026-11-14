@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.3
+// @version      0.4.4
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -135,6 +135,9 @@ SOFTWARE.
   var finite = (value) => typeof value === "number" && Number.isFinite(value);
   function clampSeek(time, duration) {
     return Math.max(0, Math.min(Math.max(0, duration - 0.25), time));
+  }
+  function audioPreference(value) {
+    return value && typeof value === "object" && typeof value.muted === "boolean" && finite(value.volume) && value.volume >= 0 && value.volume <= 1 ? { muted: value.muted, volume: value.volume } : null;
   }
 
   // rophim/lib/core.js
@@ -450,9 +453,53 @@ SOFTWARE.
       return false;
     }
   }
-  function attachPlayer(candidate) {
+  function attachPlayer(candidate, { canRestoreAudio = () => true } = {}) {
     const { kind, video, root, api } = candidate;
     const initialSource = playerFingerprint(candidate);
+    let audioGeneration = 0;
+    const audio = () => {
+      try {
+        const muted = kind === "jw" && typeof api.getMute === "function" ? api.getMute() : video.muted, volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
+        return { muted: !!muted, volume: finite(volume) && volume >= 0 && volume <= 1 ? volume : 1 };
+      } catch {
+        return { muted: !!video.muted, volume: finite(video.volume) ? video.volume : 1 };
+      }
+    };
+    const setMute = (value) => kind === "jw" && typeof api.setMute === "function" ? api.setMute(value) : video.muted = value;
+    const setVolume = (value) => kind === "jw" && typeof api.setVolume === "function" ? api.setVolume(value * 100) : video.volume = value;
+    function restoreAudio(value) {
+      const wanted = audioPreference(value);
+      if (!wanted || !canRestoreAudio()) return false;
+      const navigator = video.ownerDocument.defaultView.navigator;
+      if (!wanted.muted && wanted.volume > 0 && typeof navigator.getAutoplayPolicy === "function") {
+        try {
+          if (navigator.getAutoplayPolicy(video) !== "allowed") return false;
+        } catch {
+        }
+      }
+      const previous = audio(), generation = ++audioGeneration;
+      const rollback = () => {
+        if (generation !== audioGeneration || playerFingerprint(candidate) !== initialSource || !video.isConnected || !canRestoreAudio() || !state().ready) return;
+        try {
+          setVolume(previous.volume)?.catch?.(() => {
+          });
+        } catch {
+        }
+        try {
+          setMute(previous.muted)?.catch?.(() => {
+          });
+        } catch {
+        }
+      };
+      try {
+        setVolume(wanted.volume)?.catch?.(rollback);
+        setMute(wanted.muted)?.catch?.(rollback);
+        return true;
+      } catch {
+        rollback();
+        return false;
+      }
+    }
     let adActive = false;
     const handlers = [], subscribers = /* @__PURE__ */ new Set();
     if (kind === "jw") for (const [event, value] of [["adRequest", true], ["adPlay", true], ["adComplete", false], ["adSkipped", false], ["adError", false]]) {
@@ -488,12 +535,15 @@ SOFTWARE.
           if (kind === "jw" && typeof api.setPlaybackRate === "function") api.setPlaybackRate(value);
           else video.playbackRate = value;
           break;
+        case "restore-audio":
+          return restoreAudio(value);
         case "mute":
           if (typeof value !== "boolean") return false;
-          if (kind === "jw" && typeof api.setMute === "function") api.setMute(value);
-          else video.muted = value;
+          audioGeneration++;
+          setMute(value);
           break;
         case "play-audible": {
+          audioGeneration++;
           if (kind === "jw" && typeof api.setMute === "function") api.setMute(false);
           else video.muted = false;
           const volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
@@ -518,10 +568,11 @@ SOFTWARE.
       }
       return true;
     };
-    return { kind, video, root, api, state, command, tracks: () => playerTracks(candidate), selectTrack: (group, id) => state().ready && selectPlayerTrack(candidate, group, id), fingerprint: () => playerFingerprint(candidate), subscribe(notify) {
+    return { kind, video, root, api, state, command, audio, tracks: () => playerTracks(candidate), selectTrack: (group, id) => state().ready && selectPlayerTrack(candidate, group, id), fingerprint: () => playerFingerprint(candidate), subscribe(notify) {
       subscribers.add(notify);
       return () => subscribers.delete(notify);
     }, dispose() {
+      audioGeneration++;
       subscribers.clear();
       for (const [event, handler] of handlers) api.off?.(event, handler);
     } };
@@ -1022,6 +1073,68 @@ SOFTWARE.
     };
   }
 
+  // shared/player/audio-preferences.js
+  function audioPreferenceStore(storage, key) {
+    let saved = null;
+    try {
+      const value = JSON.parse(storage?.getItem(key) || "null");
+      if (value?.version === 1) saved = audioPreference(value);
+    } catch {
+    }
+    return {
+      read: () => saved && { ...saved },
+      write(value) {
+        const next = audioPreference(value);
+        if (!next) return false;
+        if (saved && next.muted === saved.muted && next.volume === saved.volume) return true;
+        saved = next;
+        try {
+          storage?.setItem(key, JSON.stringify({ version: 1, ...next }));
+        } catch {
+        }
+        return true;
+      }
+    };
+  }
+  function audioPreferenceSession(win, player, store) {
+    let attempted = false, learning = false;
+    const source = player.fingerprint?.();
+    const current = () => !source || source === player.fingerprint?.();
+    const sound = () => player.audio?.() || { muted: player.video.muted, volume: player.video.volume };
+    return {
+      checkpoint(state, enabled) {
+        if (!enabled || !current() || !state.ready || state.ad) return;
+        const value = audioPreference(sound()), saved = store.read();
+        if (value && (!saved && !value.muted && value.volume > 0 || saved && value.muted === saved.muted)) store.write(value);
+      },
+      intent(muted) {
+        if (!current() || !player.state().ready || player.state().ad) return;
+        attempted = true;
+        learning = false;
+        const value = sound(), volume = Number.isFinite(value.volume) ? value.volume : 1;
+        store.write({ muted, volume: !muted && volume <= 0 ? 1 : volume });
+      },
+      update(state, enabled) {
+        if (!enabled || !current() || !state.ready || state.ad || state.paused || !state.played || win.document.hidden) return;
+        const saved = store.read();
+        if (!attempted) {
+          attempted = true;
+          if (saved) try {
+            player.command("restore-audio", saved);
+          } catch {
+          }
+        }
+        if (!saved || learning) {
+          const value = audioPreference(sound());
+          if (value && !value.muted && value.volume > 0) {
+            learning = true;
+            store.write(value);
+          }
+        }
+      }
+    };
+  }
+
   // shared/player/custom-controls.js
   function customPlayerControls(win, player, options = {}) {
     const { video, root } = player, doc = win.document, nativeRoot = player.nativeRoot || root, element = video.nodeType === 1 ? video : null;
@@ -1055,6 +1168,7 @@ SOFTWARE.
     }
     let disposed = false, locked = false, chromeVisible = true, lockVisible = true, scrubbing = false, nativeOwned = false, lastReady = false, lastPaused = null, context = null, autoPlayAttempted = false;
     let hideTimer = 0, lockTimer = 0, tipTimer = 0, errorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
+    const audio = options.audioPreferences ? audioPreferenceSession(win, player, options.audioPreferences) : null;
     const savedAttributes = new Map(["controls", "playsinline", "webkit-playsinline"].map((name) => [name, element?.getAttribute(name) ?? null]));
     const originalPosition = root.style.position;
     let positioned = false;
@@ -1242,13 +1356,17 @@ SOFTWARE.
       switch (action) {
         case "play":
           autoPlayAttempted = true;
+          if (player.state().paused) audio?.intent(false);
           command(player.state().paused ? "play-audible" : "pause");
           show();
           break;
-        case "mute":
-          command("mute", !video.muted);
+        case "mute": {
+          const muted = !(player.audio?.().muted ?? video.muted);
+          audio?.intent(muted);
+          command("mute", muted);
           show();
           break;
+        }
         case "lock":
           setLocked(true);
           break;
@@ -1404,6 +1522,13 @@ SOFTWARE.
     const changed = () => update();
     const mediaEvents = ["error", "loadedmetadata", "canplay", "timeupdate", "play", "pause", "ratechange", "volumechange", "durationchange", "emptied", "loadstart"];
     for (const name of mediaEvents) video.addEventListener(name, changed);
+    const checkpointAudio = () => {
+      try {
+        audio?.checkpoint(player.state(), !!context && options.canRestoreAudio?.() !== false);
+      } catch {
+      }
+    };
+    win.addEventListener("pagehide", checkpointAudio);
     doc.addEventListener("visibilitychange", changed);
     const offPlayer = player.subscribe?.(changed);
     const lockedKey = (event) => {
@@ -1471,8 +1596,9 @@ SOFTWARE.
         }
         node.setAttribute("aria-label", state.paused ? "Ph\xE1t" : "T\u1EA1m d\u1EEBng");
       }
-      mute.innerHTML = playerIcon(video.muted ? "muted" : "volume");
-      mute.setAttribute("aria-label", video.muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
+      const muted = player.audio?.().muted ?? video.muted;
+      mute.innerHTML = playerIcon(muted ? "muted" : "volume");
+      mute.setAttribute("aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
       fullscreen.innerHTML = playerIcon(inFullscreen() ? "shrink" : "fullscreen");
       fullscreen.setAttribute("aria-label", inFullscreen() ? "Thu nh\u1ECF" : "To\xE0n m\xE0n h\xECnh");
       lock.innerHTML = playerIcon(locked ? "lock" : "unlock");
@@ -1501,6 +1627,7 @@ SOFTWARE.
         autoPlayAttempted = true;
         if (state.paused && !state.played && !state.ended) command("play");
       }
+      audio?.update(state, !!context && options.canRestoreAudio?.() !== false);
     }
     if (win.getComputedStyle(root).position === "static") {
       root.style.position = "relative";
@@ -1529,6 +1656,7 @@ SOFTWARE.
       },
       dispose() {
         if (disposed) return;
+        checkpointAudio();
         disposed = true;
         offGestures();
         offPlayer?.();
@@ -1542,6 +1670,7 @@ SOFTWARE.
         win.removeEventListener("pointerup", releaseScrub);
         win.removeEventListener("keydown", lockedKey, true);
         win.removeEventListener("keyup", lockedKey, true);
+        win.removeEventListener("pagehide", checkpointAudio);
         restoreNative();
         if (positioned) root.style.position = originalPosition;
         shell.remove();

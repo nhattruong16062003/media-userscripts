@@ -94,7 +94,7 @@ function startMotchillPlayerController(sites) {
   const bridge = createMotchillVideoBridge(sites, channel, { includePrepared: true,
     userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
-    playAudible:video=>customUI?.playAudible(video) });
+    playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {

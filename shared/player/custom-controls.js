@@ -1,5 +1,6 @@
 import {playerIcon,playerUIStyle} from './player-ui.js';
 import {installGestures} from './gestures.js';
+import {audioPreferenceSession} from './audio-preferences.js';
 
 // The same approved UI talks only to the attached player's command/state API.
 export function customPlayerControls(win,player,options={}) {
@@ -12,6 +13,7 @@ export function customPlayerControls(win,player,options={}) {
   }
   let disposed=false,locked=false,chromeVisible=true,lockVisible=true,scrubbing=false,nativeOwned=false,lastReady=false,lastPaused=null,context=null,autoPlayAttempted=false;
   let hideTimer=0,lockTimer=0,tipTimer=0,errorTimer=0,nextTimer=0,scrubTimer=0,nextPending=null,nextError=null;
+  const audio=options.audioPreferences?audioPreferenceSession(win,player,options.audioPreferences):null;
   const savedAttributes=new Map(['controls','playsinline','webkit-playsinline'].map(name=>[name,element?.getAttribute(name) ?? null]));
   const originalPosition=root.style.position;let positioned=false;
   const center=button('play','Tạm dừng','pause',shell,'rp-icon rp-center-play');
@@ -59,8 +61,8 @@ export function customPlayerControls(win,player,options={}) {
   function actionClick(action,node){
     if(!player.state().ready)return;
     switch(action){
-      case 'play':autoPlayAttempted=true;command(player.state().paused?'play-audible':'pause');show();break;
-      case 'mute':command('mute',!video.muted);show();break;
+      case 'play':autoPlayAttempted=true;if(player.state().paused)audio?.intent(false);command(player.state().paused?'play-audible':'pause');show();break;
+      case 'mute':{const muted=!(player.audio?.().muted ?? video.muted);audio?.intent(muted);command('mute',muted);show();break;}
       case 'lock':setLocked(true);break;
       case 'settings':settings.hidden=!settings.hidden;show();break;
       case 'context':if(node.dataset.rpMode==='intro'){if(options.onIntro)options.onIntro();else command('seek',Math.min(introEnd(),player.state().duration));}else beginNext(node);break;
@@ -94,6 +96,7 @@ export function customPlayerControls(win,player,options={}) {
   chrome.addEventListener('pointerdown',()=>win.clearTimeout(hideTimer));
   const fsChanged=()=>{if(!inFullscreen() && locked)setLocked(false);show();update();};doc.addEventListener('fullscreenchange',fsChanged);
   const changed=()=>update();const mediaEvents=['error','loadedmetadata','canplay','timeupdate','play','pause','ratechange','volumechange','durationchange','emptied','loadstart'];for(const name of mediaEvents)video.addEventListener(name,changed);
+  const checkpointAudio=()=>{try{audio?.checkpoint(player.state(),!!context && options.canRestoreAudio?.()!==false);}catch{/* detached provider */}};win.addEventListener('pagehide',checkpointAudio);
   doc.addEventListener('visibilitychange',changed);
   const offPlayer=player.subscribe?.(changed);
   const lockedKey=event=>{if(locked && inFullscreen() && !event.ctrlKey && !event.metaKey && !event.altKey && [' ','k','j','l','m','f','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','<','>','0','1','2','3','4','5','6','7','8','9'].includes(event.key)){event.preventDefault();event.stopImmediatePropagation();}};
@@ -112,7 +115,7 @@ export function customPlayerControls(win,player,options={}) {
     if(becameReady || lastPaused!==null && state.paused!==lastPaused)show();lastPaused=state.paused;
     for(const node of [center,play,mute,fullscreen,settingsButton,seek,...rates.children])node.disabled=!state.ready||locked;
     for(const node of [center,play]){const kind=state.paused?'play':'pause';if(node.dataset.rpIcon!==kind){node.innerHTML=playerIcon(kind);node.dataset.rpIcon=kind;}node.setAttribute('aria-label',state.paused?'Phát':'Tạm dừng');}
-    mute.innerHTML=playerIcon(video.muted?'muted':'volume');mute.setAttribute('aria-label',video.muted?'Bật tiếng':'Tắt tiếng');
+    const muted=player.audio?.().muted ?? video.muted;mute.innerHTML=playerIcon(muted?'muted':'volume');mute.setAttribute('aria-label',muted?'Bật tiếng':'Tắt tiếng');
     fullscreen.innerHTML=playerIcon(inFullscreen()?'shrink':'fullscreen');fullscreen.setAttribute('aria-label',inFullscreen()?'Thu nhỏ':'Toàn màn hình');
     lock.innerHTML=playerIcon(locked?'lock':'unlock');lock.setAttribute('aria-label',locked?'Mở khóa màn hình':'Khóa màn hình');
     if(!scrubbing){seek.max=String(Math.max(1,state.duration));seek.value=String(state.time);paintTime(state.time,state.duration);}
@@ -135,11 +138,12 @@ export function customPlayerControls(win,player,options={}) {
       autoPlayAttempted=true;
       if(state.paused && !state.played && !state.ended)command('play');
     }
+    audio?.update(state,!!context && options.canRestoreAudio?.()!==false);
   }
   if(win.getComputedStyle(root).position==='static'){root.style.position='relative';positioned=true;}
   root.append(shell);update();
   return {shell,surface,update,setContext(value){const key=c=>c ? [c.url,c.episodeID,c.lane,c.server].join('|') : '';const oldKey=key(context);context=value;if(oldKey && oldKey!==key(value)){nextPending=null;nextError=null;win.clearTimeout(nextTimer);setLocked(false);}update();},
     requestResult(status){if(status!=='navigating')finishNext(status);},
-    dispose(){if(disposed)return;disposed=true;offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);doc.removeEventListener('visibilitychange',changed);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
+    dispose(){if(disposed)return;checkpointAudio();disposed=true;offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);doc.removeEventListener('visibilitychange',changed);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);win.removeEventListener('pagehide',checkpointAudio);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
   };
 }
