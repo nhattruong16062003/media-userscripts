@@ -10,17 +10,17 @@ Chọn bộ dành cho website bạn sử dụng. RoPhim có ba script: chặn qu
 
 | Website | Chặn quảng cáo | Điều khiển trình phát | Lịch sử xem |
 | --- | --- | --- | --- |
-| **RoPhim 0.4.1** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/rophim/history/rophim-history.user.js) |
-| **Motchill 6.0.1** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/history/motchill-history.user.js) |
+| **RoPhim 0.4.2** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/rophim/history/rophim-history.user.js) |
+| **Motchill 6.0.2** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/history/motchill-history.user.js) |
 
-Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.1](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
+Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.2](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
 
 Đã cài bản cũ thì mở link mới để **cập nhật tại chỗ**, giữ nguyên script Lịch sử để giữ tiến độ. Không cần gỡ Tampermonkey hoặc chép mã thủ công. Kiểm tra đúng tên script và phiên bản trước khi xác nhận. Nếu có hai bản cùng chức năng cho cùng website, chỉ bật một bản.
 
 ## Sử dụng
 
 - Chạm vùng trống trên phim để ẩn/hiện điều khiển. Chạm đôi hai bên để tua 10 giây; giữ khi đang phát để xem 2×, thả để trở về tốc độ cũ.
-- Nút phát/dừng nằm ở giữa và thanh dưới. Trong toàn màn hình có nút khóa; khi khóa, chạm vùng trống để ẩn/hiện ổ khóa.
+- Nút phát/dừng nằm ở giữa và thanh dưới. Bấm Phát sẽ bật tiếng cùng lúc; nếu âm lượng đang bằng 0, script đưa về mức nghe được. Trong toàn màn hình có nút khóa; khi khóa vẫn chạm đôi tua ±10 giây và giữ 2×, hai nút Bỏ qua giới thiệu/Tập tiếp theo vẫn hiện và bấm được đúng thời điểm; chạm một lần để ẩn/hiện ổ khóa.
 - Chọn tốc độ trong cài đặt. Nếu nguồn phát cung cấp chất lượng, âm thanh hoặc phụ đề mà script hỗ trợ, các lựa chọn xuất hiện trong cùng menu.
 - Chuyển tập bằng nút custom để giữ khung phát. Bản dịch/server được xử lý theo dữ liệu của từng website.
 - Bộ chặn quảng cáo hoạt động riêng với giao diện player. Lịch sử được giữ trong Tampermonkey/profile đang dùng, chưa đồng bộ giữa thiết bị.

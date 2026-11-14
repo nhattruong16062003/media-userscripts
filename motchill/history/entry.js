@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Motchill - lịch sử xem
 // @namespace    motchill-history
-// @version      2.1.2
+// @version      6.0.2
 // @author       zic
-// @homepageURL  https://github.com/nhattruong16062003/motchill-userscripts/tree/main/history
-// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/motchill-userscripts/main/history/motchill-history.user.js
-// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/motchill-userscripts/main/history/motchill-history.user.js
+// @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
+// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js
+// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js
 // @description  Nhớ chỗ đang xem của từng phim trên Motchill (mọi tên miền): mở lại là tự tua về chỗ cũ, trang chủ có hàng "Đang xem dở".
 // @match        https://motchillsa.com/*
 // @match        https://motchilltu.com/*

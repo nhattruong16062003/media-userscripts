@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.1
+// @version      6.0.2
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -260,7 +260,7 @@ var SharedPlayer = (() => {
   .rp-feedback-hold{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none}.rp-chevrons{display:flex}.rp-chevrons svg{width:9px;height:12px;fill:currentColor;stroke-width:0;margin-left:-1px;opacity:.3;animation:rp-run 1s ease-in-out infinite}.rp-chevrons svg:nth-child(2){animation-delay:.15s}.rp-chevrons svg:nth-child(3){animation-delay:.3s}
   .rp-player-settings{position:absolute;bottom:64px;right:16px;z-index:2;width:200px;max-height:70%;overflow-y:auto;padding:4px 12px 10px;border:0;border-radius:2px;background:#1a1a1a;color:#fff;pointer-events:auto}.rp-player-settings-header{display:flex;align-items:center;justify-content:space-between;font-size:13px}.rp-player-speed-options{display:flex;flex-wrap:wrap;gap:4px}.rp-player-shell .rp-speed{padding:6px 10px;min-height:38px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:13px}.rp-player-shell .rp-speed[aria-pressed="true"]{background:#555}.rp-track-label{font-size:13px;margin:10px 0 4px}.rp-player-tracks .rp-speed{margin:2px}
   .rp-player-error{position:absolute;bottom:76px;left:12px;right:12px;padding:6px 10px;border-radius:4px;background:#151515ed;color:#fff;font-size:12px;pointer-events:none}
-  .rp-player-shell[data-rp-chrome="false"] .rp-player-chrome,.rp-player-shell[data-rp-chrome="false"] .rp-center-play,.rp-player-shell[data-rp-chrome="false"][data-rp-locked="false"] .rp-lock,.rp-player-shell[data-rp-locked="true"] .rp-player-chrome,.rp-player-shell[data-rp-locked="true"] .rp-center-play,.rp-player-shell[data-rp-locked="true"] .rp-context-action{visibility:hidden;pointer-events:none}
+  .rp-player-shell[data-rp-chrome="false"] .rp-player-chrome,.rp-player-shell[data-rp-chrome="false"] .rp-center-play,.rp-player-shell[data-rp-chrome="false"][data-rp-locked="false"] .rp-lock,.rp-player-shell[data-rp-locked="true"] .rp-player-chrome,.rp-player-shell[data-rp-locked="true"] .rp-center-play{visibility:hidden;pointer-events:none}
   @keyframes rp-run{0%,100%{opacity:.3;transform:translateX(0)}35%{opacity:1;transform:translateX(2px)}}@keyframes rp-nudge-right{from{transform:translateX(-4px);opacity:.3}to{transform:none;opacity:1}}@keyframes rp-nudge-left{from{transform:translateX(4px);opacity:.3}to{transform:none;opacity:1}}
   @media(max-width:480px){.rp-player-shell .rp-lock{left:24px}.rp-player-chrome{padding:8px 8px 0}.rp-player-shell .rp-icon:not(.rp-center-play):not(.rp-lock){min-width:36px;padding:6px}.rp-player-time{font-size:11px}.rp-player-line[data-rp-next-status="true"] .rp-player-time{display:none}.rp-player-shell .rp-pill{font-size:13px}}
   @media(pointer:coarse){.rp-player-shell .rp-icon{min-width:44px;min-height:44px}.rp-player-timeline{height:24px}.rp-context-action{bottom:76px;min-height:38px}.rp-player-settings{bottom:74px}}
@@ -341,9 +341,9 @@ var SharedPlayer = (() => {
       consume(e);
       restore();
       press = { id: e.pointerId, x: e.clientX, y: e.clientY, side, at: Date.now(), source: source(), rate: player.state().rate, held: false, locked: !!options.isLocked?.() };
-      if (press.locked || player.state().paused) return;
+      if (press.locked && !options.allowLockedMediaGestures || player.state().paused) return;
       holdTimer = win.setTimeout(() => {
-        if (!press || !player.state().ready || player.state().paused || options.isLocked?.() || source() !== press.source) return cancel();
+        if (!press || !player.state().ready || player.state().paused || options.isLocked?.() && !options.allowLockedMediaGestures || source() !== press.source) return cancel();
         if (player.command("rate", 2)) {
           press.held = true;
           lastTap = null;
@@ -363,7 +363,8 @@ var SharedPlayer = (() => {
       const p = press, now = Date.now();
       restore();
       consume(e);
-      if (p.locked || options.isLocked?.()) {
+      const locked = p.locked || !!options.isLocked?.();
+      if (locked && !options.allowLockedMediaGestures) {
         lastTap = null;
         win.clearTimeout(tapTimer);
         if (p.locked && now - p.at <= 350 && source() === p.source) options.onLockedTap?.();
@@ -377,11 +378,12 @@ var SharedPlayer = (() => {
         return;
       }
       if (now - p.at > 350 || source() !== p.source || !player.state().ready) return;
+      const onTap = locked ? options.onLockedTap : options.onTap;
       if (!p.side) {
         win.clearTimeout(tapTimer);
         tapTimer = 0;
         lastTap = null;
-        options.onTap?.();
+        onTap?.();
         return;
       }
       if (lastTap && now - lastTap.at < 320 && p.side === lastTap.side && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 48) {
@@ -396,11 +398,11 @@ var SharedPlayer = (() => {
         e.stopImmediatePropagation();
       } else {
         lastTap = { ...p, at: now };
-        if (options.onTap) {
+        if (onTap) {
           win.clearTimeout(tapTimer);
           tapTimer = win.setTimeout(() => {
             lastTap = null;
-            options.onTap();
+            onTap();
           }, 320);
         }
       }
@@ -469,7 +471,7 @@ var SharedPlayer = (() => {
         event.preventDefault();
         event.stopPropagation();
         if (disposed) return;
-        if (!locked) actionClick(action, node);
+        if (!locked || action === "context") actionClick(action, node);
         else if (action === "lock") setLocked(false);
       });
       host.append(node);
@@ -664,7 +666,7 @@ var SharedPlayer = (() => {
       switch (action) {
         case "play":
           autoPlayAttempted = true;
-          command(player.state().paused ? "play" : "pause");
+          command(player.state().paused ? "play-audible" : "pause");
           show();
           break;
         case "mute":
@@ -749,6 +751,7 @@ var SharedPlayer = (() => {
       surface,
       exclusive: true,
       isLocked: () => locked,
+      allowLockedMediaGestures: true,
       onLockedTap: () => {
         if (lockVisible) {
           lockVisible = false;
@@ -910,7 +913,7 @@ var SharedPlayer = (() => {
       line.dataset.rpNextStatus = String(nextPending?.node === next || nextError?.node === next);
       for (const node of [contextAction, next]) {
         node.dataset.rpStatus = String(nextPending?.node === node || nextError?.node === node);
-        node.disabled = !state.ready || locked || !context && !(node === contextAction && intro) || !!nextPending;
+        node.disabled = !state.ready || locked && node !== contextAction || !context && !(node === contextAction && intro) || !!nextPending;
         node.setAttribute("aria-busy", String(nextPending?.node === node));
         if (nextPending?.node === node) node.textContent = "\u0110ang chuy\u1EC3n t\u1EADp\u2026";
         else if (nextError?.node === node) node.textContent = nextError.text;
@@ -1326,8 +1329,19 @@ var SharedPlayer = (() => {
           if (kind === "jw" && typeof api.setMute === "function") api.setMute(value);
           else video.muted = value;
           break;
+        case "play-audible": {
+          if (kind === "jw" && typeof api.setMute === "function") api.setMute(false);
+          else video.muted = false;
+          const volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
+          if (!finite(volume) || volume <= 0) {
+            if (kind === "jw" && typeof api.setVolume === "function") api.setVolume(100);
+            else video.volume = 1;
+          }
+        }
+        // Fall through so sound and playback are changed in the same handler.
         case "play":
-          if (kind === "jw" && typeof api.play === "function") api.play(true);
+          if (kind === "jw" && typeof api.play === "function") api.play(true)?.catch?.(() => {
+          });
           else video.play()?.catch(() => {
           });
           break;
@@ -2329,6 +2343,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       if(validRemote(this.frame)!==this)return false;
       if (action === 'start-zero') this.state = { ...this.state, startedAtZero: false, paused: true };
       this.frame.contentWindow?.postMessage({ tag: channel, type: 'command', token: this.session.token, mediaId:this.state.mediaId, action, value }, this.session.origin);
+      return true;
     }
   }
   function state() {
@@ -2384,10 +2399,15 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         document.dispatchEvent(new CustomEvent('mc-player-role', { detail: { role, managed } }));
       }
       if (data.type === 'command' && upstream?.token === data.token) {
+        if(data.action==='play-audible' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared'))return;
         const video = sites.findVideo();
         observeLocal(video);
         if (!video) {const relay=relayRemote();if(data.mediaId && data.mediaId!==relay?.state?.mediaId)return;return relay?.command(data.action,data.value);}
         if(data.mediaId && data.mediaId!==(video.currentSrc || video.src || ''))return;
+        if(data.action==='play-audible'){
+          if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
+          options.playAudible?.(video);return;
+        }
         if(typeof data.action==='string' && data.action.startsWith('track-')){
           if(typeof data.mediaId!=='string' || !data.mediaId || data.mediaId!==(video.currentSrc || video.src || '') || video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
           options.selectTrack?.(video,data.action.slice(6),data.value);return;
@@ -2972,7 +2992,8 @@ function startMotchillPlayerController(sites) {
   let learning,customUI=null;
   const bridge = createMotchillVideoBridge(sites, channel, { includePrepared: true,
     userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
-    customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id) });
+    customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
+    playAudible:video=>customUI?.playAudible(video) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -3285,8 +3306,13 @@ function startMotchillPlayerController(sites) {
       // A bare iframe can live beside episode links/servers in main/body. Keep
       // its browsing context in place, but do not give the whole page a video
       // aspect ratio, overflow clipping, or retire its unrelated content.
-      if (baseHost && (/^(HTML|BODY|MAIN)$/.test(shell.tagName)
-        || [...shell.children].some((node) => node !== host && !/^(SCRIPT|STYLE)$/.test(node.tagName)))) shell.classList.add('mc-shell-page');
+      const hasFlowContent = [...shell.children].some((node) => node !== host
+        && !/^(SCRIPT|STYLE)$/.test(node.tagName) && !node.matches('.rp-watch-loading')
+        && !['absolute', 'fixed'].includes(getComputedStyle(node).position));
+      // Poster/spinner overlays (including our loading panel) are siblings of
+      // the absolute iframe in a media-only ratio wrapper. Treating that wrapper
+      // as a page removes its aspect ratio and collapses every child to 0px.
+      if (baseHost && (/^(HTML|BODY|MAIN)$/.test(shell.tagName) || hasFlowContent)) shell.classList.add('mc-shell-page');
     } else {
       shell = document.createElement('div'); shell.className = 'mc-shell';
       host.before(shell); shell.append(host); baseHost = host;
@@ -3935,6 +3961,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     return {customCapable:!!own,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad}: {})};
   }
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
+  function playAudible(video){const state=localState(video);return state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
   function update(media,root,page){
     if(disposed)return false;
     guard();prepareFrames();
@@ -3955,6 +3982,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
             case 'rate':if(!Number.isFinite(value) || value<.25 || value>4)return false;media.playbackRate=value;break;
             case 'mute':if(typeof value!=='boolean')return false;media.muted=value;break;
             case 'play':media.play();break;
+            case 'play-audible':return media.command('play-audible');
             case 'pause':media.pause();break;
             default:return false;
           }return true;
@@ -3976,7 +4004,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,localState,commandTrack,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,localState,commandTrack,playAudible,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }
 
 // END MOTCHILL SITES

@@ -1,5 +1,5 @@
 {
-  "name": "motchill-userscripts",
+  "name": "@media-userscripts/motchill",
   "private": true,
   "scripts": {
     "build": "node ../scripts/build.mjs",
@@ -8,5 +8,5 @@
   "engines": {
     "node": ">=20"
   },
-  "version": "6.0.1"
+  "version": "6.0.2"
 }

@@ -1,13 +1,13 @@
 # Motchill — hướng dẫn sử dụng
 
-Bốn script phiên bản **6.0.1**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
+Bốn script phiên bản **6.0.2**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
 
 | Script | Link cài |
 | --- | --- |
-| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/noads/motchill-noads.user.js) |
-| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/gestures/motchill-gestures.user.js) |
-| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/history/motchill-history.user.js) |
-| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/source/motchill-source.user.js) |
+| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/noads/motchill-noads.user.js) |
+| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/gestures/motchill-gestures.user.js) |
+| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/history/motchill-history.user.js) |
+| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/motchill/source/motchill-source.user.js) |
 
 Nếu đang dùng bộ Motchill cũ, mở link mới rồi chọn **Cập nhật/Cài lại** trên chính script hiện có. Giữ script Lịch sử để giữ dữ liệu; không cần gỡ trước. Sau khi cập nhật, tải lại trang phim và chỉ bật một bản cho mỗi chức năng.
 
@@ -15,8 +15,8 @@ Nếu đang dùng bộ Motchill cũ, mở link mới rồi chọn **Cập nhật
 
 - Chạm một lần lên vùng trống để ẩn/hiện điều khiển; chạm đôi bên trái/phải tua 10 giây.
 - Giữ khi đang phát để tăng lên 2×, thả để trở về tốc độ trước đó.
-- Phát/dừng bằng nút giữa màn hình hoặc thanh dưới. Cài đặt có tốc độ và các lựa chọn chất lượng, âm thanh, phụ đề mà nguồn JWPlayer cung cấp.
-- Khi toàn màn hình, dùng ổ khóa để khóa thao tác; chạm vùng trống để ẩn/hiện ổ khóa. Thoát toàn màn hình sẽ mở khóa.
+- Phát/dừng bằng nút giữa màn hình hoặc thanh dưới. Bấm Phát sẽ bật tiếng cùng lúc; nếu âm lượng bằng 0, script đưa về mức nghe được. Cài đặt có tốc độ và các lựa chọn chất lượng, âm thanh, phụ đề mà nguồn JWPlayer cung cấp.
+- Khi toàn màn hình, dùng ổ khóa để khóa các nút điều khiển. Vẫn chạm đôi tua tới/lùi 10 giây và giữ 2× khi khóa; thả để về tốc độ trước đó. Bỏ qua giới thiệu và Tập tiếp theo vẫn hiện và bấm được đúng thời điểm khi khóa. Chạm một lần để ẩn/hiện ổ khóa. Thoát toàn màn hình sẽ mở khóa.
 - Bỏ qua giới thiệu và chuyển tập bằng nút custom. Mốc giới thiệu đã học trước đây được giữ. Chuyển bản dịch/server bằng các nút tương ứng trên trang.
 
 Nguồn phát và trang phim phải được script nhận diện. Tên miền website có thể thay đổi; host iframe mới có thể cần cập nhật script. Nếu khung chưa sẵn sàng, chờ hoặc chọn **Thử lại**. Giao diện custom vẫn dùng engine của website để nạp phim.

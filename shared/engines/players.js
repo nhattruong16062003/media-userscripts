@@ -69,7 +69,17 @@ export function attachPlayer(candidate) {
       case 'seek': if (!finite(value)) return false; if (kind === 'jw') api.seek(clampSeek(value,s.duration)); else video.currentTime = clampSeek(value,s.duration); break;
       case 'rate': if (!finite(value) || value < 0.25 || value > 4) return false; if (kind === 'jw' && typeof api.setPlaybackRate === 'function') api.setPlaybackRate(value); else video.playbackRate = value; break;
       case 'mute': if(typeof value!=='boolean')return false; if(kind==='jw' && typeof api.setMute==='function')api.setMute(value);else video.muted=value;break;
-      case 'play': if (kind === 'jw' && typeof api.play==='function') api.play(true); else video.play()?.catch(()=>{}); break;
+      case 'play-audible': {
+        // Only an explicit Play click uses this action. Autoplay/preparation
+        // keeps its existing mute state and cannot consume this user intent.
+        if (kind === 'jw' && typeof api.setMute==='function') api.setMute(false); else video.muted=false;
+        const volume=kind==='jw' && typeof api.getVolume==='function'?api.getVolume()/100:video.volume;
+        if (!finite(volume) || volume<=0) {
+          if(kind==='jw' && typeof api.setVolume==='function')api.setVolume(100);else video.volume=1;
+        }
+      }
+      // Fall through so sound and playback are changed in the same handler.
+      case 'play': if (kind === 'jw' && typeof api.play==='function') api.play(true)?.catch?.(()=>{}); else video.play()?.catch(()=>{}); break;
       case 'pause': if (kind === 'jw' && typeof api.pause==='function') api.pause(true); else video.pause(); break;
       default:return false;
     }

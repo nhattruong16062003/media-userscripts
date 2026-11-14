@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.4.1
+// @version      0.4.2
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -521,8 +521,19 @@
           if (kind === "jw" && typeof api.setMute === "function") api.setMute(value);
           else video.muted = value;
           break;
+        case "play-audible": {
+          if (kind === "jw" && typeof api.setMute === "function") api.setMute(false);
+          else video.muted = false;
+          const volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
+          if (!finite(volume) || volume <= 0) {
+            if (kind === "jw" && typeof api.setVolume === "function") api.setVolume(100);
+            else video.volume = 1;
+          }
+        }
+        // Fall through so sound and playback are changed in the same handler.
         case "play":
-          if (kind === "jw" && typeof api.play === "function") api.play(true);
+          if (kind === "jw" && typeof api.play === "function") api.play(true)?.catch?.(() => {
+          });
           else video.play()?.catch(() => {
           });
           break;

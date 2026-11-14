@@ -34,9 +34,9 @@ export function installGestures(win, player, notify = () => {}, options={}) {
     const side=point(e);if (side === null) return;
     consume(e);
     restore();press={id:e.pointerId,x:e.clientX,y:e.clientY,side,at:Date.now(),source:source(),rate:player.state().rate,held:false,locked:!!options.isLocked?.()};
-    if(press.locked || player.state().paused)return;
+    if(press.locked && !options.allowLockedMediaGestures || player.state().paused)return;
     holdTimer=win.setTimeout(()=>{
-      if (!press || !player.state().ready || player.state().paused || options.isLocked?.() || source()!==press.source) return cancel();
+      if (!press || !player.state().ready || player.state().paused || options.isLocked?.() && !options.allowLockedMediaGestures || source()!==press.source) return cancel();
       if(player.command('rate',2)){press.held=true;lastTap=null;win.clearTimeout(tapTimer);options.onHoldChange?.(true);notify('Giữ 2×');}
     },450);
   };
@@ -46,13 +46,15 @@ export function installGestures(win, player, notify = () => {}, options={}) {
     if(!press || e.pointerId!==press.id)return;
     const p=press, now=Date.now();restore();
     consume(e);
-    if(p.locked || options.isLocked?.()){lastTap=null;win.clearTimeout(tapTimer);if(p.locked && now-p.at<=350 && source()===p.source)options.onLockedTap?.();return;}
+    const locked=p.locked || !!options.isLocked?.();
+    if(locked && !options.allowLockedMediaGestures){lastTap=null;win.clearTimeout(tapTimer);if(p.locked && now-p.at<=350 && source()===p.source)options.onLockedTap?.();return;}
     if(p.held){suppressUntil=now+400;notify('Đã khôi phục tốc độ');e.preventDefault();e.stopImmediatePropagation();return;}
     if(now-p.at>350 || source()!==p.source || !player.state().ready)return;
-    if(!p.side){win.clearTimeout(tapTimer);tapTimer=0;lastTap=null;options.onTap?.();return;}
+    const onTap=locked?options.onLockedTap:options.onTap;
+    if(!p.side){win.clearTimeout(tapTimer);tapTimer=0;lastTap=null;onTap?.();return;}
     if(lastTap && now-lastTap.at<320 && p.side===lastTap.side && Math.hypot(p.x-lastTap.x,p.y-lastTap.y)<48){
       win.clearTimeout(tapTimer);if(player.command('seek',player.state().time+p.side*10)){options.onSeek?.(p.side);notify(p.side>0?'+10 giây':'−10 giây');}lastTap=null;suppressUntil=now+400;e.preventDefault();e.stopImmediatePropagation();
-    } else {lastTap={...p,at:now};if(options.onTap){win.clearTimeout(tapTimer);tapTimer=win.setTimeout(()=>{lastTap=null;options.onTap();},320);}}
+    } else {lastTap={...p,at:now};if(onTap){win.clearTimeout(tapTimer);tapTimer=win.setTimeout(()=>{lastTap=null;onTap();},320);}}
   };
   const click = e => {if(options.exclusive || Date.now()<suppressUntil && !interactive(e.target)){e.preventDefault();e.stopImmediatePropagation();}};
   const menu = e => {if(options.exclusive || press?.held){e.preventDefault();e.stopImmediatePropagation();}};

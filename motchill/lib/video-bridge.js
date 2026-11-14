@@ -129,6 +129,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       if(validRemote(this.frame)!==this)return false;
       if (action === 'start-zero') this.state = { ...this.state, startedAtZero: false, paused: true };
       this.frame.contentWindow?.postMessage({ tag: channel, type: 'command', token: this.session.token, mediaId:this.state.mediaId, action, value }, this.session.origin);
+      return true;
     }
   }
   function state() {
@@ -184,10 +185,15 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         document.dispatchEvent(new CustomEvent('mc-player-role', { detail: { role, managed } }));
       }
       if (data.type === 'command' && upstream?.token === data.token) {
+        if(data.action==='play-audible' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared'))return;
         const video = sites.findVideo();
         observeLocal(video);
         if (!video) {const relay=relayRemote();if(data.mediaId && data.mediaId!==relay?.state?.mediaId)return;return relay?.command(data.action,data.value);}
         if(data.mediaId && data.mediaId!==(video.currentSrc || video.src || ''))return;
+        if(data.action==='play-audible'){
+          if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
+          options.playAudible?.(video);return;
+        }
         if(typeof data.action==='string' && data.action.startsWith('track-')){
           if(typeof data.mediaId!=='string' || !data.mediaId || data.mediaId!==(video.currentSrc || video.src || '') || video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
           options.selectTrack?.(video,data.action.slice(6),data.value);return;

@@ -93,7 +93,8 @@ function startMotchillPlayerController(sites) {
   let learning,customUI=null;
   const bridge = createMotchillVideoBridge(sites, channel, { includePrepared: true,
     userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
-    customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id) });
+    customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
+    playAudible:video=>customUI?.playAudible(video) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -406,8 +407,13 @@ function startMotchillPlayerController(sites) {
       // A bare iframe can live beside episode links/servers in main/body. Keep
       // its browsing context in place, but do not give the whole page a video
       // aspect ratio, overflow clipping, or retire its unrelated content.
-      if (baseHost && (/^(HTML|BODY|MAIN)$/.test(shell.tagName)
-        || [...shell.children].some((node) => node !== host && !/^(SCRIPT|STYLE)$/.test(node.tagName)))) shell.classList.add('mc-shell-page');
+      const hasFlowContent = [...shell.children].some((node) => node !== host
+        && !/^(SCRIPT|STYLE)$/.test(node.tagName) && !node.matches('.rp-watch-loading')
+        && !['absolute', 'fixed'].includes(getComputedStyle(node).position));
+      // Poster/spinner overlays (including our loading panel) are siblings of
+      // the absolute iframe in a media-only ratio wrapper. Treating that wrapper
+      // as a page removes its aspect ratio and collapses every child to 0px.
+      if (baseHost && (/^(HTML|BODY|MAIN)$/.test(shell.tagName) || hasFlowContent)) shell.classList.add('mc-shell-page');
     } else {
       shell = document.createElement('div'); shell.className = 'mc-shell';
       host.before(shell); shell.append(host); baseHost = host;

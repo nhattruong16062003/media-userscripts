@@ -8,7 +8,7 @@ export function customPlayerControls(win,player,options={}) {
   const surface=doc.createElement('div');surface.className='rp-gesture-surface';surface.dataset.rpGestureSurface='1';surface.setAttribute('aria-label','Chạm để hiện điều khiển; chạm đôi hai bên tua 10 giây; giữ để phát 2 lần');shell.append(surface);
   function button(action,label,icon,host,className='rp-icon'){
     const node=doc.createElement('button');node.type='button';node.dataset.rpAction=action;node.className=className;node.setAttribute('aria-label',label);node.innerHTML=playerIcon(icon);
-    node.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(disposed)return;if(!locked)actionClick(action,node);else if(action==='lock')setLocked(false);});host.append(node);return node;
+    node.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(disposed)return;if(!locked || action==='context')actionClick(action,node);else if(action==='lock')setLocked(false);});host.append(node);return node;
   }
   let disposed=false,locked=false,chromeVisible=true,lockVisible=true,scrubbing=false,nativeOwned=false,lastReady=false,lastPaused=null,context=null,autoPlayAttempted=false;
   let hideTimer=0,lockTimer=0,tipTimer=0,errorTimer=0,nextTimer=0,scrubTimer=0,nextPending=null,nextError=null;
@@ -59,7 +59,7 @@ export function customPlayerControls(win,player,options={}) {
   function actionClick(action,node){
     if(!player.state().ready)return;
     switch(action){
-      case 'play':autoPlayAttempted=true;command(player.state().paused?'play':'pause');show();break;
+      case 'play':autoPlayAttempted=true;command(player.state().paused?'play-audible':'pause');show();break;
       case 'mute':command('mute',!video.muted);show();break;
       case 'lock':setLocked(true);break;
       case 'settings':settings.hidden=!settings.hidden;show();break;
@@ -77,7 +77,7 @@ export function customPlayerControls(win,player,options={}) {
     const active=nextPending;
     try{const result=options.onNext?.();if(result===false || !options.onNext)finishNext('unavailable');else if(result?.then)result.then(status=>{if(disposed || nextPending!==active)return;if(status==='navigating')win.clearTimeout(nextTimer);else if(status)finishNext(status);},()=>{if(!disposed && nextPending===active)finishNext('error');});}catch{finishNext('error');}
   }
-  const offGestures=installGestures(win,player,()=>{},{surface,exclusive:true,isLocked:()=>locked,
+  const offGestures=installGestures(win,player,()=>{},{surface,exclusive:true,isLocked:()=>locked,allowLockedMediaGestures:true,
     onLockedTap:()=>{if(lockVisible){lockVisible=false;win.clearTimeout(lockTimer);applyChrome();}else revealLock();},
     onTap:()=>{if(chromeVisible){chromeVisible=false;settings.hidden=true;win.clearTimeout(hideTimer);applyChrome();}else show();},
     onHoldChange:active=>{holdTip.hidden=!active;if(active){chromeVisible=false;applyChrome();}},
@@ -123,7 +123,7 @@ export function customPlayerControls(win,player,options={}) {
     line.dataset.rpNextStatus=String(nextPending?.node===next || nextError?.node===next);
     for(const node of [contextAction,next]){
       node.dataset.rpStatus=String(nextPending?.node===node || nextError?.node===node);
-      node.disabled=!state.ready||locked||(!context && !(node===contextAction && intro))||!!nextPending;node.setAttribute('aria-busy',String(nextPending?.node===node));
+      node.disabled=!state.ready||locked&&node!==contextAction||(!context && !(node===contextAction && intro))||!!nextPending;node.setAttribute('aria-busy',String(nextPending?.node===node));
       if(nextPending?.node===node)node.textContent='Đang chuyển tập…';else if(nextError?.node===node)node.textContent=nextError.text;
       else if(node===contextAction)node.innerHTML=(intro?'Bỏ qua giới thiệu':'Tập tiếp theo')+' '+playerIcon(intro?'forward':'next');else node.innerHTML=playerIcon('next');
     }

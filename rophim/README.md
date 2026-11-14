@@ -10,19 +10,19 @@ Ba script độc lập: chặn quảng cáo, thao tác trình phát và lịch s
 
 | Script | Phiên bản | Link cài |
 | --- | --- | --- |
-| Chặn quảng cáo | 0.4.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/rophim/noads/rophim-noads.user.js) |
-| Thao tác trình phát | 0.4.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/rophim/gestures/rophim-gestures.user.js) |
-| Lịch sử xem | 0.4.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/rophim/history/rophim-history.user.js) |
+| Chặn quảng cáo | 0.4.2 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/rophim/noads/rophim-noads.user.js) |
+| Thao tác trình phát | 0.4.2 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/rophim/gestures/rophim-gestures.user.js) |
+| Lịch sử xem | 0.4.2 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.2/rophim/history/rophim-history.user.js) |
 
 Đã cài thì bấm **Cập nhật** hoặc **Cài lại**; không cần chép mã vào editor. Xem [hướng dẫn Firefox Android và máy tính](docs/FIREFOX.md).
 
-Link cài gắn với phiên bản cụ thể. Trước khi bấm cập nhật, kiểm tra trang Tampermonkey hiện **0.4.1**. Nếu đang dùng cả ba script, cập nhật cả ba rồi tải lại trang phim. Giữ script Lịch sử hiện có khi cập nhật để giữ tiến độ.
+Link cài gắn với phiên bản cụ thể. Trước khi bấm cập nhật, kiểm tra trang Tampermonkey hiện **0.4.2**. Nếu đang dùng cả ba script, cập nhật cả ba rồi tải lại trang phim. Giữ script Lịch sử hiện có khi cập nhật để giữ tiến độ.
 
 ## Sử dụng
 
 - **Chặn quảng cáo:** chạy tự động sau khi tải lại trang; ẩn slide tài trợ, ảnh thu nhỏ của nó và hàng Nhà cái/Nhà tài trợ uy tín, giữ banner phim.
 - **Thao tác trình phát:** thanh tua mỏng, nút phát/dừng ở giữa và phía dưới video. Chạm một lần để hiện/ẩn điều khiển; chạm đôi bên trái/phải để tua 10 giây; giữ khoảng nửa giây khi phim đang phát để tăng lên 2×, thả để về tốc độ cũ. Nút cài đặt chọn tốc độ.
-- **Khóa:** trong toàn màn hình khung, bấm biểu tượng ổ khóa. Khi khóa, chỉ nút mở khóa hoạt động; chạm một lần lên phim để ẩn/hiện ổ khóa. Biểu tượng tự ẩn sau 2,5 giây.
+- **Khóa:** trong toàn màn hình khung, bấm biểu tượng ổ khóa. Khi khóa, các nút điều khiển được khóa nhưng vẫn chạm đôi tua tới/lùi 10 giây và giữ 2×, thả để về tốc độ trước đó. Bỏ qua giới thiệu/Tập tiếp theo vẫn hiện và bấm được đúng thời điểm khi khóa. Chạm một lần lên phim để ẩn/hiện ổ khóa; biểu tượng tự ẩn sau 2,5 giây.
 - **Giới thiệu và tập tiếp theo:** nút **Bỏ qua giới thiệu** ở đầu phim đưa đến mốc 1:30, không hiện thông báo thêm. Nút tập tiếp theo có trên thanh dưới và xuất hiện gần cuối phim; bấm sẽ đổi chữ ngay trên nút. Chuyển tập ngay trong khung phát, giữ toàn màn hình khung; có thể chọn tập ở danh sách bên ngoài player. Giữ đúng bản dịch và mùa: đang Lồng tiếng sẽ tiếp tục Lồng tiếng; thiếu tập cùng bản dịch thì báo tại nút, giữ nguyên tập đang xem.
 - **Lịch sử xem:** mục **Đang xem** nằm trong vùng nội dung dưới banner, có ảnh phim và thanh tiến độ. Bấm ảnh hoặc **Xem tiếp** để mở phim trên website hiện tại; khi player sẵn sàng, bấm **Tiếp tục** để tới mốc đã lưu. **Lịch sử** nằm cạnh tiêu đề Đang xem; trên trang xem, nút nằm dưới player. Biểu tượng mở liên kết trên ảnh đưa về trang đã xem trước đó.
 
@@ -36,7 +36,7 @@ Giao diện gốc được ẩn trong suốt quá trình dùng điều khiển c
 
 Nút toàn màn hình yêu cầu xoay ngang trên điện thoại; tạm dừng vẫn giữ khung toàn màn hình và hướng ngang. Khi hướng bị trả về dọc, script yêu cầu khôi phục ngang trong khung hiện tại. Thoát toàn màn hình sẽ thả khóa hướng do script tạo. Trình duyệt cần cho phép toàn màn hình và khóa hướng; nếu không hỗ trợ khóa hướng, bạn có thể xoay máy bằng tay.
 
-Khi tập mới sẵn sàng, script thử bắt đầu phát một lần. Nếu Firefox chặn tự phát có tiếng, cho phép tự phát trong quyền website hoặc bấm **Phát** ở giữa video. Việc bạn chủ động tạm dừng sẽ được giữ nguyên.
+Khi tập mới sẵn sàng, script thử bắt đầu phát một lần. Nếu Firefox chặn tự phát có tiếng, cho phép tự phát trong quyền website hoặc bấm **Phát** ở giữa video. Khi bạn bấm Phát, script bật tiếng trước khi phát; nếu âm lượng bằng 0, đưa về mức nghe được. Việc bạn chủ động tạm dừng sẽ được giữ nguyên.
 
 Nếu không thấy thanh điều khiển, kiểm tra script đang bật, tải lại trang và chờ player sẵn sàng. Dùng nút **Toàn màn hình** trên thanh custom để giữ điều khiển trong khung player. Nếu trình duyệt chuyển sang toàn màn hình video hệ thống, thoát chế độ đó để trở lại các nút custom.
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.1
+// @version      0.4.2
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -493,8 +493,19 @@ SOFTWARE.
           if (kind === "jw" && typeof api.setMute === "function") api.setMute(value);
           else video.muted = value;
           break;
+        case "play-audible": {
+          if (kind === "jw" && typeof api.setMute === "function") api.setMute(false);
+          else video.muted = false;
+          const volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
+          if (!finite(volume) || volume <= 0) {
+            if (kind === "jw" && typeof api.setVolume === "function") api.setVolume(100);
+            else video.volume = 1;
+          }
+        }
+        // Fall through so sound and playback are changed in the same handler.
         case "play":
-          if (kind === "jw" && typeof api.play === "function") api.play(true);
+          if (kind === "jw" && typeof api.play === "function") api.play(true)?.catch?.(() => {
+          });
           else video.play()?.catch(() => {
           });
           break;
@@ -806,7 +817,7 @@ SOFTWARE.
   .rp-feedback-hold{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none}.rp-chevrons{display:flex}.rp-chevrons svg{width:9px;height:12px;fill:currentColor;stroke-width:0;margin-left:-1px;opacity:.3;animation:rp-run 1s ease-in-out infinite}.rp-chevrons svg:nth-child(2){animation-delay:.15s}.rp-chevrons svg:nth-child(3){animation-delay:.3s}
   .rp-player-settings{position:absolute;bottom:64px;right:16px;z-index:2;width:200px;max-height:70%;overflow-y:auto;padding:4px 12px 10px;border:0;border-radius:2px;background:#1a1a1a;color:#fff;pointer-events:auto}.rp-player-settings-header{display:flex;align-items:center;justify-content:space-between;font-size:13px}.rp-player-speed-options{display:flex;flex-wrap:wrap;gap:4px}.rp-player-shell .rp-speed{padding:6px 10px;min-height:38px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:13px}.rp-player-shell .rp-speed[aria-pressed="true"]{background:#555}.rp-track-label{font-size:13px;margin:10px 0 4px}.rp-player-tracks .rp-speed{margin:2px}
   .rp-player-error{position:absolute;bottom:76px;left:12px;right:12px;padding:6px 10px;border-radius:4px;background:#151515ed;color:#fff;font-size:12px;pointer-events:none}
-  .rp-player-shell[data-rp-chrome="false"] .rp-player-chrome,.rp-player-shell[data-rp-chrome="false"] .rp-center-play,.rp-player-shell[data-rp-chrome="false"][data-rp-locked="false"] .rp-lock,.rp-player-shell[data-rp-locked="true"] .rp-player-chrome,.rp-player-shell[data-rp-locked="true"] .rp-center-play,.rp-player-shell[data-rp-locked="true"] .rp-context-action{visibility:hidden;pointer-events:none}
+  .rp-player-shell[data-rp-chrome="false"] .rp-player-chrome,.rp-player-shell[data-rp-chrome="false"] .rp-center-play,.rp-player-shell[data-rp-chrome="false"][data-rp-locked="false"] .rp-lock,.rp-player-shell[data-rp-locked="true"] .rp-player-chrome,.rp-player-shell[data-rp-locked="true"] .rp-center-play{visibility:hidden;pointer-events:none}
   @keyframes rp-run{0%,100%{opacity:.3;transform:translateX(0)}35%{opacity:1;transform:translateX(2px)}}@keyframes rp-nudge-right{from{transform:translateX(-4px);opacity:.3}to{transform:none;opacity:1}}@keyframes rp-nudge-left{from{transform:translateX(4px);opacity:.3}to{transform:none;opacity:1}}
   @media(max-width:480px){.rp-player-shell .rp-lock{left:24px}.rp-player-chrome{padding:8px 8px 0}.rp-player-shell .rp-icon:not(.rp-center-play):not(.rp-lock){min-width:36px;padding:6px}.rp-player-time{font-size:11px}.rp-player-line[data-rp-next-status="true"] .rp-player-time{display:none}.rp-player-shell .rp-pill{font-size:13px}}
   @media(pointer:coarse){.rp-player-shell .rp-icon{min-width:44px;min-height:44px}.rp-player-timeline{height:24px}.rp-context-action{bottom:76px;min-height:38px}.rp-player-settings{bottom:74px}}
@@ -887,9 +898,9 @@ SOFTWARE.
       consume(e);
       restore();
       press = { id: e.pointerId, x: e.clientX, y: e.clientY, side, at: Date.now(), source: source(), rate: player.state().rate, held: false, locked: !!options.isLocked?.() };
-      if (press.locked || player.state().paused) return;
+      if (press.locked && !options.allowLockedMediaGestures || player.state().paused) return;
       holdTimer = win.setTimeout(() => {
-        if (!press || !player.state().ready || player.state().paused || options.isLocked?.() || source() !== press.source) return cancel();
+        if (!press || !player.state().ready || player.state().paused || options.isLocked?.() && !options.allowLockedMediaGestures || source() !== press.source) return cancel();
         if (player.command("rate", 2)) {
           press.held = true;
           lastTap = null;
@@ -909,7 +920,8 @@ SOFTWARE.
       const p = press, now = Date.now();
       restore();
       consume(e);
-      if (p.locked || options.isLocked?.()) {
+      const locked = p.locked || !!options.isLocked?.();
+      if (locked && !options.allowLockedMediaGestures) {
         lastTap = null;
         win.clearTimeout(tapTimer);
         if (p.locked && now - p.at <= 350 && source() === p.source) options.onLockedTap?.();
@@ -923,11 +935,12 @@ SOFTWARE.
         return;
       }
       if (now - p.at > 350 || source() !== p.source || !player.state().ready) return;
+      const onTap = locked ? options.onLockedTap : options.onTap;
       if (!p.side) {
         win.clearTimeout(tapTimer);
         tapTimer = 0;
         lastTap = null;
-        options.onTap?.();
+        onTap?.();
         return;
       }
       if (lastTap && now - lastTap.at < 320 && p.side === lastTap.side && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 48) {
@@ -942,11 +955,11 @@ SOFTWARE.
         e.stopImmediatePropagation();
       } else {
         lastTap = { ...p, at: now };
-        if (options.onTap) {
+        if (onTap) {
           win.clearTimeout(tapTimer);
           tapTimer = win.setTimeout(() => {
             lastTap = null;
-            options.onTap();
+            onTap();
           }, 320);
         }
       }
@@ -1015,7 +1028,7 @@ SOFTWARE.
         event.preventDefault();
         event.stopPropagation();
         if (disposed) return;
-        if (!locked) actionClick(action, node);
+        if (!locked || action === "context") actionClick(action, node);
         else if (action === "lock") setLocked(false);
       });
       host.append(node);
@@ -1210,7 +1223,7 @@ SOFTWARE.
       switch (action) {
         case "play":
           autoPlayAttempted = true;
-          command(player.state().paused ? "play" : "pause");
+          command(player.state().paused ? "play-audible" : "pause");
           show();
           break;
         case "mute":
@@ -1295,6 +1308,7 @@ SOFTWARE.
       surface,
       exclusive: true,
       isLocked: () => locked,
+      allowLockedMediaGestures: true,
       onLockedTap: () => {
         if (lockVisible) {
           lockVisible = false;
@@ -1456,7 +1470,7 @@ SOFTWARE.
       line.dataset.rpNextStatus = String(nextPending?.node === next || nextError?.node === next);
       for (const node of [contextAction, next]) {
         node.dataset.rpStatus = String(nextPending?.node === node || nextError?.node === node);
-        node.disabled = !state.ready || locked || !context && !(node === contextAction && intro) || !!nextPending;
+        node.disabled = !state.ready || locked && node !== contextAction || !context && !(node === contextAction && intro) || !!nextPending;
         node.setAttribute("aria-busy", String(nextPending?.node === node));
         if (nextPending?.node === node) node.textContent = "\u0110ang chuy\u1EC3n t\u1EADp\u2026";
         else if (nextError?.node === node) node.textContent = nextError.text;
