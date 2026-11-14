@@ -4,14 +4,14 @@
 
 1. Mở Firefox, vào **⋮ → Tiện ích → Quản lý tiện ích**, tìm và cài **Tampermonkey**. Có thể mở [trang Tampermonkey trên Firefox Add-ons](https://addons.mozilla.org/firefox/addon/tampermonkey/) bằng Firefox.
 2. Mở link script muốn dùng ngay trong Firefox:
-   - [Chặn quảng cáo 0.3.1](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-noads.user.js)
-   - [Thao tác trình phát 0.3.1](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-gestures.user.js)
-   - [Lịch sử xem 0.3.1](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-history.user.js)
-3. Tampermonkey mở trang cài đặt. Kiểm tra tên **RoPhim**, phiên bản **0.3.1**, tác giả **zic**, nguồn là repo `nhattruong16062003/rophim-userscripts`; kéo xuống và bấm **Cài đặt**.
+   - [Chặn quảng cáo 0.3.2](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.2/dist/rophim-noads.user.js)
+   - [Thao tác trình phát 0.3.2](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.2/dist/rophim-gestures.user.js)
+   - [Lịch sử xem 0.3.2](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.2/dist/rophim-history.user.js)
+3. Tampermonkey mở trang cài đặt. Kiểm tra tên **RoPhim**, phiên bản **0.3.2**, tác giả **zic**, nguồn là repo `nhattruong16062003/rophim-userscripts`; kéo xuống và bấm **Cài đặt**.
 4. Muốn dùng thêm script khác thì làm lại bước 2–3.
 5. Mở trang phim và tải lại trang. Trong **⋮ → Tiện ích → Tampermonkey**, kiểm tra các script RoPhim đang bật.
 
-Đã cài cùng script thì nút có thể là **Cập nhật** hoặc **Cài lại**. Nếu đang dùng cả ba, cập nhật cả ba lên **0.3.1** rồi tải lại trang. Giữ mục Lịch sử đang có khi cập nhật để giữ dữ liệu.
+Đã cài cùng script thì nút có thể là **Cập nhật** hoặc **Cài lại**. Nếu đang dùng cả ba, cập nhật cả ba lên **0.3.2** rồi tải lại trang. Giữ mục Lịch sử đang có khi cập nhật để giữ dữ liệu.
 
 ## Firefox máy tính
 
@@ -28,11 +28,11 @@ Cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/), m�
 | Tăng tốc tạm thời | Giữ khoảng nửa giây khi phim đang phát để tăng lên 2×; thả để về tốc độ trước đó |
 | Bỏ intro | Bấm **Bỏ qua giới thiệu** ở đầu phim để tới mốc 1:30; không cộng thêm vào vị trí đang xem |
 | Khóa thao tác | Trong toàn màn hình khung, bấm icon ổ khóa. Khi khóa, chạm phim một lần để ẩn/hiện icon; bấm icon để mở khóa |
-| Tập sau | Bấm icon tập tiếp trên thanh dưới hoặc nút gần cuối phim; chữ đổi ngay tại nút. Giữ đúng bản dịch và mùa. Thiếu tập Lồng tiếng thì báo ngay tại nút, giữ nguyên tập hiện tại |
+| Tập sau | Bấm icon tập tiếp trên thanh dưới hoặc nút gần cuối phim; chữ đổi ngay tại nút. Chuyển ngay trong khung đang dùng, giữ toàn màn hình khung. Giữ đúng bản dịch và mùa. Thiếu tập Lồng tiếng thì báo ngay tại nút, giữ nguyên tập hiện tại |
 | Toàn màn hình | Dùng nút **Toàn màn hình** trên thanh custom để giữ thanh custom trong khung. Nếu vào toàn màn hình video hệ thống, thoát ra để dùng lại nút custom |
 | Xem tiếp | Trong **Đang xem** dưới banner, bấm ảnh phim hoặc **Xem tiếp**; khi player sẵn sàng, bấm **Tiếp tục**. Bấm **Lịch sử** cạnh tiêu đề để xem tất cả; trên trang xem, nút nằm dưới player |
 
-Lịch sử lưu trong Tampermonkey của cùng profile, dùng chung giữa các website với đúng phim/mùa/tập/bản dịch, kể cả khi dùng player khác. Biểu tượng mở liên kết ở góc ảnh bìa mở website bạn xem trước đó. Nếu không tìm thấy tập trên website mới, mở đúng phim thủ công rồi dùng nút **Tiếp tục**; hai bản khác thời lượng sẽ có thông báo và không tự tua. Không cần tài khoản website; chưa đồng bộ sang thiết bị khác. Trình duyệt chặn tự phát thì bấm **Phát**.
+Lịch sử lưu trong Tampermonkey của cùng profile, dùng chung giữa các website với đúng phim/mùa/tập/bản dịch, kể cả khi dùng player khác. Biểu tượng mở liên kết ở góc ảnh bìa mở website bạn xem trước đó. Nếu không tìm thấy tập trên website mới, mở đúng phim thủ công rồi dùng nút **Tiếp tục**; hai bản khác thời lượng sẽ có thông báo và không tự tua. Không cần tài khoản website; chưa đồng bộ sang thiết bị khác. Tập mới sẵn sàng sẽ thử bắt đầu phát một lần. Nếu Firefox chặn tự phát có tiếng, cho phép tự phát trong quyền website hoặc bấm **Phát** ở giữa video. Tạm dừng do bạn chọn sẽ được giữ nguyên.
 
 ## Khi chưa chạy
 

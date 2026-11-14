@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.3.1
+// @version      0.3.2
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -150,14 +150,16 @@ function rscObjects(doc, page = {}) {
 function detectSite(doc, href, page = {}) {
   const url = safeURL(href);
   if (!url || !url.pathname.startsWith('/xem-phim/')) return null;
+  let transition=null;
+  try{const raw=doc.getElementById('rp-watch-descriptor')?.textContent;if(raw && raw.length<100000){const value=JSON.parse(raw);if(value.href===url.origin+url.pathname)transition=value;}}catch{/* incomplete local transition */}
   const legacyFrame = doc.querySelector('iframe#player.player-iframe');
   const panels = [...doc.querySelectorAll('.server-picker[data-panel]')];
   if (legacyFrame && panels.some(p => p.querySelector('[data-server][data-value]')) && doc.querySelector('.btn-episode.chaptervs,.btn-episode.chaptertm')) {
-    return {kind:'legacy-panels', frame:legacyFrame, url};
+    return {kind:'legacy-panels', frame:legacyFrame, url,...(transition?.kind==='legacy-panels' && transition.frameSrc===legacyFrame.src?{preferences:transition.preferences}:{})};
   }
   const frame = doc.querySelector('.player-ratio iframe#embed-player');
   if (!frame) return null;
-  const data = rscObjects(doc, page);
+  const data = transition?.frameSrc===frame.src && ['next-ordered','next-basic'].includes(transition.kind) && transition.episode && transition.movie?{episodes:[transition.episode],movies:[transition.movie]}:rscObjects(doc, page);
   const suffix = url.pathname.match(/\.(\d+)$/)?.[1];
   const embedID = safeURL(frame.src)?.pathname.match(/^\/embed\/(\d+)$/)?.[1];
   const candidates = data.episodes.filter(e => suffix ? String(e.id) === suffix : embedID ? String(e.id) === embedID : e.link === frame.src);
@@ -173,6 +175,14 @@ function detectSite(doc, href, page = {}) {
   if (doc.querySelector('.player-frame-stable') && frame.classList.contains('player-frame-content')) return {kind:'next-basic', frame, url, episode, movie};
   return null;
 }
+function commitWatchSite(doc,site){
+  let node=doc.getElementById('rp-watch-descriptor');if(!node){node=doc.createElement('script');node.id='rp-watch-descriptor';node.type='application/json';node.dataset.rpUi='watch-data';(doc.head || doc.documentElement).append(node);}
+  const pick=(value,keys)=>value?Object.fromEntries(keys.filter(key=>Object.hasOwn(value,key)).map(key=>[key,value[key]])):undefined;
+  const episode=pick(site.episode,['id','slug','name','server','server_type','episode_order','season_number','type','link']);
+  const movie=pick(site.movie,['id','slug','name','origin_name','originalTitle','publish_year','year','type','imdb_id','tmdb_id','thumbnail','poster','partNumber']);
+  if(movie)movie.latestEpisodes=site.movie.latestEpisodes?.filter(e=>e.id===site.episode.id).map(e=>({id:e.id,season_number:e.season_number}));
+  node.textContent=JSON.stringify({href:site.url.origin+site.url.pathname,kind:site.kind,frameSrc:site.frame.src,episode,movie,preferences:site.preferences});
+}
 function readContext(site, doc) {
   if (!site) return null;
   switch (site.kind) {
@@ -183,12 +193,13 @@ function readContext(site, doc) {
       return {source:site.kind, movie:bounded(m.slug), movieID:String(m.id), title:bounded(m.name), episode:bounded(e.name), episodeID:String(e.id), season:String(season), lane:bounded(e.server_type || e.server), server:bounded(e.server), url:url.origin+url.pathname,...movieIdentity(m)};
     }
     case 'legacy-panels': {
-      const cookies = Object.fromEntries(doc.cookie.split(';').map(v => v.trim().split('=')));
+      const cookies = site.preferences || Object.fromEntries(doc.cookie.split(';').map(v => v.trim().split('=')));
       const lane = cookies.selectedVidTypeRophim === 'tm' ? 'tm' : 'vs';
-      const active = doc.querySelector(lane === 'tm' ? '.chaptertm.on-air' : '.chaptervs.on-air');
+      const links=[...doc.querySelectorAll(lane==='tm'?'.chaptertm':'.chaptervs')];
+      const active = links.find(n=>safeURL(n.getAttribute('href'),site.url)?.pathname===site.url.pathname) || links.find(n=>n.classList.contains('on-air'));
       const panel = doc.querySelector(`.server-picker[data-panel="${lane === 'tm' ? 'thuyetminh' : 'vietsub'}"]`);
       if (!active || !panel) return null;
-      const server = panel.querySelector('[data-server].current')?.dataset.server || '';
+      const server = site.preferences?.selectedServerRophim || panel.querySelector('[data-server].current')?.dataset.server || '';
       const title = (doc.querySelector('meta[property="og:title"]')?.content || doc.title).split('|')[0].trim();
       const movie = site.url.pathname.split('/').at(-1).replace(/-tap-\d+(?:\.[^/]*)?$/, '');
       const rawTitle=doc.querySelector('meta[property="og:title"]')?.content || doc.title;
@@ -330,12 +341,13 @@ function createBridge(win, page, feature, callbacks = {}) {
   const top = win.parent === win;
   if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return {dispose(){},state:()=>null,command:()=>false};
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
-  let boundFrame = null;
+  let boundFrame = null,frameFullscreen=false;
   let knownSource=false, snapshot=null, pending='', retryAfter=0;
   const requests=new Map();
+  const resultStatuses=action=>action==='fullscreen'?['fullscreen','windowed','error','unavailable']:['missing','error','navigating','unavailable'];
   const clearRequests=()=>{for(const request of requests.values()){win.clearTimeout(request.timer);request.resolve('unavailable');}requests.clear();};
   const referrer = safeURL(win.document.referrer)?.origin;
-  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media});
+  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen});
   const resetRemote = () => { remote = null; media = ''; session = null; generation++; emit(); };
   const loaded = () => { resetRemote(); tick(); };
   const send = data => { if (session) session.source.postMessage({...data,channel,token:session.token,generation:session.generation,seq:++sequence},session.origin); };
@@ -351,7 +363,7 @@ function createBridge(win, page, feature, callbacks = {}) {
       }
       if(d.seq<=session.seq)return;
       session.seq=d.seq;
-      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;emit();
+      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;emit();
       return;
     }
     if (!acceptsPacket(event,session,channel)) return;
@@ -359,20 +371,20 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (!boundFrame?.isConnected || boundFrame.contentWindow !== event.source || boundFrame.src !== session.src || contextKey(context) !== session.key) return;
       if (d.type === 'state' && validState(d.state) && /^[a-f\d]{32}$/.test(d.media)) {
         session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};emit();
-      } else if (d.type === 'request' && d.action === 'next' && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
+      } else if (d.type === 'request' && ['next','fullscreen'].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
         session.seq = d.seq;
         if(session.requesting && Date.now()<=session.requesting.until)return;
         const active=session,activeMedia=media,requestMarker={until:Date.now()+11000};active.requesting=requestMarker;
         const isCurrent=()=>!disposed && session===active && active.requesting===requestMarker && Date.now()<=requestMarker.until && media===activeMedia && boundFrame?.isConnected && boundFrame.contentWindow===active.source && boundFrame.src===active.src && contextKey(context)===active.key && remote?.ready && !remote.ad;
-        Promise.resolve().then(()=>isCurrent()?callbacks.request?.('next',{isCurrent}):'unavailable').then(status=>{
+        Promise.resolve().then(()=>isCurrent()?callbacks.request?.(d.action,{isCurrent}):'unavailable').then(status=>{
           if(!isCurrent())return;
-          send({type:'result',id:d.id,media:activeMedia,status:['missing','error','navigating','unavailable'].includes(status)?status:'error'});
+          send({type:'result',id:d.id,media:activeMedia,status:resultStatuses(d.action).includes(status)?status:'error'});
         }).catch(()=>{if(isCurrent())send({type:'result',id:d.id,media:activeMedia,status:'error'});}).finally(()=>{if(active.requesting===requestMarker)active.requesting=null;});
       }
     } else if (d.type === 'command' && d.media === media) {
       session.seq = d.seq;
       try { local?.command(d.action,d.value); } catch { /* player changed while message was queued */ }
-    } else if(!top && d.type==='result' && d.media===media && requests.has(d.id) && ['missing','error','navigating','unavailable'].includes(d.status)){
+    } else if(!top && d.type==='result' && d.media===media && requests.has(d.id) && resultStatuses(requests.get(d.id).action).includes(d.status)){
       session.seq=d.seq;const request=requests.get(d.id);requests.delete(d.id);win.clearTimeout(request.timer);request.resolve(d.status);
     }
   };
@@ -408,7 +420,8 @@ function createBridge(win, page, feature, callbacks = {}) {
         diagnostic(win.document,feature, nextContext ? 'iframe chưa cấp quyền/không nhận diện' : 'chờ nguồn website');return;
       }
       if (!session) { session = {source:frame.contentWindow,origin:url.origin,src:frame.src,key:contextKey(context),token:token(win),generation,seq:-1,seen:0};sequence = 0; }
-      send({type:'hello',context});
+      frameFullscreen=!!win.document.fullscreenElement?.contains(frame);
+      send({type:'hello',context,fullscreen:frameFullscreen});
       if (session.seen && Date.now() - session.seen > 4000) {remote = null;media = '';emit();}
       diagnostic(win.document,feature,site.kind + '/' + (remote?.ready ? remote.kind : 'chờ player nội dung'));
     } else {
@@ -435,12 +448,12 @@ function createBridge(win, page, feature, callbacks = {}) {
       send({type:'command',action,value,media});return true;
     },
     request(action) {
-      if(top || action!=='next' || !local?.state().ready || !session || !context)return false;
+      if(top || !['next','fullscreen'].includes(action) || !local?.state().ready || !session || !context)return false;
       if(requests.size)return false;
       const id=token(win);
       return new Promise(resolve=>{
         const timer=win.setTimeout(()=>{requests.delete(id);resolve('timeout');},12000);
-        requests.set(id,{resolve,timer});
+        requests.set(id,{resolve,timer,action});
         // Flush state so the parent validates the same active resource even
         // before the first heartbeat.
         send({type:'state',state:local.state(),media});send({type:'request',action,id,media});

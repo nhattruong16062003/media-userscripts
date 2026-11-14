@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.3.1
+// @version      0.3.2
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -22,6 +22,52 @@
 
 (function () {
 'use strict';
+/*
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+---
+
+The following Lucide icons are derived from the Feather project:
+
+airplay, alert-circle, alert-octagon, alert-triangle, aperture, arrow-down-circle, arrow-down-left, arrow-down-right, arrow-down, arrow-left-circle, arrow-left, arrow-right-circle, arrow-right, arrow-up-circle, arrow-up-left, arrow-up-right, arrow-up, at-sign, calendar, cast, check, chevron-down, chevron-left, chevron-right, chevron-up, chevrons-down, chevrons-left, chevrons-right, chevrons-up, circle, clipboard, clock, code, columns, command, compass, corner-down-left, corner-down-right, corner-left-down, corner-left-up, corner-right-down, corner-right-up, corner-up-left, corner-up-right, crosshair, database, divide-circle, divide-square, dollar-sign, download, external-link, feather, frown, hash, headphones, help-circle, info, italic, key, layout, life-buoy, link-2, link, loader, lock, log-in, log-out, maximize, meh, minimize, minimize-2, minus-circle, minus-square, minus, monitor, moon, more-horizontal, more-vertical, move, music, navigation-2, navigation, octagon, pause-circle, percent, plus-circle, plus-square, plus, power, radio, rss, search, server, share, shopping-bag, sidebar, smartphone, smile, square, table-2, tablet, target, terminal, trash-2, trash, triangle, tv, type, upload, x-circle, x-octagon, x-square, x, zoom-in, zoom-out
+
+The MIT License (MIT) (for the icons listed above)
+
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
 // ---- lib/core.js ----
 // Permission boundaries only. Website names may change; source contracts select adapters.
 const FRAME_ORIGINS = new Set(['https://player.phimapi.com', 'https://api.clubc.org', 'https://dora.nobitayeuxuka.xyz']);
@@ -150,14 +196,16 @@ function rscObjects(doc, page = {}) {
 function detectSite(doc, href, page = {}) {
   const url = safeURL(href);
   if (!url || !url.pathname.startsWith('/xem-phim/')) return null;
+  let transition=null;
+  try{const raw=doc.getElementById('rp-watch-descriptor')?.textContent;if(raw && raw.length<100000){const value=JSON.parse(raw);if(value.href===url.origin+url.pathname)transition=value;}}catch{/* incomplete local transition */}
   const legacyFrame = doc.querySelector('iframe#player.player-iframe');
   const panels = [...doc.querySelectorAll('.server-picker[data-panel]')];
   if (legacyFrame && panels.some(p => p.querySelector('[data-server][data-value]')) && doc.querySelector('.btn-episode.chaptervs,.btn-episode.chaptertm')) {
-    return {kind:'legacy-panels', frame:legacyFrame, url};
+    return {kind:'legacy-panels', frame:legacyFrame, url,...(transition?.kind==='legacy-panels' && transition.frameSrc===legacyFrame.src?{preferences:transition.preferences}:{})};
   }
   const frame = doc.querySelector('.player-ratio iframe#embed-player');
   if (!frame) return null;
-  const data = rscObjects(doc, page);
+  const data = transition?.frameSrc===frame.src && ['next-ordered','next-basic'].includes(transition.kind) && transition.episode && transition.movie?{episodes:[transition.episode],movies:[transition.movie]}:rscObjects(doc, page);
   const suffix = url.pathname.match(/\.(\d+)$/)?.[1];
   const embedID = safeURL(frame.src)?.pathname.match(/^\/embed\/(\d+)$/)?.[1];
   const candidates = data.episodes.filter(e => suffix ? String(e.id) === suffix : embedID ? String(e.id) === embedID : e.link === frame.src);
@@ -173,6 +221,14 @@ function detectSite(doc, href, page = {}) {
   if (doc.querySelector('.player-frame-stable') && frame.classList.contains('player-frame-content')) return {kind:'next-basic', frame, url, episode, movie};
   return null;
 }
+function commitWatchSite(doc,site){
+  let node=doc.getElementById('rp-watch-descriptor');if(!node){node=doc.createElement('script');node.id='rp-watch-descriptor';node.type='application/json';node.dataset.rpUi='watch-data';(doc.head || doc.documentElement).append(node);}
+  const pick=(value,keys)=>value?Object.fromEntries(keys.filter(key=>Object.hasOwn(value,key)).map(key=>[key,value[key]])):undefined;
+  const episode=pick(site.episode,['id','slug','name','server','server_type','episode_order','season_number','type','link']);
+  const movie=pick(site.movie,['id','slug','name','origin_name','originalTitle','publish_year','year','type','imdb_id','tmdb_id','thumbnail','poster','partNumber']);
+  if(movie)movie.latestEpisodes=site.movie.latestEpisodes?.filter(e=>e.id===site.episode.id).map(e=>({id:e.id,season_number:e.season_number}));
+  node.textContent=JSON.stringify({href:site.url.origin+site.url.pathname,kind:site.kind,frameSrc:site.frame.src,episode,movie,preferences:site.preferences});
+}
 function readContext(site, doc) {
   if (!site) return null;
   switch (site.kind) {
@@ -183,12 +239,13 @@ function readContext(site, doc) {
       return {source:site.kind, movie:bounded(m.slug), movieID:String(m.id), title:bounded(m.name), episode:bounded(e.name), episodeID:String(e.id), season:String(season), lane:bounded(e.server_type || e.server), server:bounded(e.server), url:url.origin+url.pathname,...movieIdentity(m)};
     }
     case 'legacy-panels': {
-      const cookies = Object.fromEntries(doc.cookie.split(';').map(v => v.trim().split('=')));
+      const cookies = site.preferences || Object.fromEntries(doc.cookie.split(';').map(v => v.trim().split('=')));
       const lane = cookies.selectedVidTypeRophim === 'tm' ? 'tm' : 'vs';
-      const active = doc.querySelector(lane === 'tm' ? '.chaptertm.on-air' : '.chaptervs.on-air');
+      const links=[...doc.querySelectorAll(lane==='tm'?'.chaptertm':'.chaptervs')];
+      const active = links.find(n=>safeURL(n.getAttribute('href'),site.url)?.pathname===site.url.pathname) || links.find(n=>n.classList.contains('on-air'));
       const panel = doc.querySelector(`.server-picker[data-panel="${lane === 'tm' ? 'thuyetminh' : 'vietsub'}"]`);
       if (!active || !panel) return null;
-      const server = panel.querySelector('[data-server].current')?.dataset.server || '';
+      const server = site.preferences?.selectedServerRophim || panel.querySelector('[data-server].current')?.dataset.server || '';
       const title = (doc.querySelector('meta[property="og:title"]')?.content || doc.title).split('|')[0].trim();
       const movie = site.url.pathname.split('/').at(-1).replace(/-tap-\d+(?:\.[^/]*)?$/, '');
       const rawTitle=doc.querySelector('meta[property="og:title"]')?.content || doc.title;
@@ -330,12 +387,13 @@ function createBridge(win, page, feature, callbacks = {}) {
   const top = win.parent === win;
   if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return {dispose(){},state:()=>null,command:()=>false};
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
-  let boundFrame = null;
+  let boundFrame = null,frameFullscreen=false;
   let knownSource=false, snapshot=null, pending='', retryAfter=0;
   const requests=new Map();
+  const resultStatuses=action=>action==='fullscreen'?['fullscreen','windowed','error','unavailable']:['missing','error','navigating','unavailable'];
   const clearRequests=()=>{for(const request of requests.values()){win.clearTimeout(request.timer);request.resolve('unavailable');}requests.clear();};
   const referrer = safeURL(win.document.referrer)?.origin;
-  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media});
+  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen});
   const resetRemote = () => { remote = null; media = ''; session = null; generation++; emit(); };
   const loaded = () => { resetRemote(); tick(); };
   const send = data => { if (session) session.source.postMessage({...data,channel,token:session.token,generation:session.generation,seq:++sequence},session.origin); };
@@ -351,7 +409,7 @@ function createBridge(win, page, feature, callbacks = {}) {
       }
       if(d.seq<=session.seq)return;
       session.seq=d.seq;
-      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;emit();
+      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;emit();
       return;
     }
     if (!acceptsPacket(event,session,channel)) return;
@@ -359,20 +417,20 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (!boundFrame?.isConnected || boundFrame.contentWindow !== event.source || boundFrame.src !== session.src || contextKey(context) !== session.key) return;
       if (d.type === 'state' && validState(d.state) && /^[a-f\d]{32}$/.test(d.media)) {
         session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};emit();
-      } else if (d.type === 'request' && d.action === 'next' && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
+      } else if (d.type === 'request' && ['next','fullscreen'].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
         session.seq = d.seq;
         if(session.requesting && Date.now()<=session.requesting.until)return;
         const active=session,activeMedia=media,requestMarker={until:Date.now()+11000};active.requesting=requestMarker;
         const isCurrent=()=>!disposed && session===active && active.requesting===requestMarker && Date.now()<=requestMarker.until && media===activeMedia && boundFrame?.isConnected && boundFrame.contentWindow===active.source && boundFrame.src===active.src && contextKey(context)===active.key && remote?.ready && !remote.ad;
-        Promise.resolve().then(()=>isCurrent()?callbacks.request?.('next',{isCurrent}):'unavailable').then(status=>{
+        Promise.resolve().then(()=>isCurrent()?callbacks.request?.(d.action,{isCurrent}):'unavailable').then(status=>{
           if(!isCurrent())return;
-          send({type:'result',id:d.id,media:activeMedia,status:['missing','error','navigating','unavailable'].includes(status)?status:'error'});
+          send({type:'result',id:d.id,media:activeMedia,status:resultStatuses(d.action).includes(status)?status:'error'});
         }).catch(()=>{if(isCurrent())send({type:'result',id:d.id,media:activeMedia,status:'error'});}).finally(()=>{if(active.requesting===requestMarker)active.requesting=null;});
       }
     } else if (d.type === 'command' && d.media === media) {
       session.seq = d.seq;
       try { local?.command(d.action,d.value); } catch { /* player changed while message was queued */ }
-    } else if(!top && d.type==='result' && d.media===media && requests.has(d.id) && ['missing','error','navigating','unavailable'].includes(d.status)){
+    } else if(!top && d.type==='result' && d.media===media && requests.has(d.id) && resultStatuses(requests.get(d.id).action).includes(d.status)){
       session.seq=d.seq;const request=requests.get(d.id);requests.delete(d.id);win.clearTimeout(request.timer);request.resolve(d.status);
     }
   };
@@ -408,7 +466,8 @@ function createBridge(win, page, feature, callbacks = {}) {
         diagnostic(win.document,feature, nextContext ? 'iframe chưa cấp quyền/không nhận diện' : 'chờ nguồn website');return;
       }
       if (!session) { session = {source:frame.contentWindow,origin:url.origin,src:frame.src,key:contextKey(context),token:token(win),generation,seq:-1,seen:0};sequence = 0; }
-      send({type:'hello',context});
+      frameFullscreen=!!win.document.fullscreenElement?.contains(frame);
+      send({type:'hello',context,fullscreen:frameFullscreen});
       if (session.seen && Date.now() - session.seen > 4000) {remote = null;media = '';emit();}
       diagnostic(win.document,feature,site.kind + '/' + (remote?.ready ? remote.kind : 'chờ player nội dung'));
     } else {
@@ -435,12 +494,12 @@ function createBridge(win, page, feature, callbacks = {}) {
       send({type:'command',action,value,media});return true;
     },
     request(action) {
-      if(top || action!=='next' || !local?.state().ready || !session || !context)return false;
+      if(top || !['next','fullscreen'].includes(action) || !local?.state().ready || !session || !context)return false;
       if(requests.size)return false;
       const id=token(win);
       return new Promise(resolve=>{
         const timer=win.setTimeout(()=>{requests.delete(id);resolve('timeout');},12000);
-        requests.set(id,{resolve,timer});
+        requests.set(id,{resolve,timer,action});
         // Flush state so the parent validates the same active resource even
         // before the first heartbeat.
         send({type:'state',state:local.state(),media});send({type:'request',action,id,media});
@@ -485,6 +544,10 @@ function installGestures(win, player, notify = () => {}, options={}) {
     if(previous?.held)options.onHoldChange?.(false);
   }
   function cancel() {restore();lastTap=null;win.clearTimeout(tapTimer);tapTimer=0;}
+  // Touch browsers release their implicit capture after pointerup as part of
+  // normal completion. Only a capture lost during an active press cancels it;
+  // a completed tap must keep its single/double-tap decision timer.
+  const lostCapture=e=>{if(press && e.pointerId===press.id)cancel();};
   const point = event => {
     const box=video.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0 || event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom - (options.surface?0:60)) return null;
@@ -512,7 +575,7 @@ function installGestures(win, player, notify = () => {}, options={}) {
     if(p.locked || options.isLocked?.()){lastTap=null;win.clearTimeout(tapTimer);if(p.locked && now-p.at<=350 && source()===p.source)options.onLockedTap?.();return;}
     if(p.held){suppressUntil=now+400;notify('Đã khôi phục tốc độ');e.preventDefault();e.stopImmediatePropagation();return;}
     if(now-p.at>350 || source()!==p.source || !player.state().ready)return;
-    if(!p.side){options.onTap?.();lastTap=null;return;}
+    if(!p.side){win.clearTimeout(tapTimer);tapTimer=0;lastTap=null;options.onTap?.();return;}
     if(lastTap && now-lastTap.at<320 && p.side===lastTap.side && Math.hypot(p.x-lastTap.x,p.y-lastTap.y)<48){
       win.clearTimeout(tapTimer);if(player.command('seek',player.state().time+p.side*10)){options.onSeek?.(p.side);notify(p.side>0?'+10 giây':'−10 giây');}lastTap=null;suppressUntil=now+400;e.preventDefault();e.stopImmediatePropagation();
     } else {lastTap={...p,at:now};if(options.onTap){win.clearTimeout(tapTimer);tapTimer=win.setTimeout(()=>{lastTap=null;options.onTap();},320);}}
@@ -521,44 +584,48 @@ function installGestures(win, player, notify = () => {}, options={}) {
   const menu = e => {if(options.exclusive || press?.held){e.preventDefault();e.stopImmediatePropagation();}};
   const touch=e=>consume(e);
   const visibility = () => {if(win.document.hidden)cancel();};
-  for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]]) root.addEventListener(name,fn,true);
+  for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',lostCapture],['click',click],['dblclick',click],['contextmenu',menu]]) root.addEventListener(name,fn,true);
   if(options.exclusive)for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.addEventListener(name,touch,{passive:false});
   win.addEventListener('blur',cancel);win.addEventListener('pointerup',up,true);win.addEventListener('pointermove',move,true);win.addEventListener('pointercancel',cancel,true);win.document.addEventListener('visibilitychange',visibility);
   video.addEventListener('emptied',cancel);video.addEventListener('loadstart',cancel);
-  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.removeEventListener(name,touch);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.removeEventListener('pointermove',move,true);win.removeEventListener('pointercancel',cancel,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
+  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',lostCapture],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.removeEventListener(name,touch);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.removeEventListener('pointermove',move,true);win.removeEventListener('pointercancel',cancel,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
 }
 
 
 // ---- lib/player-ui.js ----
 // Approved player design. Local SVG assets; no icon CDN or runtime dependency.
 function playerIcon(name) {
+  // Lucide 1.72.0; same icon names as the approved demo. See LICENSE.lucide.
   const paths={
-    play:'<path d="M6 4l15 8-15 8z"/>',pause:'<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>',
-    next:'<path d="M5 5l12 7-12 7z"/><path d="M19 5v14"/>',
-    volume:'<path d="M11 5L6 9H3v6h3l5 4z"/><path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>',
-    muted:'<path d="M11 5L6 9H3v6h3l5 4zM16 9l6 6m0-6l-6 6"/>',
-    settings:'<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/>',
-    fullscreen:'<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
-    shrink:'<path d="M3 8h5V3m8 0v5h5M8 21v-5H3m18 0h-5v5"/>',
-    lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
-    unlock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
-    forward:'<path d="M7 7l5 5-5 5m6-10l5 5-5 5"/>',back:'<path d="M11 7l-5 5 5 5m6-10l-5 5 5 5"/>',
-    close:'<path d="M6 6l12 12M18 6L6 18"/>',
+    play:"<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />",
+    pause:"<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /><rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />",
+    next:"<path d=\"M21 4v16\" /><path d=\"M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z\" />",
+    volume:"<path d=\"M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z\" /><path d=\"M16 9a5 5 0 0 1 0 6\" /><path d=\"M19.364 18.364a9 9 0 0 0 0-12.728\" />",
+    muted:"<path d=\"M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z\" /><path d=\"m16.5 14.5 5-5\" /><path d=\"m16.5 9.5 5 5\" />",
+    settings:"<path d=\"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />",
+    fullscreen:"<path d=\"M8 3H5a2 2 0 0 0-2 2v3\" /><path d=\"M21 8V5a2 2 0 0 0-2-2h-3\" /><path d=\"M3 16v3a2 2 0 0 0 2 2h3\" /><path d=\"M16 21h3a2 2 0 0 0 2-2v-3\" />",
+    shrink:"<path d=\"M8 3v3a2 2 0 0 1-2 2H3\" /><path d=\"M21 8h-3a2 2 0 0 1-2-2V3\" /><path d=\"M3 16h3a2 2 0 0 1 2 2v3\" /><path d=\"M16 21v-3a2 2 0 0 1 2-2h3\" />",
+    lock:"<circle cx=\"12\" cy=\"16\" r=\"1\" /><rect x=\"3\" y=\"10\" width=\"18\" height=\"12\" rx=\"2\" /><path d=\"M7 10V7a5 5 0 0 1 10 0v3\" />",
+    unlock:"<circle cx=\"12\" cy=\"16\" r=\"1\" /><rect width=\"18\" height=\"12\" x=\"3\" y=\"10\" rx=\"2\" /><path d=\"M7 10V7a5 5 0 0 1 9.33-2.5\" />",
+    forward:"<path d=\"m6 17 5-5-5-5\" /><path d=\"m13 17 5-5-5-5\" />",
+    back:"<path d=\"m11 17-5-5 5-5\" /><path d=\"m18 17-5-5 5-5\" />",
+    close:"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />",
   };
-  return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="${['play','pause'].includes(name)?'currentColor':'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name] || ''}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name] || ''}</svg>`;
 }
 function playerUIStyle(doc) {
   if(doc.getElementById('rp-player-style'))return;
   const style=doc.createElement('style');style.id='rp-player-style';
   style.textContent=`
-  [data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}
+  html[data-rp-controls-boot] .art-video-player .art-bottom,html[data-rp-controls-boot] .art-video-player .art-mask,html[data-rp-controls-boot] .art-video-player .art-vtitle-bar,html[data-rp-controls-boot] .jwplayer .jw-controls,html[data-rp-controls-boot] .guildline{visibility:hidden!important;pointer-events:none!important}
+  [data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-vtitle-bar,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}
   [data-rp-custom-controls="1"] .loading-screen{pointer-events:none!important}
   [data-rp-ui="player"].rp-player-shell{position:absolute;inset:0;z-index:2147483642;pointer-events:none;font:14px/1.4 Arial,sans-serif;color:#fff;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .rp-player-shell *{box-sizing:border-box}.rp-player-shell[hidden],.rp-player-shell [hidden]{display:none!important}
   .rp-player-shell button{font:inherit;color:#fff;cursor:pointer;touch-action:manipulation}.rp-player-shell button:focus-visible,.rp-player-shell input:focus-visible{outline:2px solid #fff;outline-offset:2px}.rp-player-shell button:disabled{cursor:default}
   .rp-gesture-surface{position:absolute;inset:0;pointer-events:auto;touch-action:none}
   .rp-player-shell .rp-icon{display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;margin:0;padding:8px;border:0;border-radius:0;background:transparent;color:#eee;pointer-events:auto}.rp-player-shell .rp-icon svg{width:20px;height:20px}
-  .rp-player-shell .rp-center-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:60px;height:60px;padding:12px;border-radius:50%;background:rgba(0,0,0,.5);box-shadow:0 2px 14px rgba(0,0,0,.35);color:#fff}.rp-player-shell .rp-center-play svg{width:36px;height:36px;stroke-width:2.5;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
+  .rp-player-shell .rp-center-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:60px;height:60px;padding:12px;border-radius:50%;background:rgba(0,0,0,.5);box-shadow:0 2px 14px rgba(0,0,0,.35);color:#fff}.rp-player-shell .rp-center-play svg{width:36px;height:36px;stroke-width:2.5;fill:currentColor;filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
   .rp-player-chrome{position:absolute;bottom:0;left:0;right:0;padding:12px 12px 2px;background:linear-gradient(transparent,rgba(0,0,0,.8));pointer-events:auto}
   .rp-player-timeline{display:flex;align-items:center;height:18px}.rp-player-shell input[type="range"]{appearance:none;-webkit-appearance:none;display:block;width:100%;height:4px;margin:0;padding:0;border:0;border-radius:1px;background:linear-gradient(to right,#fff 0%,#fff var(--rp-played,0%),#626262 var(--rp-played,0%),#626262 100%);touch-action:none;cursor:ew-resize}.rp-player-shell input[type="range"]::-webkit-slider-thumb{appearance:none;width:10px;height:10px;border:0;border-radius:50%;background:#fff}.rp-player-shell input[type="range"]::-moz-range-thumb{width:10px;height:10px;border:0;border-radius:50%;background:#fff}
   .rp-player-line{display:flex;align-items:center;gap:0;min-height:42px}.rp-player-time{font:12px/1 Arial,sans-serif;white-space:nowrap;font-variant-numeric:tabular-nums;color:#eee}.rp-player-spacer{flex:1}
@@ -567,7 +634,7 @@ function playerUIStyle(doc) {
   .rp-context-action{position:absolute;right:16px;bottom:68px;min-height:32px;pointer-events:auto}.rp-context-action svg{width:16px;height:16px}
   .rp-player-shell .rp-lock{position:absolute;left:48px;top:50%;transform:translateY(-50%);width:48px;height:48px;padding:0;border-radius:50%;background:rgba(0,0,0,.3);border:.5px solid rgba(255,255,255,.35);color:#fff}.rp-player-shell .rp-lock svg{width:24px;height:24px}
   .rp-feedback-seek{position:absolute;top:40%;left:78%;transform:translate(-50%,-50%);pointer-events:none}.rp-feedback-seek svg{width:16px;height:16px}.rp-feedback-seek[data-side="right"] svg{animation:rp-nudge-right .35s ease-out}.rp-feedback-seek[data-side="left"] svg{animation:rp-nudge-left .35s ease-out}
-  .rp-feedback-hold{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none}.rp-chevrons{display:flex}.rp-chevrons svg{width:9px;height:12px;margin-left:-1px;opacity:.3;animation:rp-run 1s ease-in-out infinite}.rp-chevrons svg:nth-child(2){animation-delay:.15s}.rp-chevrons svg:nth-child(3){animation-delay:.3s}
+  .rp-feedback-hold{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none}.rp-chevrons{display:flex}.rp-chevrons svg{width:9px;height:12px;fill:currentColor;stroke-width:0;margin-left:-1px;opacity:.3;animation:rp-run 1s ease-in-out infinite}.rp-chevrons svg:nth-child(2){animation-delay:.15s}.rp-chevrons svg:nth-child(3){animation-delay:.3s}
   .rp-player-settings{position:absolute;bottom:64px;right:16px;z-index:2;width:200px;padding:4px 12px 10px;border:0;border-radius:2px;background:#1a1a1a;color:#fff;pointer-events:auto}.rp-player-settings-header{display:flex;align-items:center;justify-content:space-between;font-size:13px}.rp-player-speed-options{display:flex;flex-wrap:wrap;gap:4px}.rp-player-shell .rp-speed{padding:6px 10px;min-height:38px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:13px}.rp-player-shell .rp-speed[aria-pressed="true"]{background:#555}
   .rp-player-error{position:absolute;bottom:76px;left:12px;right:12px;padding:6px 10px;border-radius:4px;background:#151515ed;color:#fff;font-size:12px;pointer-events:none}
   .rp-player-shell[data-rp-chrome="false"] .rp-player-chrome,.rp-player-shell[data-rp-chrome="false"] .rp-center-play,.rp-player-shell[data-rp-chrome="false"][data-rp-locked="false"] .rp-lock,.rp-player-shell[data-rp-locked="true"] .rp-player-chrome,.rp-player-shell[data-rp-locked="true"] .rp-center-play,.rp-player-shell[data-rp-locked="true"] .rp-context-action{visibility:hidden;pointer-events:none}
@@ -577,6 +644,11 @@ function playerUIStyle(doc) {
   @media(prefers-reduced-motion:reduce){.rp-chevrons svg,.rp-feedback-seek svg{animation:none;opacity:1}}
   `;
   (doc.head || doc.documentElement).append(style);
+}
+function playerStartupGuard(win){
+  const doc=win.document;playerUIStyle(doc);doc.documentElement.dataset.rpControlsBoot='1';
+  const release=()=>{win.clearTimeout(timer);delete doc.documentElement.dataset.rpControlsBoot;};
+  const timer=win.setTimeout(release,4000);return release;
 }
 
 
@@ -591,7 +663,7 @@ function customPlayerControls(win,player,options={}) {
     const node=doc.createElement('button');node.type='button';node.dataset.rpAction=action;node.className=className;node.setAttribute('aria-label',label);node.innerHTML=playerIcon(icon);
     node.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(disposed)return;if(!locked)actionClick(action,node);else if(action==='lock')setLocked(false);});host.append(node);return node;
   }
-  let disposed=false,locked=false,chromeVisible=true,lockVisible=true,scrubbing=false,nativeOwned=false,lastReady=false,lastPaused=null,context=null;
+  let disposed=false,locked=false,chromeVisible=true,lockVisible=true,scrubbing=false,nativeOwned=false,lastReady=false,lastPaused=null,context=null,autoPlayAttempted=false;
   let hideTimer=0,lockTimer=0,tipTimer=0,errorTimer=0,nextTimer=0,scrubTimer=0,nextPending=null,nextError=null;
   const savedAttributes=new Map(['controls','playsinline','webkit-playsinline'].map(name=>[name,video.getAttribute(name)]));
   const originalPosition=root.style.position;let positioned=false;
@@ -599,7 +671,7 @@ function customPlayerControls(win,player,options={}) {
   const lock=button('lock','Khóa màn hình','unlock',shell,'rp-icon rp-lock');lock.hidden=true;
   const contextAction=button('context','Bỏ qua giới thiệu','forward',shell,'rp-context-action rp-pill');contextAction.hidden=true;contextAction.setAttribute('aria-live','polite');
   const seekTip=doc.createElement('output');seekTip.className='rp-feedback-seek rp-pill';seekTip.hidden=true;shell.append(seekTip);
-  const holdTip=doc.createElement('output');holdTip.className='rp-feedback-hold rp-pill';holdTip.hidden=true;holdTip.innerHTML='2x <span class="rp-chevrons">'+Array(3).fill('<svg viewBox="0 0 10 12" aria-hidden="true"><path d="M0 0L10 6L0 12z" fill="currentColor"/></svg>').join('')+'</span>';shell.append(holdTip);
+  const holdTip=doc.createElement('output');holdTip.className='rp-feedback-hold rp-pill';holdTip.hidden=true;holdTip.innerHTML='2x <span class="rp-chevrons">'+Array(3).fill(playerIcon('play')).join('')+'</span>';shell.append(holdTip);
   const chrome=doc.createElement('div');chrome.className='rp-player-chrome';shell.append(chrome);
   const timeline=doc.createElement('label');timeline.className='rp-player-timeline';chrome.append(timeline);
   const seek=doc.createElement('input');seek.type='range';seek.min='0';seek.max='1';seek.step='.1';seek.value='0';seek.setAttribute('aria-label','Tua phim');timeline.append(seek);
@@ -616,7 +688,7 @@ function customPlayerControls(win,player,options={}) {
   const error=doc.createElement('output');error.className='rp-player-error';error.setAttribute('role','status');error.hidden=true;shell.append(error);
   function report(text){error.textContent=text;error.hidden=false;win.clearTimeout(errorTimer);errorTimer=win.setTimeout(()=>error.hidden=true,5000);}
   function command(action,value){try{return !!player.command(action,value);}catch{report('Không điều khiển được video này.');return false;}}
-  function inFullscreen(){return !!doc.fullscreenElement && (doc.fullscreenElement===root || doc.fullscreenElement.contains(root));}
+  function inFullscreen(){return options.isFullscreen?.()===true || !!doc.fullscreenElement && (doc.fullscreenElement===root || doc.fullscreenElement.contains(root));}
   function restoreNative(){if(!nativeOwned)return;nativeOwned=false;delete root.dataset.rpCustomControls;for(const [name,value] of savedAttributes){if(value===null)video.removeAttribute(name);else video.setAttribute(name,value);}}
   function applyChrome(){shell.dataset.rpChrome=String(chromeVisible);shell.dataset.rpLocked=String(locked);lock.hidden=!lastReady || !inFullscreen() || locked&&!lockVisible;}
   function show(){chromeVisible=true;win.clearTimeout(hideTimer);if(!locked && !player.state().paused && settings.hidden)hideTimer=win.setTimeout(()=>{if(!scrubbing && settings.hidden){chromeVisible=false;applyChrome();}},3000);applyChrome();}
@@ -626,13 +698,13 @@ function customPlayerControls(win,player,options={}) {
   function actionClick(action,node){
     if(!player.state().ready)return;
     switch(action){
-      case 'play':command(player.state().paused?'play':'pause');show();break;
+      case 'play':autoPlayAttempted=true;command(player.state().paused?'play':'pause');show();break;
       case 'mute':command('mute',!video.muted);show();break;
       case 'lock':setLocked(true);break;
       case 'settings':settings.hidden=!settings.hidden;show();break;
       case 'context':if(node.dataset.rpMode==='intro')command('seek',Math.min(90,player.state().duration));else beginNext(node);break;
       case 'next':beginNext(node);break;
-      case 'fullscreen':try{const result=inFullscreen()?doc.exitFullscreen?.():root.requestFullscreen?.();if(!result && !root.requestFullscreen)report('Trình duyệt chưa hỗ trợ toàn màn hình khung.');result?.catch(()=>report('Không bật được toàn màn hình khung.'));}catch{report('Không bật được toàn màn hình khung.');}break;
+      case 'fullscreen':try{if(options.onFullscreen){const pending=options.onFullscreen();if(!pending)report('Chưa kết nối được khung phát.');else pending.then(status=>{if(!disposed && !['fullscreen','windowed'].includes(status))report('Không bật được toàn màn hình khung.');});}else{const result=inFullscreen()?doc.exitFullscreen?.():root.requestFullscreen?.();if(!result && !root.requestFullscreen)report('Trình duyệt chưa hỗ trợ toàn màn hình khung.');result?.catch(()=>report('Không bật được toàn màn hình khung.'));}}catch{report('Không bật được toàn màn hình khung.');}break;
     }
     update();
   }
@@ -660,7 +732,8 @@ function customPlayerControls(win,player,options={}) {
   const releaseScrub=()=>{if(scrubbing){win.clearTimeout(scrubTimer);scrubTimer=win.setTimeout(()=>{if(!disposed){scrubbing=false;update();}},0);}};win.addEventListener('pointerup',releaseScrub);
   chrome.addEventListener('pointerdown',()=>win.clearTimeout(hideTimer));
   const fsChanged=()=>{if(!inFullscreen() && locked)setLocked(false);show();update();};doc.addEventListener('fullscreenchange',fsChanged);
-  const changed=()=>update();const mediaEvents=['loadedmetadata','timeupdate','play','pause','ratechange','volumechange','durationchange','emptied','loadstart'];for(const name of mediaEvents)video.addEventListener(name,changed);
+  const changed=()=>update();const mediaEvents=['loadedmetadata','canplay','timeupdate','play','pause','ratechange','volumechange','durationchange','emptied','loadstart'];for(const name of mediaEvents)video.addEventListener(name,changed);
+  doc.addEventListener('visibilitychange',changed);
   const offPlayer=player.subscribe?.(changed);
   const lockedKey=event=>{if(locked && inFullscreen() && !event.ctrlKey && !event.metaKey && !event.altKey && [' ','k','j','l','m','f','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','<','>','0','1','2','3','4','5','6','7','8','9'].includes(event.key)){event.preventDefault();event.stopImmediatePropagation();}};
   win.addEventListener('keydown',lockedKey,true);win.addEventListener('keyup',lockedKey,true);
@@ -669,9 +742,10 @@ function customPlayerControls(win,player,options={}) {
   function paintTime(position,duration){time.textContent=format(position)+' / '+format(duration);seek.style.setProperty('--rp-played',(duration>0?100*position/duration:0)+'%');}
   function update(){
     if(disposed)return;const state=player.state(),becameReady=state.ready&&!lastReady;lastReady=state.ready;shell.hidden=!state.ready;
+    if(locked && !inFullscreen()){cancelGestures();locked=false;settings.hidden=true;win.clearTimeout(lockTimer);show();}
     if(!state.ready){cancelGestures();scrubbing=false;locked=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);restoreNative();}
     else{nativeOwned=true;root.dataset.rpCustomControls='1';if(video.controls)video.controls=false;video.setAttribute('playsinline','');video.setAttribute('webkit-playsinline','');}
-    if(becameReady || lastPaused!==null && state.paused&&!lastPaused)show();lastPaused=state.paused;
+    if(becameReady || lastPaused!==null && state.paused!==lastPaused)show();lastPaused=state.paused;
     for(const node of [center,play,mute,fullscreen,settingsButton,seek,...rates.children])node.disabled=!state.ready||locked;
     for(const node of [center,play]){const kind=state.paused?'play':'pause';if(node.dataset.rpIcon!==kind){node.innerHTML=playerIcon(kind);node.dataset.rpIcon=kind;}node.setAttribute('aria-label',state.paused?'Phát':'Tạm dừng');}
     mute.innerHTML=playerIcon(video.muted?'muted':'volume');mute.setAttribute('aria-label',video.muted?'Bật tiếng':'Tắt tiếng');
@@ -690,12 +764,120 @@ function customPlayerControls(win,player,options={}) {
       else if(node===contextAction)node.innerHTML=(intro?'Bỏ qua giới thiệu':'Tập tiếp theo')+' '+playerIcon(intro?'forward':'next');else node.innerHTML=playerIcon('next');
     }
     applyChrome();
+    // Start only the parent's validated selected episode, once it can play.
+    // One attempt per attached resource: never undo a deliberate pause or loop
+    // on Firefox autoplay rejection. A blocked attempt leaves Play visible.
+    if(options.autoPlay && context && !autoPlayAttempted && state.ready && video.readyState>=3 && !doc.hidden){
+      autoPlayAttempted=true;
+      if(state.paused && !state.played && !state.ended)command('play');
+    }
   }
   if(win.getComputedStyle(root).position==='static'){root.style.position='relative';positioned=true;}
   root.append(shell);update();
   return {shell,surface,update,setContext(value){const key=c=>c ? [c.url,c.episodeID,c.lane,c.server].join('|') : '';const oldKey=key(context);context=value;if(oldKey && oldKey!==key(value)){nextPending=null;nextError=null;win.clearTimeout(nextTimer);setLocked(false);}update();},
     requestResult(status){if(status!=='navigating')finishNext(status);},
-    dispose(){if(disposed)return;disposed=true;offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
+    dispose(){if(disposed)return;disposed=true;offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);doc.removeEventListener('visibilitychange',changed);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
+  };
+}
+
+
+// ---- lib/watch-navigation.js ----
+
+// The iframe element and its fullscreen ancestor survive an episode change.
+// New HTML is read as data; no fetched scripts or React tree are executed.
+function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
+  const doc=win.document;let serial=0,controller=null,cover=null,coverTimer=0,disposed=false;
+  const covered=new WeakMap();
+  const href=()=>win.location.origin+win.location.pathname;
+  function style(){
+    if(doc.getElementById('rp-watch-navigation-style'))return;
+    const node=doc.createElement('style');node.id='rp-watch-navigation-style';
+    node.textContent='[data-rp-frame-host]{position:relative}[data-rp-frame-host]:fullscreen{width:100%;height:100%;background:#000;overflow:hidden}[data-rp-frame-host]:fullscreen>iframe{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;border:0!important}.rp-watch-loading{position:absolute;inset:0;z-index:2147483645;display:grid;place-items:center;background:#000;color:#fff;pointer-events:auto}.rp-watch-spinner{width:28px;height:28px;border:2px solid #ffffff38;border-top-color:#fff;border-radius:50%;animation:rp-watch-spin .8s linear infinite}@keyframes rp-watch-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.rp-watch-spinner{animation:none}}';
+    (doc.head || doc.documentElement).append(node);
+  }
+  function host(site){const node=site?.frame?.parentElement;if(node){style();node.dataset.rpFrameHost='1';}return node;}
+  function clearCover(){win.clearTimeout(coverTimer);cover?.remove();cover=null;}
+  function loading(site){clearCover();const parent=host(site);if(!parent)return;covered.set(site.frame,site.frame.src);cover=doc.createElement('div');cover.dataset.rpUi='watch-loading';cover.className='rp-watch-loading';cover.setAttribute('role','status');cover.setAttribute('aria-label','Đang tải tập phim');cover.innerHTML='<span class="rp-watch-spinner" aria-hidden="true"></span>';parent.append(cover);coverTimer=win.setTimeout(clearCover,8000);}
+  async function navigate(value,{site=detectSite(doc,win.location.href),keepLane=false,isCurrent=()=>true,pop=false}={}){
+    const target=safeURL(value,win.location.href),current=readContext(site,doc),frame=site?.frame;
+    if(disposed || !current || !target || target.origin!==win.location.origin || !target.pathname.startsWith('/xem-phim/') || !frame?.isConnected)return 'unavailable';
+    if(!pop && target.origin+target.pathname===href())return 'navigating';
+    const id=++serial,oldHref=win.location.href,oldSrc=frame.src,key=contextKey(current);
+    controller?.abort();const active=new win.AbortController();controller=active;
+    const timer=win.setTimeout(()=>active.abort(),10000);
+    const live=()=>!disposed && id===serial && !active.signal.aborted && isCurrent() && frame.isConnected && frame.src===oldSrc && (pop || win.location.href===oldHref) && contextKey(readContext(site,doc))===key;
+    try{
+      const response=await win.fetch(target.href,{credentials:'same-origin',signal:active.signal});
+      if(!response.ok || response.url && safeURL(response.url)?.origin!==target.origin)return 'error';
+      const html=await response.text();if(!live() || html.length>2_000_000)return 'unavailable';
+      const parsed=new win.DOMParser().parseFromString(html,'text/html');
+      const nextSite=detectSite(parsed,target.href);
+      if(!nextSite || nextSite.kind!==site.kind)return 'unavailable';
+      if(nextSite.kind==='legacy-panels'){
+        const active=[...parsed.querySelectorAll('.btn-episode.on-air')].some(n=>safeURL(n.getAttribute('href'),target.href)?.pathname===target.pathname);
+        const episode=[...parsed.querySelectorAll(current.lane==='tm'?'.chaptertm':'.chaptervs')].some(n=>safeURL(n.getAttribute('href'),target.href)?.pathname===target.pathname);
+        if(!active)return 'unavailable';if(!episode)return 'missing';
+        nextSite.preferences={selectedVidTypeRophim:current.lane,selectedServerRophim:current.server};
+        const panel=[...parsed.querySelectorAll('.server-picker[data-panel]')].find(n=>n.dataset.panel===(current.lane==='tm'?'thuyetminh':'vietsub'));
+        const selected=[...panel?.querySelectorAll('[data-server][data-value]') || []].find(n=>n.dataset.server===current.server);
+        if(!selected || !FRAME_ORIGINS.has(safeURL(selected.dataset.value)?.origin))return 'unavailable';
+        nextSite.frame.src=selected.dataset.value;
+      }
+      const next=readContext(nextSite,parsed),embed=safeURL(nextSite.frame.src);
+      if(!next || !sameFilm(current,next) || !embed || !FRAME_ORIGINS.has(embed.origin))return 'unavailable';
+      if(keepLane && (laneKey(next.lane)!==laneKey(current.lane) || next.season!==current.season))return 'missing';
+      if(!live())return 'unavailable';
+      loading(site);
+      // Call the native History method: React's patched pushState would start a
+      // second router navigation and replace the player subtree we preserve.
+      if(!pop)win.History.prototype.pushState.call(win.history,{...win.history.state,rpWatch:true},'',target.href);
+      commitWatchSite(doc,nextSite);doc.title=parsed.title;
+      for(const a of doc.querySelectorAll('a[href].on-air'))if(safeURL(a.href)?.pathname.startsWith('/xem-phim/'))a.classList.remove('on-air');
+      for(const a of doc.querySelectorAll('.de-eps a[href],.playlist a[href],a.btn-episode[href]'))if(safeURL(a.href)?.origin===target.origin && safeURL(a.href)?.pathname===target.pathname)a.classList.add('on-air');
+      frame.src=embed.href;onChange();return 'navigating';
+    }catch{return id===serial?'error':'unavailable';}finally{win.clearTimeout(timer);if(controller===active)controller=null;}
+  }
+  const click=event=>{
+    if(event.defaultPrevented || event.button!==0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)return;
+    const link=event.target.closest?.('a[href]');if(!link || link.closest('[data-rp-ui]') || link.target && link.target!=='_self' || link.hasAttribute('download'))return;
+    const site=detectSite(doc,win.location.href),context=readContext(site,doc),url=safeURL(link.href);
+    if(!context || url?.origin!==win.location.origin || !url.pathname.startsWith('/xem-phim/'))return;
+    const slug=url.pathname.slice('/xem-phim/'.length).replace(/\.\d+$/,'').replace(/-tap-\d+$/,'');
+    if(slug!==context.movie)return;
+    event.preventDefault();event.stopImmediatePropagation();
+    navigate(url.href,{site}).then(status=>{if(status!=='navigating')link.setAttribute('title','Chưa tải được tập. Bấm để thử lại.');});
+  };
+  doc.addEventListener('click',click,true);
+  // The provider's unversioned CHANGE_EPISODE packet can make the original
+  // React listener navigate using stale props or a different translation. Do
+  // not turn this packet into a command: custom auto-next uses authenticated
+  // ended state from our bridge instead. Leave native playback alone until
+  // our bridge actually owns a ready content player.
+  const nativeNext=event=>{
+    if(event.data?.type!=='CHANGE_EPISODE' || !ownsPlayer())return;
+    const site=detectSite(doc,win.location.href),origin=safeURL(site?.frame?.src)?.origin;
+    if(!site || !FRAME_ORIGINS.has(origin) || event.origin!==origin || event.source!==site.frame.contentWindow)return;
+    event.stopImmediatePropagation();
+  };
+  win.addEventListener('message',nativeNext,true);
+  const popstate=event=>{
+    const raw=doc.getElementById('rp-watch-descriptor')?.textContent;if(!raw)return;
+    let previous;try{previous=JSON.parse(raw);}catch{return;}
+    const previousURL=safeURL(previous.href),target=safeURL(win.location.href);
+    if(!previousURL || !target || target.origin!==previousURL.origin || !target.pathname.startsWith('/xem-phim/'))return;
+    // Use the last committed descriptor until the new entry has loaded.
+    const previousSite=detectSite(doc,previousURL.href),current=readContext(previousSite,doc);
+    const slug=target.pathname.slice('/xem-phim/'.length).replace(/\.\d+$/,'').replace(/-tap-\d+$/,'');
+    if(!current || slug!==current.movie)return;
+    event.stopImmediatePropagation();navigate(target.href,{site:previousSite,pop:true}).then(status=>{if(status!=='navigating' && win.location.href===target.href){win.History.prototype.replaceState.call(win.history,win.history.state,'',previousURL.href);onChange();}});
+  };
+  win.addEventListener('popstate',popstate,true);
+  const fullscreenChanged=()=>onChange();doc.addEventListener('fullscreenchange',fullscreenChanged);
+  return {
+    navigate,
+    fullscreen(site){const node=host(site);if(!node)return Promise.resolve('unavailable');try{return Promise.resolve(doc.fullscreenElement===node?doc.exitFullscreen():node.requestFullscreen()).then(()=>doc.fullscreenElement===node?'fullscreen':'windowed',()=> 'error');}catch{return Promise.resolve('error');}},
+    update(info){if(info.site?.frame && info.context && !info.state && covered.get(info.site.frame)!==info.site.frame.src)loading(info.site);if(cover){if(info.site?.frame)covered.set(info.site.frame,info.site.frame.src);if(info.state?.ready || info.state?.ad)clearCover();}},
+    dispose(){disposed=true;serial++;controller?.abort();clearCover();doc.removeEventListener('click',click,true);win.removeEventListener('message',nativeNext,true);win.removeEventListener('popstate',popstate,true);doc.removeEventListener('fullscreenchange',fullscreenChanged);},
   };
 }
 
@@ -703,10 +885,20 @@ function customPlayerControls(win,player,options={}) {
 // ---- source/rophim-gestures.js ----
 
 function startGestures(win,page) {
-  let mounted=null,site=null,context=null,bridge=null;
+  // document-start may run before <html> exists, especially in a new iframe.
+  // Initialize at the first root insertion so the startup guard cannot throw
+  // and prevent all controls from ever attaching.
+  if(!win.document.documentElement){
+    const early=new win.MutationObserver(()=>{if(win.document.documentElement){early.disconnect();startGestures(win,page);}});
+    early.observe(win.document,{childList:true});return;
+  }
+  let mounted=null,site=null,context=null,bridge=null,frameFullscreen=false,endedKey='';
+  const releaseStartup=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?playerStartupGuard(win):()=>{};
+  const navigation=win.parent===win?watchNavigation(win,{onChange:()=>bridge?.refresh(),ownsPlayer:()=>bridge?.state()?.ready && !bridge.state().ad}):null;
   const unbind=()=>{mounted?.ui.dispose();mounted=null;};
   const next=async(action,request)=>{
     if(!site || !context)return 'unavailable';
+    if(action==='fullscreen')return navigation?.fullscreen(site) ?? 'unavailable';
     const selectedSite=site,selectedContext=context,expected=contextKey(context),frame=site.frame,src=frame?.src,href=win.location.href;
     try {
       const url=await nextRoute(selectedSite,selectedContext,win);
@@ -716,23 +908,37 @@ function startGestures(win,page) {
         win.document.cookie=`selectedServerRophim=${encodeURIComponent(selectedContext.server)}; path=/; SameSite=Lax`;
         win.document.cookie=`selectedVidTypeRophim=${selectedContext.lane}; path=/; SameSite=Lax`;
       }
-      win.location.assign(url);return 'navigating';
+      return navigation.navigate(url,{site:selectedSite,keepLane:true,isCurrent:request.isCurrent});
     }catch{return 'error';}
   };
   bridge=createBridge(win,page,'gestures',{
     update(info){
-      site=info.site;context=info.context;
+      site=info.site;context=info.context;frameFullscreen=info.fullscreen;navigation?.update(info);
       // The active frame owns UI; the parent only routes validated requests.
-      if(win.parent===win)return;
+      if(win.parent===win){
+        // Preserve the website's auto-next preference, but choose the episode
+        // from the current validated lane rather than a native packet's ID.
+        const state=info.state,key=contextKey(context)+'|'+info.media;
+        if(!state?.ended)endedKey='';
+        else if(state.ready && !state.ad && state.played && context && endedKey!==key){
+          endedKey=key;let enabled=false;try{enabled=win.localStorage.getItem('autoNextEpisode')==='true';}catch{/* unavailable preference */}
+          if(enabled){
+            const frame=site.frame,src=frame.src,expected=contextKey(context);
+            const isCurrent=()=>site?.frame===frame && frame.src===src && contextKey(context)===expected && bridge?.state()?.ready && bridge.state().ended && !bridge.state().ad;
+            next('next',{isCurrent});
+          }
+        }
+        return;
+      }
       if(info.player!==mounted?.player){
         unbind();
-        if(info.player)mounted={player:info.player,ui:customPlayerControls(win,info.player,{onNext:()=>bridge?.request('next') ?? false})};
+        if(info.player)mounted={player:info.player,ui:customPlayerControls(win,info.player,{autoPlay:true,isFullscreen:()=>frameFullscreen,onNext:()=>bridge?.request('next') ?? false,onFullscreen:()=>{const pending=bridge?.request('fullscreen');return pending && pending.then(status=>{if(status==='fullscreen' || status==='windowed'){frameFullscreen=status==='fullscreen';mounted?.ui.update();}return status;});}})};
       }
-      mounted?.ui.setContext(context);
+      mounted?.ui.setContext(context);if(info.state?.ready || info.state?.ad)releaseStartup();
     },
     unbind,request:next,
   });
-  win.addEventListener('pagehide',event=>{if(!event.persisted){bridge.dispose();unbind();}});
+  win.addEventListener('pagehide',event=>{if(!event.persisted){releaseStartup();bridge.dispose();navigation?.dispose();unbind();}});
 }
 startGestures(window, typeof unsafeWindow==='undefined' ? window : unsafeWindow);
 
