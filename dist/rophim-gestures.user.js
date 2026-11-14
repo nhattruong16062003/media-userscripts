@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.3.0
+// @version      0.3.1
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -473,12 +473,16 @@ function installGestures(win, player, notify = () => {}, options={}) {
   const consume=e=>{if(options.exclusive){e.preventDefault();e.stopImmediatePropagation();}};
   function restore() {
     win.clearTimeout(holdTimer);holdTimer=0;
-    if (press?.held && video.isConnected && press.source === source() && video.playbackRate === 2) {
-      // Restore the rate captured at press time, never assume it was 1×.
-      try { if(!player.command('rate',press.rate))video.playbackRate=press.rate; } catch { /* replaced player */ }
+    const previous=press;press=null;
+    if (previous?.held && video.playbackRate === 2) {
+      // A source swap may reuse this video while the old adapter is already
+      // unready. Release our temporary rate on that element as well, without
+      // commanding a new playlist item or overwriting an independent change.
+      let restored=false;
+      try {if(previous.source===source())restored=player.command('rate',previous.rate);}catch{/* stale API */}
+      if(!restored)try{video.playbackRate=previous.rate;}catch{/* disposed media */}
     }
-    if(press?.held)options.onHoldChange?.(false);
-    press=null;
+    if(previous?.held)options.onHoldChange?.(false);
   }
   function cancel() {restore();lastTap=null;win.clearTimeout(tapTimer);tapTimer=0;}
   const point = event => {
@@ -519,9 +523,9 @@ function installGestures(win, player, notify = () => {}, options={}) {
   const visibility = () => {if(win.document.hidden)cancel();};
   for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]]) root.addEventListener(name,fn,true);
   if(options.exclusive)for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.addEventListener(name,touch,{passive:false});
-  win.addEventListener('blur',cancel);win.addEventListener('pointerup',up,true);win.document.addEventListener('visibilitychange',visibility);
+  win.addEventListener('blur',cancel);win.addEventListener('pointerup',up,true);win.addEventListener('pointermove',move,true);win.addEventListener('pointercancel',cancel,true);win.document.addEventListener('visibilitychange',visibility);
   video.addEventListener('emptied',cancel);video.addEventListener('loadstart',cancel);
-  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.removeEventListener(name,touch);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
+  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.removeEventListener(name,touch);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.removeEventListener('pointermove',move,true);win.removeEventListener('pointercancel',cancel,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
 }
 
 

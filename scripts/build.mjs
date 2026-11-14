@@ -3,7 +3,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import vm from 'node:vm';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const version='0.3.0';
+const version='0.3.1';
 const shared=['core','identity','sites','players','bridge','ui'];
 const bundles={noads:['core','advertising-slots','ads'],gestures:[...shared,'gestures','player-ui','custom-controls'],history:[...shared,'history','history-navigation','history-layout','history-ui']};
 const matches=['https://player.phimapi.com/player/*','https://api.clubc.org/embed/*','https://dora.nobitayeuxuka.xyz/temp*'];

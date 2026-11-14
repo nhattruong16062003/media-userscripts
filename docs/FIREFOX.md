@@ -4,14 +4,14 @@
 
 1. Mở Firefox, vào **⋮ → Tiện ích → Quản lý tiện ích**, tìm và cài **Tampermonkey**. Có thể mở [trang Tampermonkey trên Firefox Add-ons](https://addons.mozilla.org/firefox/addon/tampermonkey/) bằng Firefox.
 2. Mở link script muốn dùng ngay trong Firefox:
-   - [Chặn quảng cáo 0.3.0](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.0/dist/rophim-noads.user.js)
-   - [Thao tác trình phát 0.3.0](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.0/dist/rophim-gestures.user.js)
-   - [Lịch sử xem 0.3.0](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.0/dist/rophim-history.user.js)
-3. Tampermonkey mở trang cài đặt. Kiểm tra tên **RoPhim**, phiên bản **0.3.0**, tác giả **zic**, nguồn là repo `nhattruong16062003/rophim-userscripts`; kéo xuống và bấm **Cài đặt**.
+   - [Chặn quảng cáo 0.3.1](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-noads.user.js)
+   - [Thao tác trình phát 0.3.1](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-gestures.user.js)
+   - [Lịch sử xem 0.3.1](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-history.user.js)
+3. Tampermonkey mở trang cài đặt. Kiểm tra tên **RoPhim**, phiên bản **0.3.1**, tác giả **zic**, nguồn là repo `nhattruong16062003/rophim-userscripts`; kéo xuống và bấm **Cài đặt**.
 4. Muốn dùng thêm script khác thì làm lại bước 2–3.
 5. Mở trang phim và tải lại trang. Trong **⋮ → Tiện ích → Tampermonkey**, kiểm tra các script RoPhim đang bật.
 
-Đã cài cùng script thì nút có thể là **Cập nhật** hoặc **Cài lại**. Nếu đang dùng cả ba, cập nhật cả ba lên **0.3.0** rồi tải lại trang. Giữ mục Lịch sử đang có khi cập nhật để giữ dữ liệu.
+Đã cài cùng script thì nút có thể là **Cập nhật** hoặc **Cài lại**. Nếu đang dùng cả ba, cập nhật cả ba lên **0.3.1** rồi tải lại trang. Giữ mục Lịch sử đang có khi cập nhật để giữ dữ liệu.
 
 ## Firefox máy tính
 

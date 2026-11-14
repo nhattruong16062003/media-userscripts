@@ -10,13 +10,13 @@ Ba script độc lập: chặn quảng cáo, thao tác trình phát và lịch s
 
 | Script | Phiên bản | Link cài |
 | --- | --- | --- |
-| Chặn quảng cáo | 0.3.0 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.0/dist/rophim-noads.user.js) |
-| Thao tác trình phát | 0.3.0 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.0/dist/rophim-gestures.user.js) |
-| Lịch sử xem | 0.3.0 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.0/dist/rophim-history.user.js) |
+| Chặn quảng cáo | 0.3.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-noads.user.js) |
+| Thao tác trình phát | 0.3.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-gestures.user.js) |
+| Lịch sử xem | 0.3.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.1/dist/rophim-history.user.js) |
 
 Đã cài thì bấm **Cập nhật** hoặc **Cài lại**; không cần chép mã vào editor. Xem [hướng dẫn Firefox Android và máy tính](docs/FIREFOX.md).
 
-Link cài gắn với phiên bản cụ thể. Trước khi bấm cập nhật, kiểm tra trang Tampermonkey hiện **0.3.0**. Nếu đang dùng cả ba script, cập nhật cả ba rồi tải lại trang phim. Giữ script Lịch sử hiện có khi cập nhật để giữ tiến độ.
+Link cài gắn với phiên bản cụ thể. Trước khi bấm cập nhật, kiểm tra trang Tampermonkey hiện **0.3.1**. Nếu đang dùng cả ba script, cập nhật cả ba rồi tải lại trang phim. Giữ script Lịch sử hiện có khi cập nhật để giữ tiến độ.
 
 ## Sử dụng
 
