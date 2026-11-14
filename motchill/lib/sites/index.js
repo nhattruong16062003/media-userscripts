@@ -1,0 +1,636 @@
+// Site permissions and source-contract dispatcher. Root scripts/build.mjs embeds this in four Motchill userscripts.
+// Không sửa các bản sao giữa BEGIN/END MOTCHILL SITES trong file cài đặt.
+function createMotchillSites() {
+  const families = Object.freeze({
+    CLASSIC: 'ophim-classic', OPHIM: 'ophim', NEXT: 'nextjs', NEXT_REVIVE: 'next-revive',
+    APIPHIM: 'apiphim', DOO: 'dooplay', MYUI: 'myui', WRAPPER: 'iframe-wrapper', UNKNOWN: 'unknown',
+  });
+  // Phạm vi player iframe đã khảo sát, KHÔNG phải bảng domain -> version.
+  // Website đổi domain vẫn được detect() bằng DOM/asset; host player mới cần xác minh.
+  // VIP3 live evidence: motchillcu.mx → https://v8.streamvsmov.com/video/dab93816-bb48-4c62-891a-ad946b509ae5 (JWPlayer, 2026-11-13).
+  // motchillf.im sv-1/sv-2 (2026-11-13) declares the exact NC embed.php hosts
+  // below; NC currently returns a Cloudflare challenge. VSM v9 was HTTP200,
+  // with the same JW player/origin.js schema as the verified v8 player.
+  const embedHosts = new Set(['fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  const ROLE_ATTR = 'data-mc-role';
+  const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
+  // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
+  const isMotchill = (host) => /(^|\.)[^.]*motchill[^.]*\./i.test(host);
+  const text = (node) => node ? node.textContent.trim() : '';
+  const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const translationKey = (value) => {
+    const languages = [...new Set(normalize(value).match(/thuyet-minh|long-tieng|vietsub/g) || [])];
+    return languages.length === 1 ? languages[0] : '';
+  };
+  const cleanOriginal = (value) => String(value || '').replace(/\s+/g, ' ').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
+  const extractTitleYear = (...values) => {
+    for (const v of values) {
+      const m = String(v || '').match(/\(\s*(19\d{2}|20\d{2})\s*\)/);
+      if (m) return m[1];
+    }
+    return '';
+  };
+  const extractSeason = (...values) => {
+    const joined = normalize(values.filter(Boolean).join(' '));
+    return joined.match(/(?:phan|season|part)-(\d+)/)?.[1] || '';
+  };
+  function isPrepared(el) {
+    if (!el) return false;
+    if (el.state?.prepared || el.state?.role === ROLES.PREPARED) return true;
+    const node = el.frame || el;
+    return !!(typeof node.closest === 'function' && node.closest(`[${ROLE_ATTR}="${ROLES.PREPARED}"]`));
+  }
+  function url(value, base = location.href) {
+    if (value == null || String(value).trim() === '') return null;
+    try { const result = new URL(value, base); return /^https?:$/.test(result.protocol) ? result : null; }
+    catch (e) { return null; }
+  }
+  let authorizedParentOrigin = '';
+  const trustedParent = (value) => {
+    const parsed = url(value);
+    return parsed && !parsed.username && !parsed.password
+      && (isMotchill(parsed.hostname) || embedHosts.has(parsed.hostname)) ? parsed.origin : '';
+  };
+  // Live NEXT chain: fcloud.live/cinema/... -> player.phimapi.com/player/...
+  // sets referrerpolicy="no-referrer". Only these observed player routes may
+  // wait for parent authorization; a top-level external player stays disabled.
+  function knownEmbedPage(value = location.href) {
+    const parsed = url(value);
+    if (!parsed || parsed.username || parsed.password) return false;
+    const paths = {
+      'fcloud.live': /^\/cinema\//, 'player.phimapi.com': /^\/player\/?$/,
+      'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//,
+      'cdn.loadvid.com': /^\/videos\/play\//, 'embed13.streamc.xyz': /^\/.+/,
+      'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
+      'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
+    };
+    return !!paths[parsed.hostname]?.test(parsed.pathname);
+  }
+  function mediaSourceMatches(actual, expected) {
+    const source = url(actual), target = url(expected);
+    if (!source || !target || source.username || source.password || target.username || target.password) return false;
+    if (source.href === target.href) return true;
+    // Captured fcloud -> phimapi wrapper declares the exact m3u8 in one `url`
+    // parameter while JW exposes a blob currentSrc. No generic query decoding,
+    // substring checks, repeated params or unrelated player hosts are evidence.
+    if (source.origin !== 'https://player.phimapi.com' || !/^\/player\/?$/.test(source.pathname)
+      || source.searchParams.getAll('url').length !== 1) return false;
+    const declared = url(source.searchParams.get('url'));
+    return !!declared && !declared.username && !declared.password && declared.href === target.href;
+  }
+  function parentOrigin() { return authorizedParentOrigin || trustedParent(document.referrer); }
+  function allowedContext() {
+    if (isMotchill(location.hostname)) return true;
+    return window.top !== window && embedHosts.has(location.hostname) && !!parentOrigin();
+  }
+  function runWhenAllowed(start) {
+    const tag = 'motchill-context-v1';
+    let started = false, pending = '', retry = null;
+    const begin = () => {
+      if (started) return;
+      started = true; clearInterval(retry); pending = '';
+      start();
+    };
+    // This responder is dormant until this very document has been authorized.
+    // An arbitrary window or a changed/non-player iframe cannot authorize a child.
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || data.tag !== tag || typeof data.token !== 'string' || !/^[a-f0-9-]{16,100}$/.test(data.token)) return;
+      if (data.type === 'ready' && allowedContext()) {
+        const frame = [...document.querySelectorAll('iframe[src]')].find((node) => node.contentWindow === event.source);
+        const target = frame && url(frame.getAttribute('src'));
+        if (!frame?.isConnected || !target || !knownEmbedPage(target.href) || target.origin !== event.origin) return;
+        frame.contentWindow.postMessage({ tag, type: 'hello', token: data.token }, target.origin);
+      } else if (data.type === 'hello' && !started && pending && data.token === pending
+        && window.top !== window && event.source === window.parent && !document.referrer
+        && knownEmbedPage() && trustedParent(event.origin)) {
+        authorizedParentOrigin = event.origin;
+        begin();
+      }
+    });
+    if (allowedContext()) { begin(); return; }
+    if (window.top === window || document.referrer || !knownEmbedPage()) return;
+    pending = Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join('-');
+    const ask = () => window.parent.postMessage({ tag, type: 'ready', token: pending }, '*');
+    retry = setInterval(ask, 1000); ask();
+  }
+  function detect(doc = document, pageUrl = location.href) {
+    const path = url(pageUrl)?.pathname || '';
+    // Chỉ đọc pathname của asset: host có thể đổi hoặc chuyển sang CDN.
+    // Host/query chứa tên framework không phải bằng chứng source.
+    const sources = [...doc.querySelectorAll('script[src],link[href]')]
+      .map((el) => url(el.getAttribute('src') || el.getAttribute('href'), pageUrl)?.pathname || '').join('\n');
+    const episodeLinks = [...doc.querySelectorAll('.list-episode a[href]')]
+      .map((el) => url(el.getAttribute('href'), pageUrl)?.pathname || '');
+    // Dẫn chứng live 2026-11-12: https://motchill.garden/intro/quan-an-dem-nhung-cau-chuyen-o-tokyo-phan-3/
+    if (/\/plugins\/apiphim\/|\/themes\/xemphim\//.test(sources) || doc.querySelector('.apx-site-header')) return families.APIPHIM;
+    // Dẫn chứng live: https://motchillkd.net/phim-le/allen/ (theme motchill2, DooPlay).
+    if (/\/themes\/motchill2\//.test(sources) || doc.querySelector('.dooplay_player,#dooplay_player_response')) return families.DOO;
+    // Dẫn chứng live: https://motchillv.fun/phim/thuong-cong-chua/tap-1 (Yii + MyUI).
+    if (/\/themes\/motchill\/.*yii\.js/.test(sources) || doc.querySelector('.myui-header__top')) return families.MYUI;
+    // Dẫn chứng live: https://motchille.com.mx/phim/thuong-cong-chua-1792794601/k-tap-01
+    // Domain cũ trong README: https://motchilln.fm/, https://motchillt.app/ (hiện lỗi DNS).
+    const nextRuntime = /\/_next\//.test(sources) || !!doc.querySelector('#__NEXT_DATA__');
+    // https://motchill68.tv/ + /xem-phim/thuong-cong-chua?tap=1 (2026-11-13).
+    // Durable application shell; the same framework has a different episode schema/route.
+    if (nextRuntime && doc.querySelector('#site-root.site-with-catfish')) return families.NEXT_REVIVE;
+    // Next.js dùng cho nhiều website. Kết hợp runtime với nhận dạng ứng dụng,
+    // layout phim hoặc schema RSC mà adapter thực sự đọc; không dùng domain.
+    const nextApp = [...doc.querySelectorAll('meta[name="application-name"],meta[property="og:site_name"]')]
+      .some((el) => normalize(el.getAttribute('content')) === 'motchill');
+    const nextLayout = doc.querySelector('main#main-content') && [...doc.querySelectorAll('a[href]')]
+      .some((el) => /^\/phim\/[^/]+(?:\/[^/]+)?\/?$/.test(url(el.getAttribute('href'), pageUrl)?.pathname || ''));
+    if (nextRuntime && (nextApp || nextLayout || nextData(doc, pageUrl)
+      .some((data) => data.movie?.slug && (Array.isArray(data.episodeVariants) || Array.isArray(data.serverEpisodes))))) return families.NEXT;
+    // Dẫn chứng lưu trong source/README: https://motchillsa.com/xem-phim/thuong-cong-chua/tap-01-sv-0/
+    // Domain đã ngừng DNS khi khảo sát 2026-11-12; giữ adapter hồi quy, không ghi là test live.
+    if (/^\/xem-phim\/[^/]+\/[^/]+\/?$/.test(path)
+      && episodeLinks.some((entry) => /^\/xem-phim\/[^/]+\/[^/]+\/?$/.test(entry))) return families.CLASSIC;
+    // Dẫn chứng live: https://motchillcu.mx/phim/thuong-cong-chua/tap-1-sv-0
+    // Cùng source: https://motchillt.si/ (đã đọc HTML, không suy ra bằng tên miền).
+    if (/\/themes\/ophim-theme-motchill[^/]*\//.test(sources)
+      || (doc.querySelector('.tip-change-server,.server-episode-block,.phoneContent')
+        && episodeLinks.some((entry) => /^\/phim\/[^/]+\/[^/]+\/?$/.test(entry)))) return families.OPHIM;
+    // Wrapper là kiểu nhúng, không phải một framework. Chỉ nhận iframe trang Motchill,
+    // không coi iframe quảng cáo/YouTube/trình phát m3u8 là bản web gốc.
+    if ([...doc.querySelectorAll('iframe[src]')].some((el) => {
+      const target = url(el.getAttribute('src'), pageUrl);
+      return target && isMotchill(target.hostname) && /\/(?:xem-phim|phim|play)\//.test(target.pathname);
+    })) return families.WRAPPER;
+    return families.UNKNOWN;
+  }
+  function adapter(family, doc = document, pageUrl = location.href) {
+    const resolved = family || detect(doc, pageUrl);
+    switch (resolved) {
+      // Mỗi case có URL dẫn chứng ở detector phía trên; thêm family mới tại đây.
+      case families.CLASSIC: return ophimAdapter(resolved, doc, pageUrl); // motchillsa.com (source cũ)
+      case families.OPHIM: return ophimAdapter(resolved, doc, pageUrl); // motchillcu.mx, motchillt.si
+      case families.NEXT: return nextAdapter(doc, pageUrl); // motchille.com.mx
+      case families.NEXT_REVIVE: return reviveAdapter(doc, pageUrl); // motchill68.tv; route/schema, never hostname
+      case families.APIPHIM: return apiPhimAdapter(doc, pageUrl); // motchill.garden
+      case families.DOO: return dooAdapter(doc, pageUrl); // motchillkd.net
+      case families.MYUI: return myuiAdapter(doc, pageUrl); // motchillv.fun
+      case families.WRAPPER: return baseAdapter(resolved, [{ selector: 'main', position: 'prepend' }, { selector: 'body', position: 'prepend' }], '', doc, pageUrl); // iframe Motchill được xác minh
+      default: return baseAdapter(families.UNKNOWN, [{ selector: 'main', position: 'prepend' }, { selector: 'body', position: 'prepend' }], '', doc, pageUrl); // Không đoán source chưa biết
+    }
+  }
+  function baseAdapter(id, homeSteps, episodes, doc = document, pageUrl = location.href) {
+    const home = homeSteps.map((s) => s.selector).join(',');
+    return { id, home, homeSteps, episodes, gestures: false, seamlessNext: false,
+      read: (d = doc, u = pageUrl) => readPage(id, episodes, d, u),
+      detail: (d = doc, u = pageUrl) => readDetail(id, episodes, d, u),
+      catalog: (d = doc, u = pageUrl) => readCatalog(id, d, u),
+      video: (d = doc) => findVideo(d),
+      frames: (d = doc, u = pageUrl) => playerFrames(d, u),
+    };
+  }
+// @include ophim.js
+
+// @include nextjs.js
+
+// @include next-revive.js
+
+// @include apiphim.js
+
+// @include dooplay.js
+
+// @include myui.js
+
+  function structured(doc = document) {
+    const nodes = [];
+    function collect(value) {
+      if (!value || typeof value !== 'object') return;
+      if (Array.isArray(value)) return value.forEach(collect);
+      nodes.push(value);
+      if (value['@graph']) collect(value['@graph']);
+    }
+    for (const el of doc.querySelectorAll('script[type="application/ld+json"]')) {
+      try { collect(JSON.parse(el.textContent)); } catch (e) { /* JSON-LD lỗi của trang */ }
+    }
+    return nodes;
+  }
+  // Đọc dữ liệu RSC đã có trong DOM, không eval mã của website và không tải API riêng.
+  const flightCache = new WeakMap();
+
+  function route(value, family, base = location.href) {
+    const target = url(value, base);
+    if (!target) return null;
+    const resolved = family || detect();
+    const path = target.pathname;
+    let match;
+    switch (resolved) {
+      case families.NEXT_REVIVE: {
+        match = path.match(/^\/xem-phim\/([^/]+)\/?$/);
+        const number = target.searchParams.has('tap') ? target.searchParams.get('tap') : '1';
+        if (!match || !/^\d{1,5}$/.test(number) || Number(number) < 1 || /\.trailer$/i.test(match[1])) return null;
+        return { slug: decodeURIComponent(match[1]), episode: 'tap-' + Number(number), path: path + target.search };
+      }
+      case families.CLASSIC:
+        match = path.match(/^\/xem-phim\/([^/]+)\/([^/]+)\/?$/); break;
+      case families.OPHIM: case families.NEXT: case families.MYUI:
+        match = path.match(/^\/phim\/([^/]+)\/([^/]+)\/?$/); break;
+      case families.APIPHIM:
+        match = path.match(/^\/play\/([^/]+)\/([^/]+)\/?$/); break;
+      case families.DOO:
+        match = path.match(/^\/(phim-le)\/([^/]+)\/?$/);
+        if (match) return { slug: match[2], episode: 'full', path };
+        // Live: https://motchillkd.net/xem-phim/tam-sinh-tam-the-thap-ly-dao-hoa-tap-1/
+        match = path.match(/^\/xem-phim\/(.+)-tap-(\d+)\/?$/);
+        if (match) return { slug: match[1], episode: 'tap-' + match[2], path };
+        return null;
+      default: return null;
+    }
+    return match ? { slug: match[1], episode: match[2], path } : null;
+  }
+  function detailRoute(value, family, base = location.href) {
+    const target = url(value, base);
+    if (!target) return null;
+    const resolved = family || detect();
+    const path = target.pathname;
+    let match;
+    switch (resolved) {
+      case families.CLASSIC:
+        match = path.match(/^\/(?:xem-phim|phim)\/([^/]+)\/?$/);
+        return match ? { slug: match[1], path, isWatch: false } : null;
+      case families.OPHIM: case families.NEXT: case families.NEXT_REVIVE: case families.MYUI:
+        match = path.match(/^\/phim\/([^/]+)\/?$/);
+        return match ? { slug: match[1], path, isWatch: false } : null;
+      case families.APIPHIM:
+        match = path.match(/^\/intro\/([^/]+)\/?$/);
+        return match ? { slug: match[1], path, isWatch: false } : null;
+      case families.DOO:
+        match = path.match(/^\/phim-bo\/([^/]+)\/?$/);
+        if (match) return { slug: match[1], path, isWatch: false };
+        match = path.match(/^\/phim-le\/([^/]+)\/?$/);
+        return match ? { slug: match[1], path, isWatch: true } : null;
+      default: return null;
+    }
+  }
+  function searchUrl(query, family, pageUrl = location.href, doc = document) {
+    const q = String(query || '').trim();
+    const base = url(pageUrl);
+    if (!q || !base) return null;
+    const d = doc || document;
+    for (const form of d.querySelectorAll('form')) {
+      const input = form.querySelector('input[name="s"],input[name="search"],input[name="q"],input[name="keyword"]');
+      if (!input) continue;
+      const action = url(form.getAttribute('action') || '/', base.href);
+      if (action && action.origin === base.origin) {
+        const out = new URL(action.href);
+        out.searchParams.set(input.getAttribute('name'), q);
+        return out.href;
+      }
+    }
+    const resolved = family || detect(d, base.href);
+    switch (resolved) {
+      case families.NEXT_REVIVE: {
+        const out = new URL('/tim-kiem', base.origin);
+        out.searchParams.set('q', q);
+        return out.href;
+      }
+      case families.NEXT: {
+        const out = new URL('/search', base.origin);
+        out.searchParams.set('q', q);
+        return out.href;
+      }
+      case families.MYUI: {
+        const out = new URL('/', base.origin);
+        out.searchParams.set('search', q);
+        return out.href;
+      }
+      case families.CLASSIC: case families.OPHIM: case families.APIPHIM: case families.DOO: {
+        const out = new URL('/', base.origin);
+        out.searchParams.set('s', q);
+        return out.href;
+      }
+      default: return null;
+    }
+  }
+  function episodeKey(value) {
+    const normalized = normalize(value);
+    if (/^(?:[a-z]-)?(?:full|full-hd|hoan-tat|movie)(?:-(?:sv|src)-.*)?$/.test(normalized)) return 'full';
+    const match = normalized.match(/^(?:(?:[a-z]+-)?(?:tap|episode|ep)-|[a-z]-)?0*(\d+)(?:-(?:sv|src)-.*)?$/);
+    return match ? 'ep:' + Number(match[1]) : 'special:' + normalized;
+  }
+
+
+
+
+
+
+
+
+
+
+  function filmSlug(value) {
+    // Chỉ bỏ timestamp 10/13 chữ số của Next.js, không bỏ năm/số phần ở slug.
+    return normalize(value).replace(/-(?:thuyet-minh|long-tieng|vietsub)$/, '').replace(/-\d{10}(?:\d{3})?$/, '');
+  }
+  function extractMeta(family, slug, doc = document, pageUrl = location.href) {
+    const schema = structured(doc);
+    const movie = schema.find((n) => ['Movie', 'TVSeries'].includes(n['@type'])) || {};
+    const pages = family === families.NEXT ? nextData(doc, pageUrl) : [];
+    const watchRsc = pages.find((p) => p.movie?.slug === slug);
+    // Detail uses a different component: movieSlug binds its real server
+    // entries to this film. Never collect recommended films' bare episodes.
+    const detailRsc = pages.find((p) => p.movieSlug === slug && Array.isArray(p.episodes));
+    const rsc = watchRsc || (detailRsc ? { movie: {}, serverEpisodes: detailRsc.episodes } : null);
+    const data = rsc?.movie || {};
+    let rawTitle = data.name || movie.name || text(doc.querySelector('h1.movie-identity__title,h1.epih1,h1.title:not(:empty),.sheader .data h1,.movie-title,.title-1,h1:not(.apiphim-ads-text):not(:empty)')) || doc.title;
+    let rawOriginal = data.origin_name || movie.alternateName || text(doc.querySelector('.movie-identity__origin,h2.real-name,h2.origtitle,h2.title2,.sheader .extra .tagline')) || '';
+    if (family === families.OPHIM || family === families.CLASSIC) {
+      // Live motchillf.im: JSON-LD appends " Motchill" to both movie names,
+      // while the actual film heading/original-name link supplies clean names.
+      // Require that independent heading to corroborate the exact stripped name;
+      // never remove a word merely because it appears inside a real movie title.
+      const heading = doc.querySelector('h1[itemprop="name"] a[title],h1 [itemprop="name"]');
+      const original = doc.querySelector('h2.real-name a[title],h2 .real-name');
+      const corroborated = (value, node) => {
+        const clean = String(value).replace(/\s+Motchill\s*$/i, '').trim();
+        const native = node?.getAttribute('title') || text(node);
+        return clean !== value && normalize(clean) === normalize(native) ? native.trim() : value;
+      };
+      rawTitle = corroborated(rawTitle, heading);
+      rawOriginal = corroborated(rawOriginal, original);
+    }
+    const originalTitle = cleanOriginal(rawOriginal);
+    let cleanedTitle = rawTitle.replace(/\s+/g, ' ').replace(/^(?:Xem\s+)?Phim\s+/i, '')
+      .replace(/\s+(?:[-–]\s*)?(?:Tập\s+\d+|Vietsub|HD|[-|]\s*Motchill).*$/i, '')
+      .replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').replace(/\s*[-–|]\s*$/, '').trim();
+    if (originalTitle && cleanedTitle.toLowerCase().endsWith(' - ' + originalTitle.toLowerCase())) {
+      cleanedTitle = cleanedTitle.slice(0, -(' - ' + originalTitle).length).trim();
+    }
+    // datePublished/dateCreated thường là ngày đăng bài, KHÔNG phải năm phim.
+    const nextProductionYear = family === families.NEXT ? [...doc.querySelectorAll('span')].map(text)
+      .find((value) => /^Năm sản xuất:\s*(?:19|20)\d{2}$/i.test(value)) : '';
+    const yearText = data.publish_year || data.year || text(doc.querySelector('.origyear,.movie-year,.movie-identity__year,.apx-hero-fact--year,.publish-year,.sheader .date')) || nextProductionYear;
+    const year = String(yearText || '').match(/\b(?:19|20)\d{2}\b/)?.[0] || extractTitleYear(rawTitle, rawOriginal);
+    const season = extractSeason(cleanedTitle, rawOriginal, slug);
+    const externalIds = {};
+    const refs = [movie.sameAs, movie.identifier,
+      data.tmdb?.id && `https://www.themoviedb.org/${data.tmdb.type || 'tv'}/${data.tmdb.id}`,
+      data.imdb?.id && `https://www.imdb.com/title/${data.imdb.id}`,
+      ...[...doc.querySelectorAll('a[href*="imdb.com/title/"],a[href*="themoviedb.org/"]')].map((a) => a.getAttribute('href')),
+    ].flat();
+    for (const ref of refs) {
+      if (typeof ref !== 'string') continue;
+      const imdb = ref.match(/imdb\.com\/title\/(tt\d+)/);
+      const tmdb = ref.match(/themoviedb\.org\/(tv|movie)\/(\d+)/);
+      if (imdb) externalIds.imdb = imdb[1];
+      if (tmdb) externalIds.tmdb = tmdb[1] + ':' + tmdb[2];
+    }
+    return { rsc, data, title: cleanedTitle, originalTitle, year, season, externalIds,
+      film: filmSlug(slug), poster: doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || '' };
+  }
+  function linkLanguage(linkEl, doc, variant, data, fallbackLabel = '') {
+    const tab = linkEl?.closest?.('.tab-pane');
+    const tabLabel = tab?.id && [...doc.querySelectorAll('a[href]')].find((a) => a.getAttribute('href') === '#' + tab.id);
+    const groupHeading = linkEl?.closest?.('.episodes')?.previousElementSibling;
+    const groupLabel = groupHeading?.matches?.('.server-episode-block') ? text(groupHeading) : '';
+    const apxPanel = linkEl?.closest?.('.apx-server-panel[data-apx-server-panel]');
+    const apxId = apxPanel?.getAttribute('data-apx-server-panel');
+    const apxBtn = apxId != null ? doc.querySelector(`[data-apx-server-button="${apxId}"]`) : null;
+    const apxLabel = apxBtn?.getAttribute('data-apx-translation-kind') || apxBtn?.getAttribute('data-apx-server-label') || text(apxBtn);
+    const candidates = [linkEl?.closest?.('.control-box,.tab-pane')?.getAttribute('data-server'),
+      variant?.server, apxLabel, groupLabel, text(tabLabel), data?.lang, data?.language, fallbackLabel];
+    return candidates.map(translationKey).find(Boolean) || '';
+  }
+  function translationServers(doc, family) {
+    if (family === families.NEXT_REVIVE) {
+      const page = url(doc.URL, location.href);
+      const data = reviveData(doc, page?.href || location.href);
+      const number = Number(page?.searchParams.get('tap') || data?.initialDigits || 1);
+      return reviveServerNodes(doc).map((node) => {
+        const label = text(node), language = translationKey(label);
+        const ep = data?.episodes.find((entry) => reviveNumber(entry) === number && normalize(entry.server) === normalize(label));
+        return { node, label, language, selected: reviveSelected(node), source: url(ep?.link, page?.href)?.href || '' };
+      }).filter((entry) => entry.language);
+    }
+    let selector;
+    switch (family) {
+      case families.NEXT:
+        selector = 'button[aria-pressed],[data-mc-server-key]'; break; // motchille.com.mx real Server K/V language row
+      case families.CLASSIC: case families.OPHIM: case families.MYUI:
+        selector = '.streaming-server'; break; // motchillcu.mx / motchillv.fun
+      case families.APIPHIM:
+        selector = '[data-apx-server-button]'; break; // motchill.garden
+      case families.DOO:
+        selector = '.dooplay_player_option'; break; // motchillkd.net
+      default: return [];
+    }
+    return [...doc.querySelectorAll(selector)].filter((node) => !node.closest('.mc-translations')).map((node) => {
+      const label = node.getAttribute('data-apx-translation-kind') || node.getAttribute('data-apx-server-label')
+        || text(node.querySelector('.title')) || text(node);
+      const language = translationKey(label);
+      if (family === families.NEXT && !/^server\b/i.test(label)) return null;
+      const selected = node.getAttribute('aria-selected') === 'true' || node.getAttribute('aria-pressed') === 'true'
+        || ['btn-success', 'btn-active', 'active', 'is-active', 'on'].some((name) => node.classList.contains(name));
+      let source = '';
+      if (family === families.NEXT) {
+        const pageUrl = url(doc.location?.href)?.href || location.href;
+        const parsed = route(pageUrl, family);
+        const data = parsed && nextData(doc, pageUrl).find((entry) => entry.movie?.slug === parsed.slug);
+        const matches = [...(data?.episodeVariants || []), ...(data?.movie?.episodes || [])].filter((ep) => episodeKey(ep.slug) === episodeKey(parsed?.episode)
+          && normalize(ep.server) === normalize(label.replace(/^server\s+/i, '')));
+        const candidates = [...new Set(matches.filter((ep) => (ep.type || 'm3u8') === 'm3u8').map((ep) => url(ep.link, pageUrl)?.href).filter(Boolean))];
+        if (candidates.length === 1) source = candidates[0];
+      }
+      return { language, label, selected, node, source };
+    }).filter((entry) => entry?.language);
+  }
+  function currentServerLanguage(doc, family) {
+    const choices = translationServers(doc, family);
+    const selected = choices.filter((entry) => entry.selected);
+    return selected.length === 1 ? selected[0].language : choices.length === 1 ? choices[0].language : '';
+  }
+  function readPage(family, selector, doc = document, pageUrl = location.href) {
+    const page = url(pageUrl);
+    if (!page) return null;
+    const currentRoute = route(page.href, family, page.href);
+    if (!currentRoute) return null;
+    const meta = extractMeta(family, currentRoute.slug, doc, page.href);
+    const currentPath = page.pathname.replace(/\/$/, '');
+    const allSelectorLinks = [...doc.querySelectorAll(selector || ':not(*)')];
+    const current = allSelectorLinks.find((a) => url(a.getAttribute('href'), page.href)?.pathname.replace(/\/$/, '') === currentPath);
+    const links = allSelectorLinks.filter((a) => {
+      const target = url(a.getAttribute('href'), page.href);
+      const other = target && target.origin === page.origin && route(target.href, family, page.href);
+      return other && other.slug === currentRoute.slug;
+    });
+    const siblings = current?.closest('.list-episode,.tab-pane,.apx-episode-grid,ul,.episodios') || current?.parentElement;
+    const grouped = siblings ? links.filter((a) => siblings.contains(a)) : links;
+    const number = Number(episodeKey(currentRoute.episode).replace('ep:', ''));
+    const next = grouped.map((a) => {
+      const target = url(a.getAttribute('href'), page.href);
+      return { node: a, target, parsed: target ? route(target.href, family, page.href) : null };
+    }).filter((x) => x.parsed && x.target && Number(episodeKey(x.parsed.episode).replace('ep:', '')) === number + 1)[0];
+    const selectedLanguage = currentServerLanguage(doc, family);
+    const routeVariants = meta.rsc?.episodeVariants?.filter((v) => v.slug === currentRoute.episode) || [];
+    const ambiguousLanguage = family === families.NEXT && !selectedLanguage
+      && new Set(routeVariants.map((v) => translationKey(v.server)).filter(Boolean)).size > 1;
+    // Several actual language variants share k-tap-01. The SSR server buttons
+    // are all unselected until hydration; array order is not selection evidence.
+    const variant = !ambiguousLanguage && routeVariants.find((v) => v.slug === currentRoute.episode
+      && (!selectedLanguage || translationKey(v.server) === selectedLanguage));
+    const rscNext = meta.rsc?.serverEpisodes?.find((v) => v.server === variant?.server && Number(episodeKey(v.slug).replace('ep:', '')) === number + 1);
+    const label = variant?.name || (current ? text(current) : currentRoute.episode);
+    const language = ambiguousLanguage ? '' : selectedLanguage || linkLanguage(current, doc, variant, meta.data, label);
+    return { ...currentRoute, family, title: meta.title, originalTitle: meta.originalTitle,
+      year: meta.year, season: meta.season, language, externalIds: meta.externalIds,
+      film: meta.film, episodeKey: episodeKey(currentRoute.episode), poster: meta.poster,
+      episode: label, url: page.href, next: rscNext ? {
+        path: '/phim/' + currentRoute.slug + '/' + rscNext.slug, episode: rscNext.name, episodeKey: episodeKey(rscNext.slug),
+        url: new URL('/phim/' + currentRoute.slug + '/' + rscNext.slug, page.origin).href,
+      } : next ? { path: next.parsed.path, episode: text(next.node), episodeKey: episodeKey(next.parsed.episode), url: next.target.href } : null,
+    };
+  }
+  function readDetail(family, selector, doc = document, pageUrl = location.href) {
+    const page = url(pageUrl);
+    if (!page) return null;
+    const resolvedFamily = family || detect(doc, page.href);
+    const watch = route(page.href, resolvedFamily, page.href);
+    const detail = !watch && detailRoute(page.href, resolvedFamily, page.href);
+    const parsed = watch || detail;
+    if (!parsed) return null;
+    const meta = extractMeta(resolvedFamily, parsed.slug, doc, page.href);
+    const episodes = [];
+    const seen = new Set();
+    const pushEp = (entry) => {
+      const key = `${entry.episodeKey}|${entry.language}|${entry.url}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      episodes.push(entry);
+    };
+    const scanLinks = (sel) => [...doc.querySelectorAll(sel || ':not(*)')].filter((a) => {
+      if (a.closest('.mh-continue')) return false;
+      const target = url(a.getAttribute('href'), page.href);
+      const other = target && target.origin === page.origin && route(target.href, resolvedFamily, page.href);
+      return other && other.slug === parsed.slug;
+    });
+    // Read all language tabs of this film, not just the currently active server.
+    // MyUI example: https://motchillv.fun/phim/thuong-cong-chua/tap-1
+    let domLinks = scanLinks(resolvedFamily === families.MYUI
+      ? '#servers-container .tab-pane a[href],.myui-content__list a[href]' : selector);
+    if (!domLinks.length) domLinks = scanLinks('a[href]');
+    for (const a of domLinks) {
+      const target = url(a.getAttribute('href'), page.href);
+      const other = route(target.href, resolvedFamily, page.href);
+      const epText = text(a) || other.episode;
+      pushEp({ url: target.href, path: other.path, episode: epText, episodeKey: episodeKey(other.episode),
+        language: linkLanguage(a, doc, null, meta.data, epText) });
+    }
+    if (resolvedFamily === families.NEXT && meta.rsc) {
+      for (const ep of [...(meta.rsc.episodeVariants || []), ...(meta.rsc.serverEpisodes || [])]) {
+        if (!ep?.slug) continue;
+        const epPath = '/phim/' + parsed.slug + '/' + ep.slug;
+        pushEp({ url: new URL(epPath, page.origin).href, path: epPath, episode: ep.name || ep.slug,
+          episodeKey: episodeKey(ep.slug), language: linkLanguage(null, doc, ep, meta.data, ep.name || ep.slug) });
+      }
+    }
+    if (watch) for (const entry of translationServers(doc, resolvedFamily)) {
+      // Server options are bound to this loaded episode. Their labels are
+      // evidence for a translation, unlike a generic film-level description.
+      pushEp({ url: page.href, path: watch.path, episode: watch.episode,
+        episodeKey: episodeKey(watch.episode), language: entry.language, serverLabel: entry.label });
+    }
+    if (watch && !episodes.length) {
+      pushEp({ url: page.href, path: watch.path, episode: watch.episode, episodeKey: episodeKey(watch.episode),
+        language: linkLanguage(null, doc, null, meta.data, watch.episode) });
+    }
+    return { slug: parsed.slug, film: meta.film, family: resolvedFamily, title: meta.title,
+      originalTitle: meta.originalTitle, year: meta.year, season: meta.season, externalIds: meta.externalIds,
+      poster: meta.poster, path: parsed.path, url: page.href, isWatch: !!watch, episodes };
+  }
+  function readCatalog(family, doc = document, pageUrl = location.href) {
+    const page = url(pageUrl);
+    if (!page) return [];
+    const resolvedFamily = family || detect(doc, page.href);
+    const items = new Map();
+    for (const a of doc.querySelectorAll('a[href]')) {
+      if (a.closest('.mh-continue')) continue;
+      const target = url(a.getAttribute('href'), page.href);
+      if (!target || target.origin !== page.origin) continue;
+      const watch = route(target.href, resolvedFamily, page.href);
+      const detail = !watch && detailRoute(target.href, resolvedFamily, page.href);
+      const parsed = watch || detail;
+      if (!parsed) continue;
+      const card = a.closest('article,li,.item,.film-item,.movie-card,.apx-card,.myui-vodlist__box');
+      const rawTitle = (a.getAttribute('title') || text(a.querySelector('h2,h3,h4,.title,.name')) || text(a) || '').replace(/\s+/g, ' ').trim();
+      const cleanedCardTitle = rawTitle.replace(/^(?:Xem\s+)?Phim\s+/i, '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').replace(/\s+(?:19|20)\d{2}$/, '').trim();
+      const cardOrig = cleanOriginal(text(card?.querySelector('.origtitle,.original-name,.sub-title')));
+      const year = extractTitleYear(rawTitle, text(card)) || '';
+      const season = extractSeason(cleanedCardTitle, cardOrig, parsed.slug);
+      const prev = items.get(target.href) || { url: target.href, path: parsed.path, slug: parsed.slug, film: filmSlug(parsed.slug),
+        title: '', originalTitle: '', year: '', season: '', isWatch: !!watch,
+        episodeKey: watch ? episodeKey(watch.episode) : '', language: watch ? linkLanguage(a, doc, null, null, rawTitle) : '' };
+      if (cleanedCardTitle.length > prev.title.length && !/^(?:xem phim|play|tap \d+)$/i.test(normalize(cleanedCardTitle).replace(/-/g, ' '))) prev.title = cleanedCardTitle;
+      if (!prev.originalTitle && cardOrig) prev.originalTitle = cardOrig;
+      if (!prev.year && year) prev.year = year;
+      if (!prev.season && season) prev.season = season;
+      items.set(target.href, prev);
+    }
+    return [...items.values()];
+  }
+  function sameFilm(a, b) {
+    if (!a || !b) return false;
+    const sa = a.season || extractSeason(a.title, a.originalTitle, a.slug);
+    const sb = b.season || extractSeason(b.title, b.originalTitle, b.slug);
+    if (sa && sb && String(sa) !== String(sb)) return false;
+    const ya = a.year || extractTitleYear(a.title, a.originalTitle);
+    const yb = b.year || extractTitleYear(b.title, b.originalTitle);
+    if (ya && yb && String(ya) !== String(yb)) return false;
+    const sharedIds = ['imdb', 'tmdb'].filter((key) => a.externalIds?.[key] && b.externalIds?.[key]);
+    if (sharedIds.length) return sharedIds.every((key) => a.externalIds[key] === b.externalIds[key]);
+    const aliases = new Set([a.film || filmSlug(a.slug), ...(a.aliases || [])].filter(Boolean));
+    if ([b.film || filmSlug(b.slug), ...(b.aliases || [])].filter(Boolean).some((slug) => aliases.has(slug))) return true;
+    // Tên phim đơn lẻ không đủ: chỉ gộp khác slug khi có cùng năm, mùa và tên gốc.
+    const oa = cleanOriginal(a.originalTitle);
+    const ob = cleanOriginal(b.originalTitle);
+    return !!(ya && yb && oa && ob && normalize(oa) === normalize(ob) && String(sa || '') === String(sb || ''));
+  }
+  function sameEpisode(a, b) {
+    return sameFilm(a, b) && (!a.language || !b.language || a.language === b.language)
+      && (a.episodeKey || episodeKey(a.path?.split('/').filter(Boolean).pop())) === b.episodeKey;
+  }
+  function visible(el) {
+    if (!el?.isConnected || el.closest('[hidden],[aria-hidden="true"]')) return false;
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+    return true;
+  }
+  function findVideo(doc = document) {
+    return [...doc.querySelectorAll('#player video,#jwplayer video,.jwplayer video,#player-wrapper video,#dooplay_player_response video,video')]
+      .find((v) => visible(v) && !isPrepared(v) && !v.closest('.jw-flag-ads,[data-ad],.ads-banner,.apx-trailer-player,#fake_jwplayer,[id*="trailer"]')) || null;
+  }
+  function playerFrames(doc = document, pageUrl = location.href) {
+    return [...doc.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#dooplay_player_response iframe,main iframe,iframe[allowfullscreen]')]
+      .filter((el) => {
+        const target = url(el.getAttribute('src'), pageUrl);
+        return visible(el) && !isPrepared(el) && target && (isMotchill(target.hostname) || embedHosts.has(target.hostname)) && !el.closest('.ads-banner,.apx-trailer-player');
+      });
+  }
+  function homeMount(family, doc = document, pageUrl = location.href) {
+    const resolved = family || detect(doc, pageUrl);
+    for (const step of adapter(resolved, doc, pageUrl).homeSteps || []) {
+      const matches = [...doc.querySelectorAll(step.selector)];
+      const found = step.exclude ? matches.find((el) => !el.closest(step.exclude)) : matches[0];
+      if (found) return { anchor: found, position: step.position };
+    }
+    return null;
+  }
+  function homeAnchor(family, doc = document, pageUrl = location.href) {
+    return homeMount(family, doc, pageUrl)?.anchor || null;
+  }
+  function nextEpisodeLink(doc = document, pageUrl = location.href) {
+    const page = adapter(null, doc, pageUrl).read();
+    return page?.next ? [...doc.querySelectorAll('a[href]')].find((a) => url(a.getAttribute('href'), pageUrl)?.href === page.next.url) || null : null;
+  }
+  return { families, embedHosts, ROLE_ATTR, ROLES, isPrepared, isMotchill, allowedContext, runWhenAllowed, parentOrigin, knownEmbedPage, mediaSourceMatches, detect, adapter, route, detailRoute, searchUrl,
+    episodeKey, filmSlug, sameFilm, sameEpisode, read: (doc = document, pageUrl = location.href, family) => adapter(family, doc, pageUrl).read(),
+    readDetail: (doc = document, pageUrl = location.href, family) => adapter(family, doc, pageUrl).detail(),
+    readCatalog: (doc = document, pageUrl = location.href, family) => adapter(family, doc, pageUrl).catalog(),
+    normalize, translationKey, translationServers, reviveData, reviveServerNodes, url, visible, findVideo, playerFrames, homeMount, homeAnchor, structured, nextData, nextEpisodeLink };
+}

@@ -1,0 +1,12 @@
+{
+  "name": "motchill-userscripts",
+  "private": true,
+  "scripts": {
+    "build": "node ../scripts/build.mjs",
+    "check:build": "node ../scripts/build.mjs --check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "version": "6.0.0"
+}

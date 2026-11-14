@@ -1,0 +1,17 @@
+node_modules/
+work/
+__pycache__/
+*.pyc
+.env
+.env.*
+coverage/
+test-results/
+HANDOFF.md
+AGENTS.md
+research/
+tests/
+motchill/tests/
+rophim/tests/
+motchill/docs/progress/
+rophim/docs/REVIEW-*
+rophim/docs/VALIDATION-*
