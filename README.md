@@ -10,11 +10,13 @@ Ba script độc lập: chặn quảng cáo, thao tác trình phát và lịch s
 
 | Script | Phiên bản | Link cài |
 | --- | --- | --- |
-| Chặn quảng cáo | 0.1.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-noads.user.js) |
-| Thao tác trình phát | 0.1.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-gestures.user.js) |
-| Lịch sử xem | 0.1.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-history.user.js) |
+| Chặn quảng cáo | 0.1.2 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.1.2/dist/rophim-noads.user.js) |
+| Thao tác trình phát | 0.1.2 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.1.2/dist/rophim-gestures.user.js) |
+| Lịch sử xem | 0.1.2 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.1.2/dist/rophim-history.user.js) |
 
 Đã cài thì bấm **Cập nhật** hoặc **Cài lại**; không cần chép mã vào editor. Xem [hướng dẫn Firefox Android và máy tính](docs/FIREFOX.md).
+
+Link cài gắn với phiên bản cụ thể. Trước khi bấm cập nhật, kiểm tra trang Tampermonkey hiện **0.1.2**; cập nhật xong tải lại cả trang phim đang mở.
 
 ## Sử dụng
 

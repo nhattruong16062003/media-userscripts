@@ -4,10 +4,10 @@
 
 1. Mở Firefox, vào **⋮ → Tiện ích → Quản lý tiện ích**, tìm và cài **Tampermonkey**. Có thể mở [trang Tampermonkey trên Firefox Add-ons](https://addons.mozilla.org/firefox/addon/tampermonkey/) bằng Firefox.
 2. Mở link script muốn dùng ngay trong Firefox:
-   - [Chặn quảng cáo](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-noads.user.js)
-   - [Thao tác trình phát](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-gestures.user.js)
-   - [Lịch sử xem](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-history.user.js)
-3. Tampermonkey mở trang cài đặt. Kiểm tra tên **RoPhim**, tác giả **zic**, nguồn là repo `nhattruong16062003/rophim-userscripts`; kéo xuống và bấm **Cài đặt**.
+   - [Chặn quảng cáo 0.1.2](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.1.2/dist/rophim-noads.user.js)
+   - [Thao tác trình phát 0.1.2](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.1.2/dist/rophim-gestures.user.js)
+   - [Lịch sử xem 0.1.2](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.1.2/dist/rophim-history.user.js)
+3. Tampermonkey mở trang cài đặt. Kiểm tra tên **RoPhim**, phiên bản **0.1.2**, tác giả **zic**, nguồn là repo `nhattruong16062003/rophim-userscripts`; kéo xuống và bấm **Cài đặt**.
 4. Muốn dùng thêm script khác thì làm lại bước 2–3.
 5. Mở trang phim và tải lại trang. Trong **⋮ → Tiện ích → Tampermonkey**, kiểm tra các script RoPhim đang bật.
 
@@ -35,6 +35,7 @@ Lịch sử lưu trong Tampermonkey của cùng profile, riêng từng phim/mùa
 ## Khi chưa chạy
 
 - **Link chỉ hiện mã:** kiểm tra Tampermonkey đã cài và bật, rồi mở lại link trong Firefox thay vì trình duyệt bên trong ứng dụng khác.
+- **Không nhận tên miền RoPhim mới:** kiểm tra bản đã cài. Bản 0.1.0 chỉ có ba website ban đầu; mở link phiên bản phía trên để cập nhật, rồi tải lại trang. Bản mới dùng quy tắc tên miền chứa `rophim` và nhận diện cấu trúc nguồn riêng.
 - **Không thấy RP:** kiểm tra script Thao tác đang bật, quyền website/iframe và tải lại trang; chờ player tải xong.
 - **Nút bị mờ:** chờ video sẵn sàng. Nếu server trống/lỗi, thử nút server gốc của website.
 - **Lịch sử chưa có:** bật script Lịch sử và phát phim một lúc để có tiến độ.
