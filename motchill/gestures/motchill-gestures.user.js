@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.2
+// @version      6.0.3
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -302,6 +302,10 @@ var SharedPlayer = (() => {
       holdTimer = 0;
       const previous = press;
       press = null;
+      if (previous) try {
+        if (root.hasPointerCapture?.(previous.id)) root.releasePointerCapture(previous.id);
+      } catch {
+      }
       if (previous?.held && video.playbackRate === 2) {
         let restored = false;
         try {
@@ -321,6 +325,9 @@ var SharedPlayer = (() => {
       win.clearTimeout(tapTimer);
       tapTimer = 0;
     }
+    const pointerCancel = (e) => {
+      if (e.pointerId == null || press?.id === e.pointerId) cancel();
+    };
     const lostCapture = (e) => {
       if (press && e.pointerId === press.id) cancel();
     };
@@ -340,7 +347,11 @@ var SharedPlayer = (() => {
       if (side === null) return;
       consume(e);
       restore();
-      press = { id: e.pointerId, x: e.clientX, y: e.clientY, side, at: Date.now(), source: source(), rate: player.state().rate, held: false, locked: !!options.isLocked?.() };
+      press = { id: e.pointerId, x: e.clientX, y: e.clientY, side, at: Date.now(), source: source(), rate: player.state().rate, held: false, moved: false, locked: !!options.isLocked?.() };
+      try {
+        root.setPointerCapture?.(e.pointerId);
+      } catch {
+      }
       if (press.locked && !options.allowLockedMediaGestures || player.state().paused) return;
       holdTimer = win.setTimeout(() => {
         if (!press || !player.state().ready || player.state().paused || options.isLocked?.() && !options.allowLockedMediaGestures || source() !== press.source) return cancel();
@@ -354,8 +365,10 @@ var SharedPlayer = (() => {
       }, 450);
     };
     const move = (e) => {
-      if (press) consume(e);
-      if (press && (e.pointerId !== press.id || Math.hypot(e.clientX - press.x, e.clientY - press.y) > 14)) cancel();
+      if (!press || e.pointerId !== press.id) return;
+      consume(e);
+      if (point(e) === null) return cancel();
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 30) press.moved = true;
     };
     const up = (e) => {
       if (options.exclusive && !root.contains(e.target) && !press) return;
@@ -367,7 +380,7 @@ var SharedPlayer = (() => {
       if (locked && !options.allowLockedMediaGestures) {
         lastTap = null;
         win.clearTimeout(tapTimer);
-        if (p.locked && now - p.at <= 350 && source() === p.source) options.onLockedTap?.();
+        if (p.locked && !p.moved && now - p.at <= 350 && source() === p.source) options.onLockedTap?.();
         return;
       }
       if (p.held) {
@@ -375,6 +388,12 @@ var SharedPlayer = (() => {
         notify("\u0110\xE3 kh\xF4i ph\u1EE5c t\u1ED1c \u0111\u1ED9");
         e.preventDefault();
         e.stopImmediatePropagation();
+        return;
+      }
+      if (p.moved || point(e) === null || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 30) {
+        lastTap = null;
+        win.clearTimeout(tapTimer);
+        tapTimer = 0;
         return;
       }
       if (now - p.at > 350 || source() !== p.source || !player.state().ready) return;
@@ -423,23 +442,23 @@ var SharedPlayer = (() => {
     const visibility = () => {
       if (win.document.hidden) cancel();
     };
-    for (const [name, fn] of [["pointerdown", down], ["pointermove", move], ["pointerup", up], ["pointercancel", cancel], ["lostpointercapture", lostCapture], ["click", click], ["dblclick", click], ["contextmenu", menu]]) root.addEventListener(name, fn, true);
+    for (const [name, fn] of [["pointerdown", down], ["pointermove", move], ["pointerup", up], ["pointercancel", pointerCancel], ["lostpointercapture", lostCapture], ["click", click], ["dblclick", click], ["contextmenu", menu]]) root.addEventListener(name, fn, true);
     if (options.exclusive) for (const name of ["touchstart", "touchmove", "touchend", "touchcancel"]) root.addEventListener(name, touch, { passive: false });
     win.addEventListener("blur", cancel);
     win.addEventListener("pointerup", up, true);
     win.addEventListener("pointermove", move, true);
-    win.addEventListener("pointercancel", cancel, true);
+    win.addEventListener("pointercancel", pointerCancel, true);
     win.document.addEventListener("visibilitychange", visibility);
     video.addEventListener("emptied", cancel);
     video.addEventListener("loadstart", cancel);
     return () => {
       cancel();
-      for (const [name, fn] of [["pointerdown", down], ["pointermove", move], ["pointerup", up], ["pointercancel", cancel], ["lostpointercapture", lostCapture], ["click", click], ["dblclick", click], ["contextmenu", menu]]) root.removeEventListener(name, fn, true);
+      for (const [name, fn] of [["pointerdown", down], ["pointermove", move], ["pointerup", up], ["pointercancel", pointerCancel], ["lostpointercapture", lostCapture], ["click", click], ["dblclick", click], ["contextmenu", menu]]) root.removeEventListener(name, fn, true);
       for (const name of ["touchstart", "touchmove", "touchend", "touchcancel"]) root.removeEventListener(name, touch);
       win.removeEventListener("blur", cancel);
       win.removeEventListener("pointerup", up, true);
       win.removeEventListener("pointermove", move, true);
-      win.removeEventListener("pointercancel", cancel, true);
+      win.removeEventListener("pointercancel", pointerCancel, true);
       win.document.removeEventListener("visibilitychange", visibility);
       video.removeEventListener("emptied", cancel);
       video.removeEventListener("loadstart", cancel);

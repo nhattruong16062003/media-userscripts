@@ -7,6 +7,9 @@ export function installGestures(win, player, notify = () => {}, options={}) {
   function restore() {
     win.clearTimeout(holdTimer);holdTimer=0;
     const previous=press;press=null;
+    // Clear the press first: releasing capture can synchronously dispatch
+    // lostpointercapture, and must not cancel a completed tap a second time.
+    if(previous)try{if(root.hasPointerCapture?.(previous.id))root.releasePointerCapture(previous.id);}catch{/* optional browser API */}
     if (previous?.held && video.playbackRate === 2) {
       // A source swap may reuse this video while the old adapter is already
       // unready. Release our temporary rate on that element as well, without
@@ -18,6 +21,7 @@ export function installGestures(win, player, notify = () => {}, options={}) {
     if(previous?.held)options.onHoldChange?.(false);
   }
   function cancel() {restore();lastTap=null;win.clearTimeout(tapTimer);tapTimer=0;}
+  const pointerCancel=e=>{if(e.pointerId==null || press?.id===e.pointerId)cancel();};
   // Touch browsers release their implicit capture after pointerup as part of
   // normal completion. Only a capture lost during an active press cancels it;
   // a completed tap must keep its single/double-tap decision timer.
@@ -33,22 +37,31 @@ export function installGestures(win, player, notify = () => {}, options={}) {
     if (interactive(e.target) || e.button !== 0 || !player.state().ready) return;
     const side=point(e);if (side === null) return;
     consume(e);
-    restore();press={id:e.pointerId,x:e.clientX,y:e.clientY,side,at:Date.now(),source:source(),rate:player.state().rate,held:false,locked:!!options.isLocked?.()};
+    restore();press={id:e.pointerId,x:e.clientX,y:e.clientY,side,at:Date.now(),source:source(),rate:player.state().rate,held:false,moved:false,locked:!!options.isLocked?.()};
+    try{root.setPointerCapture?.(e.pointerId);}catch{/* window listeners remain the fallback */}
     if(press.locked && !options.allowLockedMediaGestures || player.state().paused)return;
     holdTimer=win.setTimeout(()=>{
       if (!press || !player.state().ready || player.state().paused || options.isLocked?.() && !options.allowLockedMediaGestures || source()!==press.source) return cancel();
       if(player.command('rate',2)){press.held=true;lastTap=null;win.clearTimeout(tapTimer);options.onHoldChange?.(true);notify('Giữ 2×');}
     },450);
   };
-  const move = e => {if(press)consume(e);if(press && (e.pointerId!==press.id || Math.hypot(e.clientX-press.x,e.clientY-press.y)>14)) cancel();};
+  const move = e => {
+    if(!press || e.pointerId!==press.id)return;
+    consume(e);
+    if(point(e)===null)return cancel();
+    // A finger can drift while held for many seconds. Distance only disqualifies
+    // a tap; it must never end a hold while the contact stays inside the video.
+    if(Math.hypot(e.clientX-press.x,e.clientY-press.y)>30)press.moved=true;
+  };
   const up = e => {
     if(options.exclusive && !root.contains(e.target) && !press)return;
     if(!press || e.pointerId!==press.id)return;
     const p=press, now=Date.now();restore();
     consume(e);
     const locked=p.locked || !!options.isLocked?.();
-    if(locked && !options.allowLockedMediaGestures){lastTap=null;win.clearTimeout(tapTimer);if(p.locked && now-p.at<=350 && source()===p.source)options.onLockedTap?.();return;}
+    if(locked && !options.allowLockedMediaGestures){lastTap=null;win.clearTimeout(tapTimer);if(p.locked && !p.moved && now-p.at<=350 && source()===p.source)options.onLockedTap?.();return;}
     if(p.held){suppressUntil=now+400;notify('Đã khôi phục tốc độ');e.preventDefault();e.stopImmediatePropagation();return;}
+    if(p.moved || point(e)===null || Math.hypot(e.clientX-p.x,e.clientY-p.y)>30){lastTap=null;win.clearTimeout(tapTimer);tapTimer=0;return;}
     if(now-p.at>350 || source()!==p.source || !player.state().ready)return;
     const onTap=locked?options.onLockedTap:options.onTap;
     if(!p.side){win.clearTimeout(tapTimer);tapTimer=0;lastTap=null;onTap?.();return;}
@@ -60,9 +73,9 @@ export function installGestures(win, player, notify = () => {}, options={}) {
   const menu = e => {if(options.exclusive || press?.held){e.preventDefault();e.stopImmediatePropagation();}};
   const touch=e=>consume(e);
   const visibility = () => {if(win.document.hidden)cancel();};
-  for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',lostCapture],['click',click],['dblclick',click],['contextmenu',menu]]) root.addEventListener(name,fn,true);
+  for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',pointerCancel],['lostpointercapture',lostCapture],['click',click],['dblclick',click],['contextmenu',menu]]) root.addEventListener(name,fn,true);
   if(options.exclusive)for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.addEventListener(name,touch,{passive:false});
-  win.addEventListener('blur',cancel);win.addEventListener('pointerup',up,true);win.addEventListener('pointermove',move,true);win.addEventListener('pointercancel',cancel,true);win.document.addEventListener('visibilitychange',visibility);
+  win.addEventListener('blur',cancel);win.addEventListener('pointerup',up,true);win.addEventListener('pointermove',move,true);win.addEventListener('pointercancel',pointerCancel,true);win.document.addEventListener('visibilitychange',visibility);
   video.addEventListener('emptied',cancel);video.addEventListener('loadstart',cancel);
-  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',lostCapture],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.removeEventListener(name,touch);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.removeEventListener('pointermove',move,true);win.removeEventListener('pointercancel',cancel,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
+  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',pointerCancel],['lostpointercapture',lostCapture],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.removeEventListener(name,touch);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.removeEventListener('pointermove',move,true);win.removeEventListener('pointercancel',pointerCancel,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
 }
