@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Motchill - mở bản trực tiếp
 // @namespace    motchill-source
-// @version      6.0.0
+// @version      6.0.1
 // @author       zic
-// @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts/tree/main/motchill
-// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/refs/heads/main/motchill/source/motchill-source.user.js
-// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/refs/heads/main/motchill/source/motchill-source.user.js
+// @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
+// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/source/motchill-source.user.js
+// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/source/motchill-source.user.js
 // @description  Tìm trang Motchill gốc trong iframe và chỉ hiện nút mở khi nguồn tương thích đã được xác minh.
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*

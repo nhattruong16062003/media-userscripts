@@ -5,8 +5,8 @@ import vm from 'node:vm';
 import {build} from 'esbuild';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const check=process.argv.includes('--check');
-const repository='https://github.com/nhattruong16062003/rophim-userscripts';
-const raw='https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/refs/heads/main';
+const repository='https://github.com/nhattruong16062003/media-userscripts';
+const raw='https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main';
 const license='/*\n'+await readFile(path.join(root,'LICENSE.lucide'),'utf8')+'\n*/\n';
 async function save(file,text){
   const output=text.replace(/\r\n/g,'\n');

@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Motchill - chặn quảng cáo + tối ưu mạng
 // @namespace    motchill-noads
-// @version      6.0.0
+// @version      6.0.1
 // @author       zic
-// @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts/tree/main/motchill
-// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
-// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
+// @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
+// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
+// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
 // @description  Chặn quảng cáo trên Motchill (mọi tên miền, cả bản WordPress lẫn bản Next.js) và tắt chia sẻ P2P để phim chỉ tải từ máy chủ.
 // @match        https://motchillsa.com/*
 // @match        https://motchilltu.com/*

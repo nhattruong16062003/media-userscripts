@@ -1,13 +1,13 @@
 # Motchill — hướng dẫn sử dụng
 
-Bốn script phiên bản **6.0.0**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
+Bốn script phiên bản **6.0.1**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
 
 | Script | Link cài |
 | --- | --- |
-| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.4.0/motchill/noads/motchill-noads.user.js) |
-| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.4.0/motchill/gestures/motchill-gestures.user.js) |
-| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.4.0/motchill/history/motchill-history.user.js) |
-| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.4.0/motchill/source/motchill-source.user.js) |
+| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/noads/motchill-noads.user.js) |
+| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/gestures/motchill-gestures.user.js) |
+| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/history/motchill-history.user.js) |
+| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.1/motchill/source/motchill-source.user.js) |
 
 Nếu đang dùng bộ Motchill cũ, mở link mới rồi chọn **Cập nhật/Cài lại** trên chính script hiện có. Giữ script Lịch sử để giữ dữ liệu; không cần gỡ trước. Sau khi cập nhật, tải lại trang phim và chỉ bật một bản cho mỗi chức năng.
 

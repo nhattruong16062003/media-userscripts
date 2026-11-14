@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.0
+// @version      6.0.1
 // @author       zic
-// @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts/tree/main/motchill
-// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
-// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
+// @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
+// @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
+// @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
 // @description  Trình phát Motchill (mọi tên miền): chạm 2 lần tua 10 giây, giữ để xem x2, khóa màn hình khi xem toàn màn hình, nút bỏ qua giới thiệu và tập tiếp theo.
 // @match        https://motchillsa.com/*
 // @match        https://motchilltu.com/*
