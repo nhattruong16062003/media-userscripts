@@ -1,16 +1,14 @@
 // ==UserScript==
 // @name         RoPhim — Chặn quảng cáo
 // @namespace    rophim-userscripts.local
-// @version      0.1.0
+// @version      0.1.1
 // @author       zic
 // @description  Chặn quảng cáo cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
 // @supportURL   https://github.com/nhattruong16062003/rophim-userscripts/issues
 // @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-noads.user.js
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-noads.user.js
-// @match        https://rophim10.ink/*
-// @match        https://rophimz.com.mx/*
-// @match        https://rophimz.lol/*
+// @include      /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]*rophim[a-z0-9-]*(?:\.[a-z0-9-]+)+(?::\d+)?\//
 // @match        https://player.phimapi.com/player/*
 // @match        https://api.clubc.org/embed/*
 // @match        https://dora.nobitayeuxuka.xyz/temp*
@@ -21,11 +19,14 @@
 (function () {
 'use strict';
 // ---- lib/core.js ----
-// Permission boundaries only. Never use these lists to select a source adapter.
-const SITE_ORIGINS = new Set(['https://rophim10.ink', 'https://rophimz.com.mx', 'https://rophimz.lol']);
+// Permission boundaries only. Website names may change; source contracts select adapters.
 const FRAME_ORIGINS = new Set(['https://player.phimapi.com', 'https://api.clubc.org', 'https://dora.nobitayeuxuka.xyz']);
 function safeURL(value, base) {
   try { const u = new URL(value, base); return u.protocol === 'https:' && !u.username && !u.password ? u : null; } catch { return null; }
+}
+function isSiteOrigin(value) {
+  const url=safeURL(value);
+  return !!url && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
 }
 const normalize = value => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 const bounded = (value, max = 200) => String(value || '').slice(0, max);
@@ -124,7 +125,7 @@ function blockSyntheticSponsored(page) {
 }
 function startAds(win,page) {
   const top=win.parent===win;
-  if(top ? !SITE_ORIGINS.has(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin))return;
+  if(top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin))return;
   // This documented component-ad preference is harmless on source variants
   // without that contract, and takes effect before React mounts its listeners.
   const kill=()=>{

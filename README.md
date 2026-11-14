@@ -10,9 +10,9 @@ Ba script độc lập: chặn quảng cáo, thao tác trình phát và lịch s
 
 | Script | Phiên bản | Link cài |
 | --- | --- | --- |
-| Chặn quảng cáo | 0.1.0 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-noads.user.js) |
-| Thao tác trình phát | 0.1.0 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-gestures.user.js) |
-| Lịch sử xem | 0.1.0 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-history.user.js) |
+| Chặn quảng cáo | 0.1.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-noads.user.js) |
+| Thao tác trình phát | 0.1.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-gestures.user.js) |
+| Lịch sử xem | 0.1.1 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-history.user.js) |
 
 Đã cài thì bấm **Cập nhật** hoặc **Cài lại**; không cần chép mã vào editor. Xem [hướng dẫn Firefox Android và máy tính](docs/FIREFOX.md).
 
@@ -24,7 +24,7 @@ Ba script độc lập: chặn quảng cáo, thao tác trình phát và lịch s
 
 ## Website và player
 
-Quyền chạy hiện tại gồm `rophim10.ink`, `rophimz.com.mx`, `rophimz.lol` và iframe player được khai báo trong script. Đổi tên miền hoặc player cần cập nhật script. Điều khiển dùng ngay trong trang xem và iframe hiện tại.
+Script dùng `@include` cho tên miền chứa `rophim`; không cần thêm từng domain website vào danh sách. Khi trang có cấu trúc nguồn đã hỗ trợ, script nhận diện từ HTML/dữ liệu và player thực tế. Host iframe được cấp quyền riêng; player chuyển sang host mới có thể cần cập nhật script. Điều khiển dùng ngay trong trang xem và iframe hiện tại.
 
 Nếu không thấy RP, kiểm tra script đang bật, tải lại trang và chờ player sẵn sàng. Khi toàn màn hình video của hệ thống che nút RP, thoát ra rồi dùng nút toàn màn hình trong bảng RP.
 

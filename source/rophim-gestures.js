@@ -1,4 +1,4 @@
-import {SITE_ORIGINS, storageAPI, diagnostic} from '../lib/core.js';
+import {storageAPI, diagnostic} from '../lib/core.js';
 import {contextKey,introKey,nextRoute} from '../lib/sites.js';
 import {createBridge} from '../lib/bridge.js';
 import {installGestures} from '../lib/gestures.js';

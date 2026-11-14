@@ -1,16 +1,14 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.1.0
+// @version      0.1.1
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
 // @supportURL   https://github.com/nhattruong16062003/rophim-userscripts/issues
 // @downloadURL  https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-gestures.user.js
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/main/dist/rophim-gestures.user.js
-// @match        https://rophim10.ink/*
-// @match        https://rophimz.com.mx/*
-// @match        https://rophimz.lol/*
+// @include      /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]*rophim[a-z0-9-]*(?:\.[a-z0-9-]+)+(?::\d+)?\//
 // @match        https://player.phimapi.com/player/*
 // @match        https://api.clubc.org/embed/*
 // @match        https://dora.nobitayeuxuka.xyz/temp*
@@ -25,11 +23,14 @@
 (function () {
 'use strict';
 // ---- lib/core.js ----
-// Permission boundaries only. Never use these lists to select a source adapter.
-const SITE_ORIGINS = new Set(['https://rophim10.ink', 'https://rophimz.com.mx', 'https://rophimz.lol']);
+// Permission boundaries only. Website names may change; source contracts select adapters.
 const FRAME_ORIGINS = new Set(['https://player.phimapi.com', 'https://api.clubc.org', 'https://dora.nobitayeuxuka.xyz']);
 function safeURL(value, base) {
   try { const u = new URL(value, base); return u.protocol === 'https:' && !u.username && !u.password ? u : null; } catch { return null; }
+}
+function isSiteOrigin(value) {
+  const url=safeURL(value);
+  return !!url && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
 }
 const normalize = value => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 const bounded = (value, max = 200) => String(value || '').slice(0, max);
@@ -269,13 +270,13 @@ function bridgeContext(value) {
   const keys=['source','movie','movieID','title','episode','episodeID','season','lane','server','url'];
   if(!value || !['next-ordered','next-basic','legacy-panels'].includes(value.source) || keys.some(k=>typeof value[k]!=='string' || value[k].length>2048))return null;
   const url=safeURL(value.url);
-  if(!url || !SITE_ORIGINS.has(url.origin) || !url.pathname.startsWith('/xem-phim/'))return null;
+  if(!url || !isSiteOrigin(url.origin) || !url.pathname.startsWith('/xem-phim/'))return null;
   return Object.fromEntries(keys.map(k=>[k,value[k]]));
 }
 function createBridge(win, page, feature, callbacks = {}) {
   const channel = 'rophim.' + feature + '.v1';
   const top = win.parent === win;
-  if (top ? !SITE_ORIGINS.has(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return {dispose(){},state:()=>null,command:()=>false};
+  if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return {dispose(){},state:()=>null,command:()=>false};
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
   let boundFrame = null;
   let knownSource=false, snapshot=null, pending='', retryAfter=0;
@@ -288,7 +289,7 @@ function createBridge(win, page, feature, callbacks = {}) {
     const d = event.data;
     if (!d || d.channel !== channel) return;
     if (!top && d.type === 'hello') {
-      if (event.source !== win.parent || !SITE_ORIGINS.has(event.origin) || (referrer && event.origin !== referrer) || !/^[a-f\d]{32}$/.test(d.token) || !Number.isSafeInteger(d.generation)) return;
+      if (event.source !== win.parent || !isSiteOrigin(event.origin) || (referrer && event.origin !== referrer) || !/^[a-f\d]{32}$/.test(d.token) || !Number.isSafeInteger(d.generation)) return;
       if (session?.token !== d.token || session?.generation !== d.generation) {
         session = {source:event.source,origin:event.origin,token:d.token,generation:d.generation,seq:-1};sequence = 0;
       }
