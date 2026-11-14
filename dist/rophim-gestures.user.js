@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.3.2
+// @version      0.3.3
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -338,7 +338,7 @@ function attachPlayer(candidate) {
       const duration = kind === 'jw' ? api.getDuration() : video.duration;
       const time = kind === 'jw' ? api.getPosition() : video.currentTime;
       const ad = !!isAd();
-      return {kind,ready:video.isConnected && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
+      return {kind,failed:!!video.error,ready:video.isConnected && !video.error && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
     } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false,played:false}; }
   };
   const command = (action,value) => {
@@ -367,7 +367,7 @@ function playerFingerprint(candidate) {
 // ---- lib/bridge.js ----
 
 function validState(s) {
-  return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
+  return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && (s.failed === undefined || typeof s.failed === 'boolean') && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
 }
 function acceptsPacket(event, session, channel) {
   const d = event.data;
@@ -387,16 +387,17 @@ function createBridge(win, page, feature, callbacks = {}) {
   const top = win.parent === win;
   if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return {dispose(){},state:()=>null,command:()=>false};
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
-  let boundFrame = null,frameFullscreen=false;
+  let boundFrame = null,frameFullscreen=false,controlsReady=false;
   let knownSource=false, snapshot=null, pending='', retryAfter=0;
   const requests=new Map();
   const resultStatuses=action=>action==='fullscreen'?['fullscreen','windowed','error','unavailable']:['missing','error','navigating','unavailable'];
   const clearRequests=()=>{for(const request of requests.values()){win.clearTimeout(request.timer);request.resolve('unavailable');}requests.clear();};
   const referrer = safeURL(win.document.referrer)?.origin;
-  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen});
-  const resetRemote = () => { remote = null; media = ''; session = null; generation++; emit(); };
+  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen,controlsReady:top?controlsReady:false});
+  const resetRemote = () => { remote = null; controlsReady=false;media = ''; session = null; generation++; emit(); };
   const loaded = () => { resetRemote(); tick(); };
   const send = data => { if (session) session.source.postMessage({...data,channel,token:session.token,generation:session.generation,seq:++sequence},session.origin); };
+  const report = () => {if(local && session)send({type:'state',state:local.state(),media,controlsReady:callbacks.controlsReady?.()===true});};
   const onMessage = event => {
     const d = event.data;
     if (!d || d.channel !== channel) return;
@@ -409,14 +410,14 @@ function createBridge(win, page, feature, callbacks = {}) {
       }
       if(d.seq<=session.seq)return;
       session.seq=d.seq;
-      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;emit();
+      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;emit();report();
       return;
     }
     if (!acceptsPacket(event,session,channel)) return;
     if (top) {
       if (!boundFrame?.isConnected || boundFrame.contentWindow !== event.source || boundFrame.src !== session.src || contextKey(context) !== session.key) return;
       if (d.type === 'state' && validState(d.state) && /^[a-f\d]{32}$/.test(d.media)) {
-        session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};emit();
+        session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};controlsReady=d.controlsReady===true;emit();
       } else if (d.type === 'request' && ['next','fullscreen'].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
         session.seq = d.seq;
         if(session.requesting && Date.now()<=session.requesting.until)return;
@@ -468,7 +469,7 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (!session) { session = {source:frame.contentWindow,origin:url.origin,src:frame.src,key:contextKey(context),token:token(win),generation,seq:-1,seen:0};sequence = 0; }
       frameFullscreen=!!win.document.fullscreenElement?.contains(frame);
       send({type:'hello',context,fullscreen:frameFullscreen});
-      if (session.seen && Date.now() - session.seen > 4000) {remote = null;media = '';emit();}
+      if (session.seen && Date.now() - session.seen > 4000) {remote = null;controlsReady=false;media = '';emit();}
       diagnostic(win.document,feature,site.kind + '/' + (remote?.ready ? remote.kind : 'chờ player nội dung'));
     } else {
       const candidate = playerCandidate(win,page);
@@ -477,8 +478,7 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (candidate?.video !== local?.video || candidate?.api !== local?.api || candidate?.kind !== local?.kind || source !== lastSource) {
         clearRequests();callbacks.unbind?.(local); local?.dispose();local = candidate ? attachPlayer(candidate) : null;lastSource = source;media = local ? token(win) : '';emit();
       }
-      if (local && session) send({type:'state',state:local.state(),media});
-      if(local)emit();
+      if(local){emit();report();}
       diagnostic(win.document,feature,local ? local.kind + '/' + (local.state().ready ? 'ready' : 'chờ metadata/nội dung') : 'player chưa nhận diện');
     }
   };
@@ -502,7 +502,7 @@ function createBridge(win, page, feature, callbacks = {}) {
         requests.set(id,{resolve,timer,action});
         // Flush state so the parent validates the same active resource even
         // before the first heartbeat.
-        send({type:'state',state:local.state(),media});send({type:'request',action,id,media});
+        report();send({type:'request',action,id,media});
       });
     },
     refresh:tick,
@@ -595,29 +595,36 @@ function installGestures(win, player, notify = () => {}, options={}) {
 // ---- lib/player-ui.js ----
 // Approved player design. Local SVG assets; no icon CDN or runtime dependency.
 function playerIcon(name) {
-  // Lucide 1.72.0; same icon names as the approved demo. See LICENSE.lucide.
+  // Play/pause and chevrons: Lucide 1.72.0 (LICENSE.lucide).
+  // Filled toolbar geometry and simple locks follow the user's reference.
   const paths={
     play:"<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />",
     pause:"<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /><rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />",
-    next:"<path d=\"M21 4v16\" /><path d=\"M6.029 4.285A2 2 0 0 0 3 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z\" />",
-    volume:"<path d=\"M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z\" /><path d=\"M16 9a5 5 0 0 1 0 6\" /><path d=\"M19.364 18.364a9 9 0 0 0 0-12.728\" />",
-    muted:"<path d=\"M11 4.702a.7.7 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.7.7 0 0 0 11 19.298z\" /><path d=\"m16.5 14.5 5-5\" /><path d=\"m16.5 9.5 5 5\" />",
-    settings:"<path d=\"M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />",
-    fullscreen:"<path d=\"M8 3H5a2 2 0 0 0-2 2v3\" /><path d=\"M21 8V5a2 2 0 0 0-2-2h-3\" /><path d=\"M3 16v3a2 2 0 0 0 2 2h3\" /><path d=\"M16 21h3a2 2 0 0 0 2-2v-3\" />",
-    shrink:"<path d=\"M8 3v3a2 2 0 0 1-2 2H3\" /><path d=\"M21 8h-3a2 2 0 0 1-2-2V3\" /><path d=\"M3 16h3a2 2 0 0 1 2 2v3\" /><path d=\"M16 21v-3a2 2 0 0 1 2-2h3\" />",
-    lock:"<circle cx=\"12\" cy=\"16\" r=\"1\" /><rect x=\"3\" y=\"10\" width=\"18\" height=\"12\" rx=\"2\" /><path d=\"M7 10V7a5 5 0 0 1 10 0v3\" />",
-    unlock:"<circle cx=\"12\" cy=\"16\" r=\"1\" /><rect width=\"18\" height=\"12\" x=\"3\" y=\"10\" rx=\"2\" /><path d=\"M7 10V7a5 5 0 0 1 9.33-2.5\" />",
     forward:"<path d=\"m6 17 5-5-5-5\" /><path d=\"m13 17 5-5-5-5\" />",
     back:"<path d=\"m11 17-5-5 5-5\" /><path d=\"m18 17-5-5 5-5\" />",
     close:"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />",
   };
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name] || ''}</svg>`;
+  const filled={
+    next:'<path d="M18 4h3v16h-3zM3 4l13 8-13 8z"/>',
+    volume:'<path d="M3 9h4l6-5v16l-6-5H3zM15 8v2a2.5 2.5 0 0 1 0 4v2a4.5 4.5 0 0 0 0-8zm0-4v2a6.5 6.5 0 0 1 0 12v2a8.5 8.5 0 0 0 0-16z"/>',
+    muted:'<path d="M3 9h4l6-5v16l-6-5H3zm12-1 3 3 3-3 1 1-3 3 3 3-1 1-3-3-3 3-1-1 3-3-3-3z"/>',
+    settings:'<path fill-rule="evenodd" d="m10 2-.7 3-1.5.9-3-.9-2 3.5L5 10.7v2.6l-2.2 2.2 2 3.5 3-.9 1.5.9.7 3h4l.7-3 1.5-.9 3 .9 2-3.5-2.2-2.2v-2.6l2.2-2.2-2-3.5-3 .9-1.5-.9L14 2zm2 6a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/>',
+    fullscreen:'<path d="M14 3h7v7l-2.5-2.5-4 4-2-2 4-4zM3 14l2.5 2.5 4-4 2 2-4 4L10 21H3z"/>',
+    shrink:'<path d="m21 3-5.5 5.5L13 6v7h7l-2.5-2.5L23 5zM3 21l5.5-5.5L11 18v-7H4l2.5 2.5L1 19z"/>',
+  };
+  const simple={lock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',unlock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/>'};
+  const solid=Object.hasOwn(filled,name);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" fill="${solid?'currentColor':'none'}" stroke="${solid?'none':'currentColor'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${filled[name] || simple[name] || paths[name] || ''}</svg>`;
 }
 function playerUIStyle(doc) {
   if(doc.getElementById('rp-player-style'))return;
   const style=doc.createElement('style');style.id='rp-player-style';
   style.textContent=`
-  html[data-rp-controls-boot] .art-video-player .art-bottom,html[data-rp-controls-boot] .art-video-player .art-mask,html[data-rp-controls-boot] .art-video-player .art-vtitle-bar,html[data-rp-controls-boot] .jwplayer .jw-controls,html[data-rp-controls-boot] .guildline{visibility:hidden!important;pointer-events:none!important}
+  html[data-rp-controls-boot] .art-notice,html[data-rp-controls-boot] .art-info,html[data-rp-controls-boot] .art-loading,html[data-rp-controls-boot] .art-layer-auto-playback,html[data-rp-controls-boot] .jw-title,html[data-rp-controls-boot] .jw-logo,html[data-rp-controls-boot] .jw-error-msg,html[data-rp-controls-boot] .jw-nextup-container,html[data-rp-controls-boot] .art-bottom,html[data-rp-controls-boot] .art-mask,html[data-rp-controls-boot] .art-vtitle-bar,html[data-rp-controls-boot] .art-settings,html[data-rp-controls-boot] .art-contextmenus,html[data-rp-controls-boot] .art-layer-lock,html[data-rp-controls-boot] .art-layer-fastForward,html[data-rp-controls-boot] .art-layer-autoOrientation,html[data-rp-controls-boot] .jw-controls,html[data-rp-controls-boot] .jw-settings-menu,html[data-rp-controls-boot] .jw-rightclick,html[data-rp-controls-boot] .jw-display,html[data-rp-controls-boot] .guildline,html[data-rp-controls-boot] .loading-screen{display:none!important;pointer-events:none!important}
+  html[data-rp-controls-boot] video::-webkit-media-controls{display:none!important}
+  html[data-rp-frame-guard] .player-ratio iframe#embed-player:not([data-rp-display="custom"]),html[data-rp-frame-guard] iframe#player.player-iframe:not([data-rp-display="custom"]){opacity:0!important;pointer-events:none!important}
+  [data-rp-frame-host]{position:relative}[data-rp-frame-host]:fullscreen{width:100%;height:100%;background:#000;overflow:hidden}[data-rp-frame-host]:fullscreen>iframe{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;border:0!important}
+  .rp-watch-loading{position:absolute;inset:0;z-index:2147483645;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#fff;font:14px/1.4 Arial,sans-serif;pointer-events:auto}.rp-watch-loading.rp-loading-fixed{position:fixed}.rp-watch-loading [hidden]{display:none!important}.rp-loading-retry{font:inherit;padding:8px 18px;border:1px solid #ffffff55;border-radius:6px;background:#ffffff18;color:#fff;cursor:pointer;min-height:42px}.rp-watch-spinner{width:28px;height:28px;border:2px solid #ffffff38;border-top-color:#fff;border-radius:50%;animation:rp-watch-spin .8s linear infinite}@keyframes rp-watch-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.rp-watch-spinner{animation:none}}
   [data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-vtitle-bar,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}
   [data-rp-custom-controls="1"] .loading-screen{pointer-events:none!important}
   [data-rp-ui="player"].rp-player-shell{position:absolute;inset:0;z-index:2147483642;pointer-events:none;font:14px/1.4 Arial,sans-serif;color:#fff;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
@@ -647,8 +654,109 @@ function playerUIStyle(doc) {
 }
 function playerStartupGuard(win){
   const doc=win.document;playerUIStyle(doc);doc.documentElement.dataset.rpControlsBoot='1';
-  const release=()=>{win.clearTimeout(timer);delete doc.documentElement.dataset.rpControlsBoot;};
-  const timer=win.setTimeout(release,4000);return release;
+  const suppress=()=>{for(const video of doc.querySelectorAll('video[controls]'))video.removeAttribute('controls');};
+  const observer=new win.MutationObserver(suppress);
+  observer.observe(doc,{childList:true,subtree:true,attributes:true,attributeFilter:['controls']});suppress();
+  return ()=>{observer.disconnect();delete doc.documentElement.dataset.rpControlsBoot;};
+}
+
+
+// ---- lib/player-loading.js ----
+
+// Loading, slow loading and failure all stay inside our UI. None of these
+// states falls back to native controls or changes the provider's media source.
+function loadingPanel(win,host,{fixed=false,onRetry=()=>{}}={}){
+  playerUIStyle(win.document);
+  const node=win.document.createElement('div');node.dataset.rpUi='player-loading';node.className='rp-watch-loading'+(fixed?' rp-loading-fixed':'');node.setAttribute('role','status');
+  const spinner=win.document.createElement('span');spinner.className='rp-watch-spinner';spinner.setAttribute('aria-hidden','true');node.append(spinner);
+  const message=win.document.createElement('span');message.className='rp-loading-message';message.textContent='Đang tải phim';message.hidden=true;node.append(message);
+  const retry=win.document.createElement('button');retry.type='button';retry.className='rp-loading-retry';retry.textContent='Thử lại';retry.hidden=true;retry.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(!disposed){waiting();onRetry();}});node.append(retry);
+  let timer=0,disposed=false;
+  function waiting(){win.clearTimeout(timer);spinner.hidden=false;message.hidden=true;retry.hidden=true;node.dataset.rpLoading='waiting';node.setAttribute('aria-label','Đang tải phim');timer=win.setTimeout(()=>{if(!disposed){node.dataset.rpLoading='slow';message.textContent='Đang chờ trình phát';message.hidden=false;retry.hidden=false;}},20000);}
+  function fail(text='Chưa tải được phim'){if(disposed)return;win.clearTimeout(timer);node.dataset.rpLoading='error';node.setAttribute('aria-label',text);spinner.hidden=true;message.textContent=text;message.hidden=false;retry.hidden=false;}
+  host.append(node);waiting();
+  return {node,fail,dispose(){disposed=true;win.clearTimeout(timer);node.remove();}};
+}
+
+function childLoading(win){
+  const doc=win.document;let panel=null,disposed=false;
+  const pending=()=>{if(!disposed && !panel)panel=loadingPanel(win,doc.documentElement,{fixed:true,onRetry:()=>win.location.reload()});};
+  const error=event=>{if(event.target?.tagName==='VIDEO'){pending();panel?.fail();}};
+  const waiting=event=>{if(event.target?.tagName==='VIDEO')pending();};
+  doc.addEventListener('error',error,true);doc.addEventListener('loadstart',waiting,true);doc.addEventListener('emptied',waiting,true);pending();
+  return {update(ready){if(disposed)return;if(ready){panel?.dispose();panel=null;}else pending();},dispose(){disposed=true;panel?.dispose();panel=null;doc.removeEventListener('error',error,true);doc.removeEventListener('loadstart',waiting,true);doc.removeEventListener('emptied',waiting,true);}};
+}
+
+// This guard is installed before the site descriptor/RSC arrives. CSS masks
+// the iframe in the first render, while the observer supplies our loading UI.
+function frameLoading(win){
+  const doc=win.document,selector='.player-ratio iframe#embed-player,iframe#player.player-iframe',records=new Map();let disposed=false;
+  playerUIStyle(doc);doc.documentElement.dataset.rpFrameGuard='1';
+  function prepare(frame,force=false){
+    if(disposed || !frame?.isConnected)return null;
+    let record=records.get(frame);
+    if(!record){record={src:null,panel:null,awaitingLoad:false,loaded:()=>{prepare(frame,true);record.awaitingLoad=false;}};records.set(frame,record);frame.addEventListener('load',record.loaded);}
+    if(force || record.src!==frame.src || record.host!==frame.parentElement){
+      if(record.src!==null && record.src!==frame.src)record.awaitingLoad=true;
+      record.src=frame.src;frame.dataset.rpDisplay='loading';record.panel?.dispose();
+      const host=frame.parentElement;record.host=host;host.dataset.rpFrameHost='1';
+      record.panel=loadingPanel(win,host,{onRetry:()=>{if(!frame.isConnected)return;record.awaitingLoad=true;prepare(frame,true);frame.src=record.src;}});
+    }
+    return record;
+  }
+  function scan(){
+    for(const frame of doc.querySelectorAll(selector))prepare(frame);
+    for(const [frame,record] of records)if(!frame.isConnected){record.panel?.dispose();frame.removeEventListener('load',record.loaded);records.delete(frame);}
+  }
+  const observer=new win.MutationObserver(scan);observer.observe(doc,{subtree:true,childList:true,attributes:true,attributeFilter:['src']});scan();
+  return {
+    begin(frame){const record=prepare(frame,true);if(record)record.awaitingLoad=true;},
+    update(info){
+      const frame=info.site?.frame,record=prepare(frame);if(!record)return;
+      if(!record.awaitingLoad && info.controlsReady===true && info.state?.ready && !info.state.ad && info.context && info.media && record.src===frame.src){frame.dataset.rpDisplay='custom';record.panel?.dispose();record.panel=null;}
+      else if(frame.dataset.rpDisplay==='custom')prepare(frame,true);
+      if(info.state?.failed===true)record.panel?.fail();
+    },
+    dispose(){disposed=true;observer.disconnect();for(const [frame,record] of records){record.panel?.dispose();frame.removeEventListener('load',record.loaded);delete frame.dataset.rpDisplay;}records.clear();delete doc.documentElement.dataset.rpFrameGuard;},
+  };
+}
+
+
+// ---- lib/fullscreen.js ----
+// Orientation belongs to the stable parent fullscreen host, not the iframe
+// document which is replaced on an episode change.
+function fullscreenController(win,{onChange=()=>{}}={}){
+  const doc=win.document,orientation=win.screen?.orientation;let target=null,epoch=0,attempt=-1,owned=false,inFlight=null,disposed=false,pending=null;
+  const mobile=()=>win.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(win.navigator.userAgent);
+  function unlock(){if(owned){owned=false;try{orientation?.unlock?.();}catch{/* browser already released it */}}}
+  function lock(){
+    if(disposed || !target || doc.fullscreenElement!==target || !mobile() || owned || inFlight || attempt===epoch)return;
+    if(typeof orientation?.lock!=='function'){doc.documentElement.dataset.rpOrientation='unsupported';return;}
+    const job={epoch,node:target};attempt=epoch;inFlight=job;
+    let request;try{request=orientation.lock('landscape');}catch{request=Promise.reject(new Error('orientation rejected'));}
+    Promise.resolve(request).then(()=>{
+      if(!disposed && job.epoch===epoch && doc.fullscreenElement===job.node){owned=true;doc.documentElement.dataset.rpOrientation='landscape';}
+      else try{orientation.unlock();}catch{/* late success after exit */}
+    },()=>{if(!disposed && job.epoch===epoch)doc.documentElement.dataset.rpOrientation='blocked';}).finally(()=>{if(inFlight===job)inFlight=null;if(!disposed && job.epoch!==epoch)lock();});
+  }
+  const changed=()=>{
+    if(disposed)return;
+    if(target && doc.fullscreenElement!==target){epoch++;unlock();target=null;delete doc.documentElement.dataset.rpOrientation;}
+    lock();onChange();
+  };
+  doc.addEventListener('fullscreenchange',changed);
+  return {
+    toggle(node){
+      if(disposed || !node?.isConnected)return Promise.resolve('unavailable');
+      if(pending)return pending;
+      const exiting=doc.fullscreenElement===node;
+      if(!exiting){epoch++;unlock();target=node;}
+      let request;try{request=exiting?doc.exitFullscreen():node.requestFullscreen();}catch{if(!exiting){epoch++;target=null;}return Promise.resolve('error');}
+      pending=Promise.resolve(request).then(()=>{if(disposed)return 'unavailable';changed();return doc.fullscreenElement===node?'fullscreen':'windowed';},()=>{if(doc.fullscreenElement!==node){epoch++;unlock();target=null;}return 'error';}).finally(()=>pending=null);
+      return pending;
+    },
+    dispose(){disposed=true;epoch++;unlock();target=null;doc.removeEventListener('fullscreenchange',changed);delete doc.documentElement.dataset.rpOrientation;},
+  };
 }
 
 
@@ -732,7 +840,7 @@ function customPlayerControls(win,player,options={}) {
   const releaseScrub=()=>{if(scrubbing){win.clearTimeout(scrubTimer);scrubTimer=win.setTimeout(()=>{if(!disposed){scrubbing=false;update();}},0);}};win.addEventListener('pointerup',releaseScrub);
   chrome.addEventListener('pointerdown',()=>win.clearTimeout(hideTimer));
   const fsChanged=()=>{if(!inFullscreen() && locked)setLocked(false);show();update();};doc.addEventListener('fullscreenchange',fsChanged);
-  const changed=()=>update();const mediaEvents=['loadedmetadata','canplay','timeupdate','play','pause','ratechange','volumechange','durationchange','emptied','loadstart'];for(const name of mediaEvents)video.addEventListener(name,changed);
+  const changed=()=>update();const mediaEvents=['error','loadedmetadata','canplay','timeupdate','play','pause','ratechange','volumechange','durationchange','emptied','loadstart'];for(const name of mediaEvents)video.addEventListener(name,changed);
   doc.addEventListener('visibilitychange',changed);
   const offPlayer=player.subscribe?.(changed);
   const lockedKey=event=>{if(locked && inFullscreen() && !event.ctrlKey && !event.metaKey && !event.altKey && [' ','k','j','l','m','f','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','<','>','0','1','2','3','4','5','6','7','8','9'].includes(event.key)){event.preventDefault();event.stopImmediatePropagation();}};
@@ -743,8 +851,9 @@ function customPlayerControls(win,player,options={}) {
   function update(){
     if(disposed)return;const state=player.state(),becameReady=state.ready&&!lastReady;lastReady=state.ready;shell.hidden=!state.ready;
     if(locked && !inFullscreen()){cancelGestures();locked=false;settings.hidden=true;win.clearTimeout(lockTimer);show();}
-    if(!state.ready){cancelGestures();scrubbing=false;locked=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);restoreNative();}
-    else{nativeOwned=true;root.dataset.rpCustomControls='1';if(video.controls)video.controls=false;video.setAttribute('playsinline','');video.setAttribute('webkit-playsinline','');}
+    if(!state.ready){cancelGestures();scrubbing=false;locked=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);}
+    // Readiness controls OUR UI, never whether the original controls return.
+    nativeOwned=true;root.dataset.rpCustomControls='1';if(video.controls)video.controls=false;video.setAttribute('playsinline','');video.setAttribute('webkit-playsinline','');
     if(becameReady || lastPaused!==null && state.paused!==lastPaused)show();lastPaused=state.paused;
     for(const node of [center,play,mute,fullscreen,settingsButton,seek,...rates.children])node.disabled=!state.ready||locked;
     for(const node of [center,play]){const kind=state.paused?'play':'pause';if(node.dataset.rpIcon!==kind){node.innerHTML=playerIcon(kind);node.dataset.rpIcon=kind;}node.setAttribute('aria-label',state.paused?'Phát':'Tạm dừng');}
@@ -786,18 +895,10 @@ function customPlayerControls(win,player,options={}) {
 // The iframe element and its fullscreen ancestor survive an episode change.
 // New HTML is read as data; no fetched scripts or React tree are executed.
 function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
-  const doc=win.document;let serial=0,controller=null,cover=null,coverTimer=0,disposed=false;
-  const covered=new WeakMap();
+  const doc=win.document;let serial=0,controller=null,disposed=false;
+  const loading=frameLoading(win),fullscreen=fullscreenController(win,{onChange});
   const href=()=>win.location.origin+win.location.pathname;
-  function style(){
-    if(doc.getElementById('rp-watch-navigation-style'))return;
-    const node=doc.createElement('style');node.id='rp-watch-navigation-style';
-    node.textContent='[data-rp-frame-host]{position:relative}[data-rp-frame-host]:fullscreen{width:100%;height:100%;background:#000;overflow:hidden}[data-rp-frame-host]:fullscreen>iframe{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;border:0!important}.rp-watch-loading{position:absolute;inset:0;z-index:2147483645;display:grid;place-items:center;background:#000;color:#fff;pointer-events:auto}.rp-watch-spinner{width:28px;height:28px;border:2px solid #ffffff38;border-top-color:#fff;border-radius:50%;animation:rp-watch-spin .8s linear infinite}@keyframes rp-watch-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.rp-watch-spinner{animation:none}}';
-    (doc.head || doc.documentElement).append(node);
-  }
-  function host(site){const node=site?.frame?.parentElement;if(node){style();node.dataset.rpFrameHost='1';}return node;}
-  function clearCover(){win.clearTimeout(coverTimer);cover?.remove();cover=null;}
-  function loading(site){clearCover();const parent=host(site);if(!parent)return;covered.set(site.frame,site.frame.src);cover=doc.createElement('div');cover.dataset.rpUi='watch-loading';cover.className='rp-watch-loading';cover.setAttribute('role','status');cover.setAttribute('aria-label','Đang tải tập phim');cover.innerHTML='<span class="rp-watch-spinner" aria-hidden="true"></span>';parent.append(cover);coverTimer=win.setTimeout(clearCover,8000);}
+  function host(site){const node=site?.frame?.parentElement;if(node)node.dataset.rpFrameHost='1';return node;}
   async function navigate(value,{site=detectSite(doc,win.location.href),keepLane=false,isCurrent=()=>true,pop=false}={}){
     const target=safeURL(value,win.location.href),current=readContext(site,doc),frame=site?.frame;
     if(disposed || !current || !target || target.origin!==win.location.origin || !target.pathname.startsWith('/xem-phim/') || !frame?.isConnected)return 'unavailable';
@@ -827,7 +928,7 @@ function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
       if(!next || !sameFilm(current,next) || !embed || !FRAME_ORIGINS.has(embed.origin))return 'unavailable';
       if(keepLane && (laneKey(next.lane)!==laneKey(current.lane) || next.season!==current.season))return 'missing';
       if(!live())return 'unavailable';
-      loading(site);
+      loading.begin(frame);
       // Call the native History method: React's patched pushState would start a
       // second router navigation and replace the player subtree we preserve.
       if(!pop)win.History.prototype.pushState.call(win.history,{...win.history.state,rpWatch:true},'',target.href);
@@ -872,12 +973,11 @@ function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
     event.stopImmediatePropagation();navigate(target.href,{site:previousSite,pop:true}).then(status=>{if(status!=='navigating' && win.location.href===target.href){win.History.prototype.replaceState.call(win.history,win.history.state,'',previousURL.href);onChange();}});
   };
   win.addEventListener('popstate',popstate,true);
-  const fullscreenChanged=()=>onChange();doc.addEventListener('fullscreenchange',fullscreenChanged);
   return {
     navigate,
-    fullscreen(site){const node=host(site);if(!node)return Promise.resolve('unavailable');try{return Promise.resolve(doc.fullscreenElement===node?doc.exitFullscreen():node.requestFullscreen()).then(()=>doc.fullscreenElement===node?'fullscreen':'windowed',()=> 'error');}catch{return Promise.resolve('error');}},
-    update(info){if(info.site?.frame && info.context && !info.state && covered.get(info.site.frame)!==info.site.frame.src)loading(info.site);if(cover){if(info.site?.frame)covered.set(info.site.frame,info.site.frame.src);if(info.state?.ready || info.state?.ad)clearCover();}},
-    dispose(){disposed=true;serial++;controller?.abort();clearCover();doc.removeEventListener('click',click,true);win.removeEventListener('message',nativeNext,true);win.removeEventListener('popstate',popstate,true);doc.removeEventListener('fullscreenchange',fullscreenChanged);},
+    fullscreen(site){return fullscreen.toggle(host(site));},
+    update(info){loading.update(info);},
+    dispose(){disposed=true;serial++;controller?.abort();loading.dispose();fullscreen.dispose();doc.removeEventListener('click',click,true);win.removeEventListener('message',nativeNext,true);win.removeEventListener('popstate',popstate,true);},
   };
 }
 
@@ -894,6 +994,8 @@ function startGestures(win,page) {
   }
   let mounted=null,site=null,context=null,bridge=null,frameFullscreen=false,endedKey='';
   const releaseStartup=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?playerStartupGuard(win):()=>{};
+  const childGate=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?childLoading(win):null;
+  const controlsReady=()=>!!context && !!mounted?.ui.shell.isConnected && !mounted.ui.shell.hidden && mounted.player.state().ready && !mounted.player.state().ad;
   const navigation=win.parent===win?watchNavigation(win,{onChange:()=>bridge?.refresh(),ownsPlayer:()=>bridge?.state()?.ready && !bridge.state().ad}):null;
   const unbind=()=>{mounted?.ui.dispose();mounted=null;};
   const next=async(action,request)=>{
@@ -934,11 +1036,11 @@ function startGestures(win,page) {
         unbind();
         if(info.player)mounted={player:info.player,ui:customPlayerControls(win,info.player,{autoPlay:true,isFullscreen:()=>frameFullscreen,onNext:()=>bridge?.request('next') ?? false,onFullscreen:()=>{const pending=bridge?.request('fullscreen');return pending && pending.then(status=>{if(status==='fullscreen' || status==='windowed'){frameFullscreen=status==='fullscreen';mounted?.ui.update();}return status;});}})};
       }
-      mounted?.ui.setContext(context);if(info.state?.ready || info.state?.ad)releaseStartup();
+      mounted?.ui.setContext(context);childGate?.update(controlsReady());
     },
-    unbind,request:next,
+    unbind,request:next,controlsReady,
   });
-  win.addEventListener('pagehide',event=>{if(!event.persisted){releaseStartup();bridge.dispose();navigation?.dispose();unbind();}});
+  win.addEventListener('pagehide',event=>{if(!event.persisted){bridge.dispose();navigation?.dispose();unbind();childGate?.dispose();releaseStartup();}});
 }
 startGestures(window, typeof unsafeWindow==='undefined' ? window : unsafeWindow);
 

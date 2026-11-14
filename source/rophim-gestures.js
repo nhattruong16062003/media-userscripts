@@ -4,6 +4,7 @@ import {customPlayerControls} from '../lib/custom-controls.js';
 import {watchNavigation} from '../lib/watch-navigation.js';
 import {playerStartupGuard} from '../lib/player-ui.js';
 import {FRAME_ORIGINS} from '../lib/core.js';
+import {childLoading} from '../lib/player-loading.js';
 
 function startGestures(win,page) {
   // document-start may run before <html> exists, especially in a new iframe.
@@ -15,6 +16,8 @@ function startGestures(win,page) {
   }
   let mounted=null,site=null,context=null,bridge=null,frameFullscreen=false,endedKey='';
   const releaseStartup=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?playerStartupGuard(win):()=>{};
+  const childGate=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?childLoading(win):null;
+  const controlsReady=()=>!!context && !!mounted?.ui.shell.isConnected && !mounted.ui.shell.hidden && mounted.player.state().ready && !mounted.player.state().ad;
   const navigation=win.parent===win?watchNavigation(win,{onChange:()=>bridge?.refresh(),ownsPlayer:()=>bridge?.state()?.ready && !bridge.state().ad}):null;
   const unbind=()=>{mounted?.ui.dispose();mounted=null;};
   const next=async(action,request)=>{
@@ -55,10 +58,10 @@ function startGestures(win,page) {
         unbind();
         if(info.player)mounted={player:info.player,ui:customPlayerControls(win,info.player,{autoPlay:true,isFullscreen:()=>frameFullscreen,onNext:()=>bridge?.request('next') ?? false,onFullscreen:()=>{const pending=bridge?.request('fullscreen');return pending && pending.then(status=>{if(status==='fullscreen' || status==='windowed'){frameFullscreen=status==='fullscreen';mounted?.ui.update();}return status;});}})};
       }
-      mounted?.ui.setContext(context);if(info.state?.ready || info.state?.ad)releaseStartup();
+      mounted?.ui.setContext(context);childGate?.update(controlsReady());
     },
-    unbind,request:next,
+    unbind,request:next,controlsReady,
   });
-  win.addEventListener('pagehide',event=>{if(!event.persisted){releaseStartup();bridge.dispose();navigation?.dispose();unbind();}});
+  win.addEventListener('pagehide',event=>{if(!event.persisted){bridge.dispose();navigation?.dispose();unbind();childGate?.dispose();releaseStartup();}});
 }
 startGestures(window, typeof unsafeWindow==='undefined' ? window : unsafeWindow);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.3.2
+// @version      0.3.3
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -292,7 +292,7 @@ function attachPlayer(candidate) {
       const duration = kind === 'jw' ? api.getDuration() : video.duration;
       const time = kind === 'jw' ? api.getPosition() : video.currentTime;
       const ad = !!isAd();
-      return {kind,ready:video.isConnected && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
+      return {kind,failed:!!video.error,ready:video.isConnected && !video.error && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
     } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false,played:false}; }
   };
   const command = (action,value) => {
@@ -321,7 +321,7 @@ function playerFingerprint(candidate) {
 // ---- lib/bridge.js ----
 
 function validState(s) {
-  return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
+  return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && (s.failed === undefined || typeof s.failed === 'boolean') && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
 }
 function acceptsPacket(event, session, channel) {
   const d = event.data;
@@ -341,16 +341,17 @@ function createBridge(win, page, feature, callbacks = {}) {
   const top = win.parent === win;
   if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return {dispose(){},state:()=>null,command:()=>false};
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
-  let boundFrame = null,frameFullscreen=false;
+  let boundFrame = null,frameFullscreen=false,controlsReady=false;
   let knownSource=false, snapshot=null, pending='', retryAfter=0;
   const requests=new Map();
   const resultStatuses=action=>action==='fullscreen'?['fullscreen','windowed','error','unavailable']:['missing','error','navigating','unavailable'];
   const clearRequests=()=>{for(const request of requests.values()){win.clearTimeout(request.timer);request.resolve('unavailable');}requests.clear();};
   const referrer = safeURL(win.document.referrer)?.origin;
-  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen});
-  const resetRemote = () => { remote = null; media = ''; session = null; generation++; emit(); };
+  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen,controlsReady:top?controlsReady:false});
+  const resetRemote = () => { remote = null; controlsReady=false;media = ''; session = null; generation++; emit(); };
   const loaded = () => { resetRemote(); tick(); };
   const send = data => { if (session) session.source.postMessage({...data,channel,token:session.token,generation:session.generation,seq:++sequence},session.origin); };
+  const report = () => {if(local && session)send({type:'state',state:local.state(),media,controlsReady:callbacks.controlsReady?.()===true});};
   const onMessage = event => {
     const d = event.data;
     if (!d || d.channel !== channel) return;
@@ -363,14 +364,14 @@ function createBridge(win, page, feature, callbacks = {}) {
       }
       if(d.seq<=session.seq)return;
       session.seq=d.seq;
-      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;emit();
+      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;emit();report();
       return;
     }
     if (!acceptsPacket(event,session,channel)) return;
     if (top) {
       if (!boundFrame?.isConnected || boundFrame.contentWindow !== event.source || boundFrame.src !== session.src || contextKey(context) !== session.key) return;
       if (d.type === 'state' && validState(d.state) && /^[a-f\d]{32}$/.test(d.media)) {
-        session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};emit();
+        session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};controlsReady=d.controlsReady===true;emit();
       } else if (d.type === 'request' && ['next','fullscreen'].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
         session.seq = d.seq;
         if(session.requesting && Date.now()<=session.requesting.until)return;
@@ -422,7 +423,7 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (!session) { session = {source:frame.contentWindow,origin:url.origin,src:frame.src,key:contextKey(context),token:token(win),generation,seq:-1,seen:0};sequence = 0; }
       frameFullscreen=!!win.document.fullscreenElement?.contains(frame);
       send({type:'hello',context,fullscreen:frameFullscreen});
-      if (session.seen && Date.now() - session.seen > 4000) {remote = null;media = '';emit();}
+      if (session.seen && Date.now() - session.seen > 4000) {remote = null;controlsReady=false;media = '';emit();}
       diagnostic(win.document,feature,site.kind + '/' + (remote?.ready ? remote.kind : 'chờ player nội dung'));
     } else {
       const candidate = playerCandidate(win,page);
@@ -431,8 +432,7 @@ function createBridge(win, page, feature, callbacks = {}) {
       if (candidate?.video !== local?.video || candidate?.api !== local?.api || candidate?.kind !== local?.kind || source !== lastSource) {
         clearRequests();callbacks.unbind?.(local); local?.dispose();local = candidate ? attachPlayer(candidate) : null;lastSource = source;media = local ? token(win) : '';emit();
       }
-      if (local && session) send({type:'state',state:local.state(),media});
-      if(local)emit();
+      if(local){emit();report();}
       diagnostic(win.document,feature,local ? local.kind + '/' + (local.state().ready ? 'ready' : 'chờ metadata/nội dung') : 'player chưa nhận diện');
     }
   };
@@ -456,7 +456,7 @@ function createBridge(win, page, feature, callbacks = {}) {
         requests.set(id,{resolve,timer,action});
         // Flush state so the parent validates the same active resource even
         // before the first heartbeat.
-        send({type:'state',state:local.state(),media});send({type:'request',action,id,media});
+        report();send({type:'request',action,id,media});
       });
     },
     refresh:tick,
