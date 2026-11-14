@@ -8,16 +8,33 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const waiting=new Map();
   let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
   const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');
+  function guardedFrames(){
+    // These extra slots receive status UI only. They do not authorize a new
+    // origin, open a bridge session or infer an engine from the server label.
+    const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,.mc-player-stage>iframe')]
+      .filter(frame=>frame.tagName==='IFRAME' && sites.visible(frame) && !sites.isPrepared(frame) && sites.url(frame.getAttribute('src')));
+    return [...new Set([...sites.playerFrames(),...slots])];
+  }
   function prepareFrames(){
     if(disposed || window.top!==window)return;
-    for(const frame of sites.playerFrames()){
+    const frames=guardedFrames();
+    for(const frame of frames){
       if(waiting.has(frame))continue;
-      const reset=()=>{frame.dataset.mcDisplay='loading';const record=waiting.get(frame);record?.panel?.dispose();const host=frame.parentElement;if(host){if(getComputedStyle(host).position==='static')host.style.position='relative';record.panel=SharedPlayer.loadingPanel(window,host,{onRetry:()=>{if(frame.isConnected){reset();frame.src=frame.src;}}});}};
-      const record={panel:null,reset,src:frame.src};waiting.set(frame,record);frame.addEventListener('load',reset);reset();
+      const reset=()=>{
+        frame.dataset.mcDisplay='loading';const record=waiting.get(frame);if(!record)return;
+        record.panel?.dispose();const host=frame.parentElement;
+        if(host){
+          if(getComputedStyle(host).position==='static')host.style.position='relative';
+          record.host=host;record.panel=SharedPlayer.loadingPanel(window,host,{onRetry:()=>{if(frame.isConnected){reset();frame.src=frame.src;}}});
+          if(!sites.playerFrames().includes(frame))record.panel.fail('Nguồn phát này chưa được hỗ trợ. Hãy chọn server khác.');
+        }
+      };
+      const error=()=>waiting.get(frame)?.panel?.fail('Chưa tải được nguồn phim. Hãy thử lại hoặc đổi server.');
+      const record={panel:null,host:null,reset,error,src:frame.src};waiting.set(frame,record);frame.addEventListener('load',reset);frame.addEventListener('error',error);reset();
     }
     for(const [frame,record] of waiting){
-      if(!frame.isConnected || sites.isPrepared(frame)){record.panel?.dispose();frame.removeEventListener('load',record.reset);waiting.delete(frame);}
-      else if(frame.src!==record.src){record.src=frame.src;record.reset();}
+      if(!frame.isConnected || sites.isPrepared(frame) || !frames.includes(frame)){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);waiting.delete(frame);}
+      else if(frame.src!==record.src || frame.parentElement!==record.host){record.src=frame.src;record.reset();}
     }
   }
   function guard(){
@@ -86,5 +103,5 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.4
+// @version      6.0.5
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -19,6 +19,7 @@
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
+// @match        https://embed11.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @run-at       document-start
@@ -1535,7 +1536,9 @@ function createMotchillSites() {
   // motchillf.im sv-1/sv-2 (2026-11-13) declares the exact NC embed.php hosts
   // below; NC currently returns a Cloudflare challenge. VSM v9 was HTTP200,
   // with the same JW player/origin.js schema as the verified v8 player.
-  const embedHosts = new Set(['fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  // Tập 35 sv-1 do người dùng cung cấp (2026-11-14) khai báo embed11.
+  // Quyền origin riêng; không coi hostname là bằng chứng về engine bên trong.
+  const embedHosts = new Set(['fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
   const ROLE_ATTR = 'data-mc-role';
   const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
   // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
@@ -1587,6 +1590,7 @@ function createMotchillSites() {
       'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//,
       'cdn.loadvid.com': /^\/videos\/play\//, 'embed13.streamc.xyz': /^\/.+/,
       'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
+      'embed11.streamc.xyz': /^\/embed\.php$/,
       'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
     };
     return !!paths[parsed.hostname]?.test(parsed.pathname);
@@ -4086,16 +4090,33 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const waiting=new Map();
   let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
   const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');
+  function guardedFrames(){
+    // These extra slots receive status UI only. They do not authorize a new
+    // origin, open a bridge session or infer an engine from the server label.
+    const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,.mc-player-stage>iframe')]
+      .filter(frame=>frame.tagName==='IFRAME' && sites.visible(frame) && !sites.isPrepared(frame) && sites.url(frame.getAttribute('src')));
+    return [...new Set([...sites.playerFrames(),...slots])];
+  }
   function prepareFrames(){
     if(disposed || window.top!==window)return;
-    for(const frame of sites.playerFrames()){
+    const frames=guardedFrames();
+    for(const frame of frames){
       if(waiting.has(frame))continue;
-      const reset=()=>{frame.dataset.mcDisplay='loading';const record=waiting.get(frame);record?.panel?.dispose();const host=frame.parentElement;if(host){if(getComputedStyle(host).position==='static')host.style.position='relative';record.panel=SharedPlayer.loadingPanel(window,host,{onRetry:()=>{if(frame.isConnected){reset();frame.src=frame.src;}}});}};
-      const record={panel:null,reset,src:frame.src};waiting.set(frame,record);frame.addEventListener('load',reset);reset();
+      const reset=()=>{
+        frame.dataset.mcDisplay='loading';const record=waiting.get(frame);if(!record)return;
+        record.panel?.dispose();const host=frame.parentElement;
+        if(host){
+          if(getComputedStyle(host).position==='static')host.style.position='relative';
+          record.host=host;record.panel=SharedPlayer.loadingPanel(window,host,{onRetry:()=>{if(frame.isConnected){reset();frame.src=frame.src;}}});
+          if(!sites.playerFrames().includes(frame))record.panel.fail('Nguồn phát này chưa được hỗ trợ. Hãy chọn server khác.');
+        }
+      };
+      const error=()=>waiting.get(frame)?.panel?.fail('Chưa tải được nguồn phim. Hãy thử lại hoặc đổi server.');
+      const record={panel:null,host:null,reset,error,src:frame.src};waiting.set(frame,record);frame.addEventListener('load',reset);frame.addEventListener('error',error);reset();
     }
     for(const [frame,record] of waiting){
-      if(!frame.isConnected || sites.isPrepared(frame)){record.panel?.dispose();frame.removeEventListener('load',record.reset);waiting.delete(frame);}
-      else if(frame.src!==record.src){record.src=frame.src;record.reset();}
+      if(!frame.isConnected || sites.isPrepared(frame) || !frames.includes(frame)){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);waiting.delete(frame);}
+      else if(frame.src!==record.src || frame.parentElement!==record.host){record.src=frame.src;record.reset();}
     }
   }
   function guard(){
@@ -4164,7 +4185,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }
 
 // END MOTCHILL SITES

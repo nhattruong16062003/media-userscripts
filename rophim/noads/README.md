@@ -1,5 +1,5 @@
 # RoPhim — Chặn quảng cáo
 
-Phiên bản **0.4.4**. Mở [link cài](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.4/rophim/noads/rophim-noads.user.js) bằng Firefox đã cài Tampermonkey, rồi chọn Cài đặt/Cập nhật.
+Phiên bản **0.4.5**. Mở [link cài](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.5/rophim/noads/rophim-noads.user.js) bằng Firefox đã cài Tampermonkey, rồi chọn Cài đặt/Cập nhật.
 
 Xem [hướng dẫn sử dụng](../README.md) và [cài trên Firefox](../docs/FIREFOX.md).

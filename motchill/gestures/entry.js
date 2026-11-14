@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.4
+// @version      6.0.5
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -19,6 +19,7 @@
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
+// @match        https://embed11.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @run-at       document-start

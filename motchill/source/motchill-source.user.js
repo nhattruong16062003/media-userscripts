@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - mở bản trực tiếp
 // @namespace    motchill-source
-// @version      6.0.4
+// @version      6.0.5
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/source/motchill-source.user.js
@@ -10,6 +10,7 @@
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
+// @match        https://embed11.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @include      /^https?:\/\/[^\/?#]*motchill[^\/?#]*\//
@@ -133,7 +134,9 @@ function createMotchillSites() {
   // motchillf.im sv-1/sv-2 (2026-11-13) declares the exact NC embed.php hosts
   // below; NC currently returns a Cloudflare challenge. VSM v9 was HTTP200,
   // with the same JW player/origin.js schema as the verified v8 player.
-  const embedHosts = new Set(['fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  // Tập 35 sv-1 do người dùng cung cấp (2026-11-14) khai báo embed11.
+  // Quyền origin riêng; không coi hostname là bằng chứng về engine bên trong.
+  const embedHosts = new Set(['fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
   const ROLE_ATTR = 'data-mc-role';
   const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
   // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
@@ -185,6 +188,7 @@ function createMotchillSites() {
       'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//,
       'cdn.loadvid.com': /^\/videos\/play\//, 'embed13.streamc.xyz': /^\/.+/,
       'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
+      'embed11.streamc.xyz': /^\/embed\.php$/,
       'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
     };
     return !!paths[parsed.hostname]?.test(parsed.pathname);

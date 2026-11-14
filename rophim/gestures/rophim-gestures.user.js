@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.4
+// @version      0.4.5
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
