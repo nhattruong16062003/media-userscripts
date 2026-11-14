@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.1.2
+// @version      0.2.0
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -59,6 +59,44 @@ function storageAPI(win) {
   };
 }
 function clampSeek(time, duration) { return Math.max(0, Math.min(Math.max(0, duration - 0.25), time)); }
+
+
+// ---- lib/identity.js ----
+
+const identityText=value=>normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/[^a-z0-9]+/g,' ').trim();
+function laneKey(value) {
+  const text=identityText(value);
+  if(['subtitle','vietsub','phu de','vs'].includes(text))return 'subtitle';
+  if(['dubbed','long tieng'].includes(text))return 'dubbed';
+  if(['voiceover','thuyet minh','tm'].includes(text))return 'voiceover';
+  return text;
+}
+function episodeKey(value) {
+  const text=identityText(value);
+  if(/^(full|tap full|trailer)$/.test(text))return text==='trailer'?'trailer':'full';
+  const number=text.match(/^(?:(?:tap|episode|ep) )?(\d+)(?: (\d+))?$/);
+  return number?String(Number(number[1]))+(number[2]?'.'+Number(number[2]):''):text;
+}
+function movieIdentity(movie={}) {
+  const type=movie.type==='movie'?'movie':movie.type==='series'?'tv':'';
+  return {originalTitle:bounded(movie.origin_name || movie.originalTitle || ''),year:/^(19|20)\d{2}$/.test(String(movie.publish_year || movie.year))?String(movie.publish_year || movie.year):'',mediaType:type,
+    externalImdb:/^tt\d+$/.test(movie.imdb_id || '')?movie.imdb_id:'',externalTmdb:type && /^\d+$/.test(String(movie.tmdb_id || ''))?type+':'+movie.tmdb_id:'',poster:bounded(movie.thumbnail || movie.poster || '',2048)};
+}
+function sameFilm(a,b) {
+  if(!a || !b)return false;
+  if(a.year && b.year && a.year!==b.year || a.mediaType && b.mediaType && a.mediaType!==b.mediaType)return false;
+  const shared=['externalImdb','externalTmdb'].filter(key=>a[key]&&b[key]);
+  if(shared.length)return shared.every(key=>a[key]===b[key]);
+  const originalA=identityText(a.originalTitle),originalB=identityText(b.originalTitle);
+  if(originalA && originalB && originalA!==originalB)return false;
+  if(a.year && b.year && a.year===b.year && (originalA && originalA===originalB || identityText(a.title) && identityText(a.title)===identityText(b.title)))return true;
+  // Older local records can still resume on their original source. Internal IDs
+  // never establish identity between different source contracts.
+  return a.source===b.source && a.movieID===b.movieID && a.movie===b.movie && !!safeURL(a.url) && safeURL(a.url).origin===safeURL(b.url)?.origin;
+}
+function sameEpisode(a,b) {
+  return sameFilm(a,b) && String(a.season)===String(b.season) && laneKey(a.lane)===laneKey(b.lane) && !!episodeKey(a.episode) && episodeKey(a.episode)===episodeKey(b.episode);
+}
 
 
 // ---- lib/sites.js ----
@@ -129,7 +167,7 @@ function detectSite(doc, href, page = {}) {
   const movieSlug = url.pathname.slice('/xem-phim/'.length).replace(/\.\d+$/, '');
   const movie = data.movies.findLast(m => m.slug === movieSlug && typeof m.id === 'number');
   if (!movie) return null;
-  if (typeof episode.server_type === 'string' && Number.isFinite(episode.episode_order) && Number.isFinite(episode.season_number)) {
+  if (typeof episode.server_type === 'string' && (Number.isFinite(episode.episode_order) || episode.episode_order===null && /^(?:tập\s*)?full$/i.test(episode.name)) && Number.isFinite(episode.season_number)) {
     return {kind:'next-ordered', frame, url, episode, movie};
   }
   if (doc.querySelector('.player-frame-stable') && frame.classList.contains('player-frame-content')) return {kind:'next-basic', frame, url, episode, movie};
@@ -142,7 +180,7 @@ function readContext(site, doc) {
     case 'next-basic': {
       const {episode:e, movie:m, url} = site;
       const season = e.season_number || m.latestEpisodes?.find(item=>item.id===e.id)?.season_number || m.partNumber || 1;
-      return {source:site.kind, movie:bounded(m.slug), movieID:String(m.id), title:bounded(m.name), episode:bounded(e.name), episodeID:String(e.id), season:String(season), lane:bounded(e.server_type || e.server), server:bounded(e.server), url:url.origin+url.pathname};
+      return {source:site.kind, movie:bounded(m.slug), movieID:String(m.id), title:bounded(m.name), episode:bounded(e.name), episodeID:String(e.id), season:String(season), lane:bounded(e.server_type || e.server), server:bounded(e.server), url:url.origin+url.pathname,...movieIdentity(m)};
     }
     case 'legacy-panels': {
       const cookies = Object.fromEntries(doc.cookie.split(';').map(v => v.trim().split('=')));
@@ -153,7 +191,10 @@ function readContext(site, doc) {
       const server = panel.querySelector('[data-server].current')?.dataset.server || '';
       const title = (doc.querySelector('meta[property="og:title"]')?.content || doc.title).split('|')[0].trim();
       const movie = site.url.pathname.split('/').at(-1).replace(/-tap-\d+(?:\.[^/]*)?$/, '');
-      return {source:site.kind, movie, movieID:movie, title:bounded(title.replace(/\s*-\s*Tập\s*\d+.*$/i,'')), episode:bounded(active.querySelector('.v-title,.info')?.textContent?.trim() || active.textContent?.trim()), episodeID:site.url.pathname, season:normalize(title.match(/phần\s*\d+/i)?.[0] || '1'), lane, server, url:site.url.origin+site.url.pathname};
+      const rawTitle=doc.querySelector('meta[property="og:title"]')?.content || doc.title;
+      const original=rawTitle.split('|')[1]?.trim() || '';
+      return {source:site.kind, movie, movieID:movie, title:bounded(title.replace(/\s*-\s*Tập\s*\d+.*$/i,'')), episode:bounded(active.querySelector('.v-title,.info')?.textContent?.trim() || active.textContent?.trim()), episodeID:site.url.pathname, season:title.match(/phần\s*(\d+)/i)?.[1] || '1', lane, server, url:site.url.origin+site.url.pathname,
+        originalTitle:bounded(original.replace(/\s+(?:season|phần)\s*\d+/ig,'').replace(/\s+(?:19|20)\d{2}\s*$/,'')),year:original.match(/\b((?:19|20)\d{2})\s*$/)?.[1] || '',mediaType:'tv',externalImdb:'',externalTmdb:'',poster:bounded(doc.querySelector('meta[property="og:image"]')?.content || '',2048)};
     }
     default: return null;
   }
@@ -161,10 +202,18 @@ function readContext(site, doc) {
 function contextKey(c) { return c ? [c.source,c.movieID,c.movie,c.season,c.episodeID,c.lane].map(encodeURIComponent).join('|') : ''; }
 function introKey(c) { return [c.source,c.movieID,c.movie,c.season,c.lane].map(encodeURIComponent).join('|'); }
 function episodeNext(entries, current) {
-  const lane = entries.filter(e => normalize(e.server_type || e.server) === normalize(current.lane) && String(e.season_number || 1) === current.season);
-  lane.sort((a,b) => (a.episode_order ?? Number(a.name?.match(/\d+/)?.[0])) - (b.episode_order ?? Number(b.name?.match(/\d+/)?.[0])));
-  const index = lane.findIndex(e => String(e.id) === current.episodeID);
-  return index >= 0 ? lane[index + 1] || null : null;
+  const season = entries.filter(e => String(e.season_number || 1) === current.season);
+  const lane = season.filter(e => laneKey(e.server_type || e.server) === laneKey(current.lane));
+  const order=e=>Number.isFinite(e.episode_order)?e.episode_order:/^(?:tập\s*)?\d+(?:\.\d+)?$/i.test(e.name || '')?Number(e.name.match(/[\d.]+/)[0]):null;
+  const active=lane.find(e=>String(e.id)===current.episodeID),position=active?order(active):null;
+  if(position===null)return null;
+  // Determine the next position before selecting its translation. A delayed dub
+  // must not silently jump over an episode that exists only in another lane.
+  const positions=season.map(order).filter(value=>value!==null && value>position);
+  if(!positions.length)return null;
+  const nextPosition=Math.min(...positions);
+  const next=lane.filter(e=>order(e)===nextPosition);
+  return next.length===1?next[0]:null;
 }
 async function nextRoute(site, context, win) {
   switch (site?.kind) {
@@ -233,7 +282,7 @@ function attachPlayer(candidate) {
       const time = kind === 'jw' ? api.getPosition() : video.currentTime;
       const ad = !!isAd();
       return {kind,ready:video.isConnected && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
-    } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false}; }
+    } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false,played:false}; }
   };
   const command = (action,value) => {
     const s = state();
@@ -247,7 +296,7 @@ function attachPlayer(candidate) {
     }
     return true;
   };
-  return {kind,video,root,api,state,command,dispose() { for (const [event,handler] of handlers) api.off?.(event,handler); }};
+  return {kind,video,root,api,state,command,fingerprint:()=>playerFingerprint(candidate),dispose() { for (const [event,handler] of handlers) api.off?.(event,handler); }};
 }
 function playerFingerprint(candidate) {
   try {
@@ -271,7 +320,9 @@ function bridgeContext(value) {
   if(!value || !['next-ordered','next-basic','legacy-panels'].includes(value.source) || keys.some(k=>typeof value[k]!=='string' || value[k].length>2048))return null;
   const url=safeURL(value.url);
   if(!url || !isSiteOrigin(url.origin) || !url.pathname.startsWith('/xem-phim/'))return null;
-  return Object.fromEntries(keys.map(k=>[k,value[k]]));
+  const result=Object.fromEntries(keys.map(k=>[k,value[k]]));
+  for(const key of ['originalTitle','year','mediaType','externalImdb','externalTmdb','poster'])if(typeof value[key]==='string' && value[key].length<=2048)result[key]=value[key];
+  return result;
 }
 function createBridge(win, page, feature, callbacks = {}) {
   const channel = 'rophim.' + feature + '.v1';
@@ -379,6 +430,8 @@ function uiStyle(doc) {
   const style = doc.createElement('style');style.id = 'rp-ui-style';
   style.textContent = `[data-rp-ui]{font:13px/1.5 system-ui,sans-serif;color:#fff;box-sizing:border-box}[data-rp-ui] button,[data-rp-ui] a{font:inherit;cursor:pointer;background:#202735;color:#fff;border:1px solid #68758a;border-radius:6px;padding:6px 9px;text-decoration:none}[data-rp-ui] button:disabled{opacity:.45;cursor:default}[data-rp-ui] button:focus-visible,[data-rp-ui] a:focus-visible{outline:2px solid #ffe08a;outline-offset:2px}[data-rp-ui] input{font:inherit;color:#fff;background:#202735;border:1px solid #68758a;border-radius:4px;width:65px;padding:4px}.rp-tools{position:absolute;top:8px;right:8px;z-index:2147483645;max-width:calc(100% - 16px)}.rp-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:7px;background:#101722ed;border-radius:8px;max-width:600px}.rp-tools>summary{cursor:pointer;list-style:none;background:#101722c9;border:1px solid #68758a;border-radius:6px;width:32px;text-align:center;padding:3px}.rp-toast{display:block;max-width:320px;background:#101722e8;border-radius:6px;margin-top:4px;padding:3px 6px}.rp-page{position:fixed;bottom:14px;left:14px;z-index:2147483645}.rp-panel{position:fixed;inset:8vh max(12px,calc((100vw - 720px)/2));z-index:2147483646;overflow:auto;background:#101722;border:1px solid #68758a;border-radius:12px;padding:14px;box-shadow:0 12px 60px #0009;max-height:84vh}.rp-panel article{padding:10px 0;border-bottom:1px solid #394457}.rp-panel p{margin:4px 0}.rp-panel a{display:inline-block;margin:4px 5px 4px 0}`;
   style.textContent+='[data-rp-ui][hidden],[data-rp-ui] [hidden]{display:none!important}';
+  style.textContent+='.rp-continue{position:relative;margin:90px 16px 20px;padding:16px;background:#101722;color:#fff;border:1px solid #394457;border-radius:12px;z-index:1}.rp-continue h2{font-size:21px;margin:0 0 12px}.rp-continue h3{font-size:16px;margin:0 0 6px}.rp-history-cards{display:flex;gap:12px;overflow-x:auto;padding:4px 0 10px}.rp-history-cards article{flex:0 0 250px;padding:12px;border:1px solid #394457;border-radius:8px}.rp-history-cards a{display:inline-block;margin:8px 0 0}.rp-history-cards p{margin:4px 0 10px}';
+  style.textContent+='[data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}[data-rp-custom-controls="1"] .loading-screen{pointer-events:none!important}.rp-player-shell{position:absolute;inset:0;z-index:2147483642;pointer-events:none}.rp-gesture-surface{position:absolute;inset:0;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.rp-player-chrome{position:absolute;bottom:0;left:0;right:0;padding:9px;background:linear-gradient(transparent,#000d);pointer-events:auto}.rp-player-line{display:flex;gap:6px;align-items:center}.rp-player-line button,.rp-unlock{min-height:44px;min-width:44px}.rp-player-time{flex:1;text-align:center;font-size:12px}.rp-player-chrome input[type="range"]{display:block;width:100%;box-sizing:border-box;margin:7px 0 0;min-height:32px;padding:0;accent-color:#ffe08a;touch-action:none}.rp-unlock{position:absolute;left:10px;top:10px;pointer-events:auto;background:#101722ed!important}.rp-player-shell>.rp-toast{position:absolute;top:12px;left:50%;transform:translateX(-50%);pointer-events:none}.rp-player-shell [hidden],.rp-player-shell [hidden].rp-unlock{display:none!important}';
   (doc.head || doc.documentElement).append(style);
 }
 function makeButton(doc, label, action, parent) {
@@ -413,12 +466,64 @@ function historyRow(context,state,now=Date.now()) {
 }
 function createHistoryStore(store) {
   const key=c=>HISTORY_PREFIX+contextKey(c);
+  const all=()=>store.keys().filter(k=>k.startsWith(HISTORY_PREFIX)).map(k=>store.get(k,null)).filter(validHistory).sort((a,b)=>b.updated-a.updated);
   return {
-    read(c){const row=store.get(key(c),null);return validHistory(row)?row:null;},
+    read(c){return c?all().find(row=>sameEpisode(c,row)):null;},
     save(row){if(!validHistory(row))return false;const old=store.get(key(row),null);if(old?.updated>row.updated)return false;store.set(key(row),row);return true;},
-    list(){return store.keys().filter(k=>k.startsWith(HISTORY_PREFIX)).map(k=>store.get(k,null)).filter(validHistory).sort((a,b)=>b.updated-a.updated);},
-    remove(c){store.remove(key(c));},
+    list(){const rows=[];for(const row of all())if(!rows.some(other=>sameEpisode(row,other)))rows.push(row);return rows;},
+    continuing(){const rows=[];for(const row of all())if(!rows.some(other=>sameFilm(row,other) && row.season===other.season && laneKey(row.lane)===laneKey(other.lane)))rows.push(row);return rows.filter(row=>!row.completed);},
+    remove(c){for(const row of all())if(sameEpisode(c,row))store.remove(key(row));},
   };
+}
+
+
+// ---- lib/history-navigation.js ----
+
+// Resolve a watch route on the destination website. Neither internal movie IDs
+// nor episode IDs are carried from the source website to another backend.
+async function historyDestination(row,win) {
+  if(!isSiteOrigin(win.location.origin))return null;
+  const original=safeURL(row.url);
+  if(original?.origin===win.location.origin && original.pathname.startsWith('/xem-phim/'))return {url:original.href,source:row.source,lane:row.lane};
+  const candidates=[];
+  for(const a of win.document.querySelectorAll('a[href]')){
+    const url=safeURL(a.href,win.location.href);
+    if(url?.origin===win.location.origin && /^\/(?:phim|xem-phim)\//.test(url.pathname) && (url.pathname.includes('/'+row.movie) || identityText(a.textContent)===identityText(row.title)))candidates.push(url.href);
+  }
+  if(/^[a-z0-9-]{1,200}$/i.test(row.movie))candidates.push(new URL('/xem-phim/'+row.movie,win.location.href).href);
+  const load=async url=>{
+    const response=await win.fetch(url,{credentials:'same-origin'});
+    if(!response.ok || response.url && safeURL(response.url)?.origin!==win.location.origin)return null;
+    const html=await response.text();
+    return html.length<=2_000_000?new win.DOMParser().parseFromString(html,'text/html'):null;
+  };
+  for(const url of [...new Set(candidates)].slice(0,5)){
+    const doc=await load(url);if(!doc)continue;
+    const site=detectSite(doc,url),context=readContext(site,doc);
+    if(!context || !sameFilm(row,context))continue;
+    switch(site.kind){
+      case 'next-ordered':
+      case 'next-basic':{
+        const prefix=site.kind==='next-basic'?'/api/baseapi':'/baseapi';
+        const response=await win.fetch(prefix+'/api/v1/episodes/by-idMovie/'+encodeURIComponent(context.movieID),{credentials:'same-origin'});
+        if(!response.ok)return null;
+        const data=await response.json(),entries=Array.isArray(data)?data:data.result;
+        if(!Array.isArray(entries) || entries.length>10000)return null;
+        const found=entries.filter(e=>laneKey(e.server_type || e.server)===laneKey(row.lane) && String(e.season_number || 1)===row.season && episodeKey(e.name)===episodeKey(row.episode));
+        if(found.length!==1 || !/^\d+$/.test(String(found[0].id)))return null;
+        return {url:new URL('/xem-phim/'+encodeURIComponent(context.movie)+'.'+found[0].id,win.location.href).href,source:site.kind,lane:found[0].server_type || found[0].server};
+      }
+      case 'legacy-panels':{
+        const lane=laneKey(row.lane);if(!['subtitle','voiceover'].includes(lane))return null;
+        const nodes=[...doc.querySelectorAll(lane==='voiceover'?'.btn-episode.chaptertm':'.btn-episode.chaptervs')];
+        const found=nodes.filter(n=>episodeKey(n.querySelector('.v-title,.info')?.textContent.trim() || n.textContent.trim())===episodeKey(row.episode));
+        const target=found.length===1?safeURL(found[0].getAttribute('href'),url):null;
+        return target?.origin===win.location.origin?{url:target.href,source:site.kind,lane}:null;
+      }
+      default:return null;
+    }
+  }
+  return null;
 }
 
 
@@ -426,7 +531,7 @@ function createHistoryStore(store) {
 
 function startHistory(win,page) {
   const doc=win.document,top=win.parent===win,db=createHistoryStore(storageAPI(win));
-  let active=null,progress=null,media='',savedAt=0,lastKey='',bar=null,resume=null,panel=null,bridge=null,snapshot=null;
+  let active=null,progress=null,media='',savedAt=0,lastKey='',bar=null,resume=null,panel=null,bridge=null,snapshot=null,continuing=null,cardSignature='',savedSignature='';
   const format=t=>`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
   function showList(){
     if(panel){panel.remove();panel=null;return;}
@@ -438,7 +543,8 @@ function startHistory(win,page) {
     for(const row of rows){
       const article=doc.createElement('article'),title=doc.createElement('strong'),text=doc.createElement('p'),link=doc.createElement('a');
       title.textContent=row.title;text.textContent=`${row.episode} · ${row.lane} · ${row.server} · ${format(row.time)} / ${format(row.duration)}${row.completed?' · Đã xem':''}`;
-      link.href=row.url;link.textContent='Về trang đang xem';article.append(title,text,link);
+      link.href=row.url;link.textContent='Trang đã xem';article.append(title,text,link);
+      makeButton(doc,'Xem tiếp tại đây',()=>navigate(row,article),article);
       makeButton(doc,'Xóa mục này',()=>{db.remove(row);if(contextKey(active)===contextKey(row)){snapshot=null;resume.hidden=true;}article.remove();},article);panel.append(article);
     }
     const note=doc.createElement('p');note.textContent='Lưu riêng trong trình quản lý userscript; danh sách hiển thị tối đa 300 mục gần nhất.';panel.append(note);doc.body.append(panel);
@@ -452,24 +558,56 @@ function startHistory(win,page) {
   function persist(){
     if(!top || !active || !progress || !media)return;
     const row=historyRow(active,progress);
-    if(row){try{db.save(row);}catch{if(bar)toast(bar,'Không lưu được lịch sử: kiểm tra quyền userscript');}}
+    const signature=row?[contextKey(row),Math.floor(row.time),row.completed].join('|'):'';
+    if(row && signature!==savedSignature){try{db.save(row);savedSignature=signature;}catch{if(bar)toast(bar,'Không lưu được lịch sử: kiểm tra quyền userscript');}}
     savedAt=Date.now();
+  }
+  async function navigate(row,host){
+    if(host.dataset.rpNavigating)return;
+    host.dataset.rpNavigating='1';toast(host,'Đang tìm đúng phim, tập và bản dịch trên trang này…');
+    try{
+      const destination=await historyDestination(row,win);
+      if(!destination){toast(host,'Chưa tìm được đúng phim/tập/bản dịch trên trang này. Bạn có thể mở phim rồi bấm Tiếp tục.');return;}
+      if(destination.source==='legacy-panels')doc.cookie=`selectedVidTypeRophim=${laneKey(destination.lane)==='voiceover'?'tm':'vs'}; path=/; SameSite=Lax`;
+      win.location.assign(destination.url);
+    }catch{toast(host,'Không đọc được dữ liệu phim của trang này. Hãy thử lại.');}finally{delete host.dataset.rpNavigating;}
+  }
+  function home(){
+    if(!top || !isSiteOrigin(win.location.origin) || !doc.body)return;
+    ensureUI();bar.hidden=false;
+    if(win.location.pathname.startsWith('/xem-phim/')){if(continuing)continuing.hidden=true;return;}
+    if(!continuing?.isConnected){continuing=doc.createElement('section');continuing.dataset.rpUi='continue';continuing.className='rp-continue';doc.body.prepend(continuing);cardSignature='';}
+    continuing.hidden=false;
+    const rows=db.continuing().slice(0,24),signature=JSON.stringify(rows.map(r=>[contextKey(r),r.time,r.updated]));
+    if(signature===cardSignature)return;cardSignature=signature;continuing.replaceChildren();
+    const heading=doc.createElement('h2');heading.textContent='Đang xem';continuing.append(heading);
+    if(!rows.length){const text=doc.createElement('p');text.textContent='Phim bạn đang xem sẽ xuất hiện tại đây, dùng chung trong Tampermonkey này.';continuing.append(text);}
+    const cards=doc.createElement('div');cards.className='rp-history-cards';continuing.append(cards);
+    for(const row of rows){
+      const card=doc.createElement('article');
+      const title=doc.createElement('h3'),description=doc.createElement('p');title.textContent=row.title;description.textContent=`${row.episode} · ${row.lane} · ${format(row.time)} / ${format(row.duration)}`;
+      card.append(title,description);makeButton(doc,'Xem tiếp tại đây',()=>navigate(row,card),card);
+      const source=doc.createElement('a');source.href=row.url;source.textContent='Trang đã xem';card.append(source);cards.append(card);
+    }
   }
   bridge=createBridge(win,page,'history',{
     update(info){
       if(!top)return;
       const nextKey=contextKey(info.context);
       // Flush the immutable old context/progress pair before accepting a new one.
-      if(nextKey!==lastKey){persist();lastKey=nextKey;snapshot=info.context ? db.read(info.context) : null;active=info.context;progress=null;media='';savedAt=0;}
+      if(nextKey!==lastKey){persist();lastKey=nextKey;snapshot=info.context ? db.read(info.context) : null;active=info.context;progress=null;media='';savedAt=0;savedSignature='';}
       else active=info.context;
       progress=info.state;media=info.media;
-      if(active){ensureUI();bar.hidden=false;}else if(bar)bar.hidden=true;
-      if(resume){resume.hidden=!(snapshot && snapshot.time>=5 && !snapshot.completed && info.state?.ready && snapshot.time<info.state.duration-5);resume.textContent=snapshot?`Tiếp tục ${format(snapshot.time)}`:'Tiếp tục';}
+      if(active){ensureUI();bar.hidden=false;}else if(bar)bar.hidden=win.location.pathname.startsWith('/xem-phim/');
+      const compatible=snapshot && info.state?.ready && Math.abs(snapshot.duration-info.state.duration)<=Math.max(5,snapshot.duration*.02);
+      if(resume){resume.hidden=!(compatible && snapshot.time>=5 && !snapshot.completed && snapshot.time<info.state.duration-5);resume.textContent=snapshot?`Tiếp tục ${format(snapshot.time)}`:'Tiếp tục';}
+      if(snapshot && info.state?.ready && !compatible && bar)toast(bar,'Có lịch sử đã lưu, nhưng bản phim này khác thời lượng nên chưa thể tua đúng mốc.');
       if(Date.now()-savedAt>=5000)persist();
     },
   });
-  if(top){doc.addEventListener('visibilitychange',()=>{if(doc.hidden)persist();});win.addEventListener('pagehide',persist);}
-  win.addEventListener('pagehide',event=>{if(!event.persisted)bridge.dispose();});
+  let offHome=()=>{},homeTimer=0;
+  if(top && isSiteOrigin(win.location.origin)){doc.addEventListener('visibilitychange',()=>{if(doc.hidden)persist();else home();});win.addEventListener('pagehide',persist);offHome=watchDOM(win,home);homeTimer=win.setInterval(home,3000);home();}
+  win.addEventListener('pagehide',event=>{if(!event.persisted){bridge.dispose();offHome();win.clearInterval(homeTimer);}});
 }
 startHistory(window,typeof unsafeWindow==='undefined' ? window : unsafeWindow);
 

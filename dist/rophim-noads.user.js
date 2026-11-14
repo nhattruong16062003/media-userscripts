@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Chặn quảng cáo
 // @namespace    rophim-userscripts.local
-// @version      0.1.2
+// @version      0.2.0
 // @author       zic
 // @description  Chặn quảng cáo cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -67,7 +67,33 @@ const AD_RULES = [
   {id:'component-banner',selector:'.sspp-area,.is-catfish,.top-middle-banner-offset,.ads-banner,.sspp-modal',proof:n=>!!n.querySelector('a[rel~="sponsored"],img')},
   {id:'legacy-sponsored-overlay',selector:'#overlay.heroup1',proof:n=>!!n.querySelector('a[rel~="sponsored"]')},
   {id:'legacy-footer',selector:'#footer_fixed_heroes,.hero-sticky-footer-wrapper',proof:n=>!!n.querySelector('a[rel~="sponsored"]')},
+  {id:'sponsor-card',selector:'.row-topic.adserver',proof:n=>!!n.querySelector('ins[data-revive-id][data-z],a[rel~="sponsored"]')},
+  {id:'sponsor-directory',selector:'.topics-list.topics-grid',proof:n=>/nhà cái uy tín/i.test(n.querySelector('.heading-sm')?.textContent || '') && !!n.querySelector('.row-topic.adserver ins[data-revive-id][data-z]') && [...n.children].every(child=>child.matches('.row-topic.mask,.row-topic.adserver'))},
 ];
+function filterAdCarousel(doc) {
+  const changed=new Set();
+  // This source inserts a Revive slot in both the hero slide and its thumbnail.
+  // An ordinary film can occupy index0 when that slot is disabled.
+  for(const node of doc.querySelectorAll('#top_slider .top-slide-main .swiper-slide,#top_slider .top-slide-small .swiper-slide')){
+    if(!node.querySelector('ins[data-revive-id][data-z]') || node.querySelector('video,audio,iframe#embed-player,iframe#player,form'))continue;
+    if(node.dataset.rpAdRule!=='sponsored-hero-slide'){
+      node.style.setProperty('display','none','important');node.setAttribute('aria-hidden','true');node.dataset.rpAdRule='sponsored-hero-slide';changed.add(node.closest('.swiper'));
+    }
+  }
+  for(const container of doc.querySelectorAll('#top_slider .top-slide-main,#top_slider .top-slide-small')){
+    const api=container.swiper;
+    if(!api || api.destroyed)continue;
+    try{
+      if(changed.has(container))api.update?.();
+      const slides=[...container.querySelectorAll('.swiper-wrapper > .swiper-slide')],active=slides[api.activeIndex];
+      if(active?.dataset.rpAdRule==='sponsored-hero-slide'){
+        const index=slides.findIndex(n=>n.dataset.rpAdRule!=='sponsored-hero-slide');
+        if(index>=0)api.slideTo?.(index,0,false);
+      }
+    }catch{/* Unknown carousel revisions leave the film slides intact. */}
+  }
+  return changed.size>0;
+}
 function containsPlayback(node) {
   const selector='video,audio,iframe#embed-player,iframe#player,.player-ratio,.art-video-player,.jwplayer,.server-picker,.btn-episode,form,input,textarea';
   if(node.matches(selector) || node.querySelector(selector))return true;
@@ -76,6 +102,7 @@ function containsPlayback(node) {
 }
 function applyAdRules(doc) {
   const applied=new Set();
+  if(filterAdCarousel(doc))applied.add('sponsored-hero-slide');
   for(const rule of AD_RULES){
     for(const node of doc.querySelectorAll(rule.selector)){
       if(!rule.proof(node) || containsPlayback(node))continue;

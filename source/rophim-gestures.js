@@ -2,6 +2,7 @@ import {storageAPI, diagnostic} from '../lib/core.js';
 import {contextKey,introKey,nextRoute} from '../lib/sites.js';
 import {createBridge} from '../lib/bridge.js';
 import {installGestures} from '../lib/gestures.js';
+import {customPlayerControls} from '../lib/custom-controls.js';
 import {uiStyle,makeButton,toolsHost,toast} from '../lib/ui.js';
 
 function startGestures(win,page) {
@@ -42,7 +43,7 @@ function startGestures(win,page) {
     const update=()=>{for(const b of controls)b.disabled=!state()?.ready;};update();
     return {host,update,input};
   }
-  const unbind=()=>{offGestures();offGestures=()=>{};mounted?.host.remove();mounted=null;};
+  const unbind=()=>{offGestures();offGestures=()=>{};mounted?.custom?.dispose();mounted?.host.remove();mounted=null;};
   bridge=createBridge(win,page,'gestures',{
     update(info){
       site=info.site;context=info.context;
@@ -51,9 +52,10 @@ function startGestures(win,page) {
         if(pageHost)pageHost.hidden=!context;
         if(mounted){mounted.update();if(context && doc.activeElement!==mounted.input)mounted.input.value=store.get('rp.gestures.intro.'+introKey(context),90);}
       }else if(info.player && mounted?.player!==info.player){
-        unbind();mounted={...mountControls(info.player.root,info.player),player:info.player};offGestures=installGestures(win,info.player,text=>toast(mounted.host,text));
+        unbind();mounted={...mountControls(info.player.root,info.player),player:info.player};mounted.custom=customPlayerControls(win,info.player,mounted);
       }
       if(mounted && context && doc.activeElement!==mounted.input)mounted.input.value=store.get('rp.gestures.intro.'+introKey(context),90);
+      mounted?.custom?.update();
     },
     unbind,
     request:next,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.1.2
+// @version      0.2.0
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -59,6 +59,44 @@ function storageAPI(win) {
   };
 }
 function clampSeek(time, duration) { return Math.max(0, Math.min(Math.max(0, duration - 0.25), time)); }
+
+
+// ---- lib/identity.js ----
+
+const identityText=value=>normalize(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/[^a-z0-9]+/g,' ').trim();
+function laneKey(value) {
+  const text=identityText(value);
+  if(['subtitle','vietsub','phu de','vs'].includes(text))return 'subtitle';
+  if(['dubbed','long tieng'].includes(text))return 'dubbed';
+  if(['voiceover','thuyet minh','tm'].includes(text))return 'voiceover';
+  return text;
+}
+function episodeKey(value) {
+  const text=identityText(value);
+  if(/^(full|tap full|trailer)$/.test(text))return text==='trailer'?'trailer':'full';
+  const number=text.match(/^(?:(?:tap|episode|ep) )?(\d+)(?: (\d+))?$/);
+  return number?String(Number(number[1]))+(number[2]?'.'+Number(number[2]):''):text;
+}
+function movieIdentity(movie={}) {
+  const type=movie.type==='movie'?'movie':movie.type==='series'?'tv':'';
+  return {originalTitle:bounded(movie.origin_name || movie.originalTitle || ''),year:/^(19|20)\d{2}$/.test(String(movie.publish_year || movie.year))?String(movie.publish_year || movie.year):'',mediaType:type,
+    externalImdb:/^tt\d+$/.test(movie.imdb_id || '')?movie.imdb_id:'',externalTmdb:type && /^\d+$/.test(String(movie.tmdb_id || ''))?type+':'+movie.tmdb_id:'',poster:bounded(movie.thumbnail || movie.poster || '',2048)};
+}
+function sameFilm(a,b) {
+  if(!a || !b)return false;
+  if(a.year && b.year && a.year!==b.year || a.mediaType && b.mediaType && a.mediaType!==b.mediaType)return false;
+  const shared=['externalImdb','externalTmdb'].filter(key=>a[key]&&b[key]);
+  if(shared.length)return shared.every(key=>a[key]===b[key]);
+  const originalA=identityText(a.originalTitle),originalB=identityText(b.originalTitle);
+  if(originalA && originalB && originalA!==originalB)return false;
+  if(a.year && b.year && a.year===b.year && (originalA && originalA===originalB || identityText(a.title) && identityText(a.title)===identityText(b.title)))return true;
+  // Older local records can still resume on their original source. Internal IDs
+  // never establish identity between different source contracts.
+  return a.source===b.source && a.movieID===b.movieID && a.movie===b.movie && !!safeURL(a.url) && safeURL(a.url).origin===safeURL(b.url)?.origin;
+}
+function sameEpisode(a,b) {
+  return sameFilm(a,b) && String(a.season)===String(b.season) && laneKey(a.lane)===laneKey(b.lane) && !!episodeKey(a.episode) && episodeKey(a.episode)===episodeKey(b.episode);
+}
 
 
 // ---- lib/sites.js ----
@@ -129,7 +167,7 @@ function detectSite(doc, href, page = {}) {
   const movieSlug = url.pathname.slice('/xem-phim/'.length).replace(/\.\d+$/, '');
   const movie = data.movies.findLast(m => m.slug === movieSlug && typeof m.id === 'number');
   if (!movie) return null;
-  if (typeof episode.server_type === 'string' && Number.isFinite(episode.episode_order) && Number.isFinite(episode.season_number)) {
+  if (typeof episode.server_type === 'string' && (Number.isFinite(episode.episode_order) || episode.episode_order===null && /^(?:tập\s*)?full$/i.test(episode.name)) && Number.isFinite(episode.season_number)) {
     return {kind:'next-ordered', frame, url, episode, movie};
   }
   if (doc.querySelector('.player-frame-stable') && frame.classList.contains('player-frame-content')) return {kind:'next-basic', frame, url, episode, movie};
@@ -142,7 +180,7 @@ function readContext(site, doc) {
     case 'next-basic': {
       const {episode:e, movie:m, url} = site;
       const season = e.season_number || m.latestEpisodes?.find(item=>item.id===e.id)?.season_number || m.partNumber || 1;
-      return {source:site.kind, movie:bounded(m.slug), movieID:String(m.id), title:bounded(m.name), episode:bounded(e.name), episodeID:String(e.id), season:String(season), lane:bounded(e.server_type || e.server), server:bounded(e.server), url:url.origin+url.pathname};
+      return {source:site.kind, movie:bounded(m.slug), movieID:String(m.id), title:bounded(m.name), episode:bounded(e.name), episodeID:String(e.id), season:String(season), lane:bounded(e.server_type || e.server), server:bounded(e.server), url:url.origin+url.pathname,...movieIdentity(m)};
     }
     case 'legacy-panels': {
       const cookies = Object.fromEntries(doc.cookie.split(';').map(v => v.trim().split('=')));
@@ -153,7 +191,10 @@ function readContext(site, doc) {
       const server = panel.querySelector('[data-server].current')?.dataset.server || '';
       const title = (doc.querySelector('meta[property="og:title"]')?.content || doc.title).split('|')[0].trim();
       const movie = site.url.pathname.split('/').at(-1).replace(/-tap-\d+(?:\.[^/]*)?$/, '');
-      return {source:site.kind, movie, movieID:movie, title:bounded(title.replace(/\s*-\s*Tập\s*\d+.*$/i,'')), episode:bounded(active.querySelector('.v-title,.info')?.textContent?.trim() || active.textContent?.trim()), episodeID:site.url.pathname, season:normalize(title.match(/phần\s*\d+/i)?.[0] || '1'), lane, server, url:site.url.origin+site.url.pathname};
+      const rawTitle=doc.querySelector('meta[property="og:title"]')?.content || doc.title;
+      const original=rawTitle.split('|')[1]?.trim() || '';
+      return {source:site.kind, movie, movieID:movie, title:bounded(title.replace(/\s*-\s*Tập\s*\d+.*$/i,'')), episode:bounded(active.querySelector('.v-title,.info')?.textContent?.trim() || active.textContent?.trim()), episodeID:site.url.pathname, season:title.match(/phần\s*(\d+)/i)?.[1] || '1', lane, server, url:site.url.origin+site.url.pathname,
+        originalTitle:bounded(original.replace(/\s+(?:season|phần)\s*\d+/ig,'').replace(/\s+(?:19|20)\d{2}\s*$/,'')),year:original.match(/\b((?:19|20)\d{2})\s*$/)?.[1] || '',mediaType:'tv',externalImdb:'',externalTmdb:'',poster:bounded(doc.querySelector('meta[property="og:image"]')?.content || '',2048)};
     }
     default: return null;
   }
@@ -161,10 +202,18 @@ function readContext(site, doc) {
 function contextKey(c) { return c ? [c.source,c.movieID,c.movie,c.season,c.episodeID,c.lane].map(encodeURIComponent).join('|') : ''; }
 function introKey(c) { return [c.source,c.movieID,c.movie,c.season,c.lane].map(encodeURIComponent).join('|'); }
 function episodeNext(entries, current) {
-  const lane = entries.filter(e => normalize(e.server_type || e.server) === normalize(current.lane) && String(e.season_number || 1) === current.season);
-  lane.sort((a,b) => (a.episode_order ?? Number(a.name?.match(/\d+/)?.[0])) - (b.episode_order ?? Number(b.name?.match(/\d+/)?.[0])));
-  const index = lane.findIndex(e => String(e.id) === current.episodeID);
-  return index >= 0 ? lane[index + 1] || null : null;
+  const season = entries.filter(e => String(e.season_number || 1) === current.season);
+  const lane = season.filter(e => laneKey(e.server_type || e.server) === laneKey(current.lane));
+  const order=e=>Number.isFinite(e.episode_order)?e.episode_order:/^(?:tập\s*)?\d+(?:\.\d+)?$/i.test(e.name || '')?Number(e.name.match(/[\d.]+/)[0]):null;
+  const active=lane.find(e=>String(e.id)===current.episodeID),position=active?order(active):null;
+  if(position===null)return null;
+  // Determine the next position before selecting its translation. A delayed dub
+  // must not silently jump over an episode that exists only in another lane.
+  const positions=season.map(order).filter(value=>value!==null && value>position);
+  if(!positions.length)return null;
+  const nextPosition=Math.min(...positions);
+  const next=lane.filter(e=>order(e)===nextPosition);
+  return next.length===1?next[0]:null;
 }
 async function nextRoute(site, context, win) {
   switch (site?.kind) {
@@ -233,7 +282,7 @@ function attachPlayer(candidate) {
       const time = kind === 'jw' ? api.getPosition() : video.currentTime;
       const ad = !!isAd();
       return {kind,ready:video.isConnected && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
-    } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false}; }
+    } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false,played:false}; }
   };
   const command = (action,value) => {
     const s = state();
@@ -247,7 +296,7 @@ function attachPlayer(candidate) {
     }
     return true;
   };
-  return {kind,video,root,api,state,command,dispose() { for (const [event,handler] of handlers) api.off?.(event,handler); }};
+  return {kind,video,root,api,state,command,fingerprint:()=>playerFingerprint(candidate),dispose() { for (const [event,handler] of handlers) api.off?.(event,handler); }};
 }
 function playerFingerprint(candidate) {
   try {
@@ -271,7 +320,9 @@ function bridgeContext(value) {
   if(!value || !['next-ordered','next-basic','legacy-panels'].includes(value.source) || keys.some(k=>typeof value[k]!=='string' || value[k].length>2048))return null;
   const url=safeURL(value.url);
   if(!url || !isSiteOrigin(url.origin) || !url.pathname.startsWith('/xem-phim/'))return null;
-  return Object.fromEntries(keys.map(k=>[k,value[k]]));
+  const result=Object.fromEntries(keys.map(k=>[k,value[k]]));
+  for(const key of ['originalTitle','year','mediaType','externalImdb','externalTmdb','poster'])if(typeof value[key]==='string' && value[key].length<=2048)result[key]=value[key];
+  return result;
 }
 function createBridge(win, page, feature, callbacks = {}) {
   const channel = 'rophim.' + feature + '.v1';
@@ -379,6 +430,8 @@ function uiStyle(doc) {
   const style = doc.createElement('style');style.id = 'rp-ui-style';
   style.textContent = `[data-rp-ui]{font:13px/1.5 system-ui,sans-serif;color:#fff;box-sizing:border-box}[data-rp-ui] button,[data-rp-ui] a{font:inherit;cursor:pointer;background:#202735;color:#fff;border:1px solid #68758a;border-radius:6px;padding:6px 9px;text-decoration:none}[data-rp-ui] button:disabled{opacity:.45;cursor:default}[data-rp-ui] button:focus-visible,[data-rp-ui] a:focus-visible{outline:2px solid #ffe08a;outline-offset:2px}[data-rp-ui] input{font:inherit;color:#fff;background:#202735;border:1px solid #68758a;border-radius:4px;width:65px;padding:4px}.rp-tools{position:absolute;top:8px;right:8px;z-index:2147483645;max-width:calc(100% - 16px)}.rp-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:7px;background:#101722ed;border-radius:8px;max-width:600px}.rp-tools>summary{cursor:pointer;list-style:none;background:#101722c9;border:1px solid #68758a;border-radius:6px;width:32px;text-align:center;padding:3px}.rp-toast{display:block;max-width:320px;background:#101722e8;border-radius:6px;margin-top:4px;padding:3px 6px}.rp-page{position:fixed;bottom:14px;left:14px;z-index:2147483645}.rp-panel{position:fixed;inset:8vh max(12px,calc((100vw - 720px)/2));z-index:2147483646;overflow:auto;background:#101722;border:1px solid #68758a;border-radius:12px;padding:14px;box-shadow:0 12px 60px #0009;max-height:84vh}.rp-panel article{padding:10px 0;border-bottom:1px solid #394457}.rp-panel p{margin:4px 0}.rp-panel a{display:inline-block;margin:4px 5px 4px 0}`;
   style.textContent+='[data-rp-ui][hidden],[data-rp-ui] [hidden]{display:none!important}';
+  style.textContent+='.rp-continue{position:relative;margin:90px 16px 20px;padding:16px;background:#101722;color:#fff;border:1px solid #394457;border-radius:12px;z-index:1}.rp-continue h2{font-size:21px;margin:0 0 12px}.rp-continue h3{font-size:16px;margin:0 0 6px}.rp-history-cards{display:flex;gap:12px;overflow-x:auto;padding:4px 0 10px}.rp-history-cards article{flex:0 0 250px;padding:12px;border:1px solid #394457;border-radius:8px}.rp-history-cards a{display:inline-block;margin:8px 0 0}.rp-history-cards p{margin:4px 0 10px}';
+  style.textContent+='[data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}[data-rp-custom-controls="1"] .loading-screen{pointer-events:none!important}.rp-player-shell{position:absolute;inset:0;z-index:2147483642;pointer-events:none}.rp-gesture-surface{position:absolute;inset:0;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.rp-player-chrome{position:absolute;bottom:0;left:0;right:0;padding:9px;background:linear-gradient(transparent,#000d);pointer-events:auto}.rp-player-line{display:flex;gap:6px;align-items:center}.rp-player-line button,.rp-unlock{min-height:44px;min-width:44px}.rp-player-time{flex:1;text-align:center;font-size:12px}.rp-player-chrome input[type="range"]{display:block;width:100%;box-sizing:border-box;margin:7px 0 0;min-height:32px;padding:0;accent-color:#ffe08a;touch-action:none}.rp-unlock{position:absolute;left:10px;top:10px;pointer-events:auto;background:#101722ed!important}.rp-player-shell>.rp-toast{position:absolute;top:12px;left:50%;transform:translateX(-50%);pointer-events:none}.rp-player-shell [hidden],.rp-player-shell [hidden].rp-unlock{display:none!important}';
   (doc.head || doc.documentElement).append(style);
 }
 function makeButton(doc, label, action, parent) {
@@ -401,53 +454,123 @@ function toolsHost(root) {
 
 // ---- lib/gestures.js ----
 
-function installGestures(win, player, notify = () => {}) {
-  const {root,video}=player;
-  const interactive = target => !!target?.closest?.('[data-rp-ui],a,button,input,select,textarea,[contenteditable="true"],[role="slider"],[role="button"],.jw-controlbar,.jw-settings-menu,.jw-rightclick,.art-controls,.art-settings,.art-contextmenus');
-  let press=null, lastTap=null, holdTimer=0, suppressUntil=0;
-  const source=()=>video.currentSrc || video.src;
+function installGestures(win, player, notify = () => {}, options={}) {
+  const {video}=player,root=options.surface || player.root;
+  const interactive = target => options.surface?.contains(target)?false:!!target?.closest?.('[data-rp-ui],a,button,input,select,textarea,[contenteditable="true"],[role="slider"],[role="button"],.jw-controlbar,.jw-settings-menu,.jw-rightclick,.art-controls,.art-settings,.art-contextmenus');
+  let press=null, lastTap=null, holdTimer=0, tapTimer=0, suppressUntil=0;
+  const source=()=>player.fingerprint?.() || video.currentSrc || video.src;
+  const consume=e=>{if(options.exclusive){e.preventDefault();e.stopImmediatePropagation();}};
   function restore() {
     win.clearTimeout(holdTimer);holdTimer=0;
     if (press?.held && video.isConnected && press.source === source() && video.playbackRate === 2) {
       // Restore the rate captured at press time, never assume it was 1×.
-      try { player.command('rate',press.rate); } catch { /* replaced player */ }
+      try { if(!player.command('rate',press.rate))video.playbackRate=press.rate; } catch { /* replaced player */ }
     }
     press=null;
   }
-  function cancel() {restore();lastTap=null;}
+  function cancel() {restore();lastTap=null;win.clearTimeout(tapTimer);tapTimer=0;}
   const point = event => {
     const box=video.getBoundingClientRect();
-    if (box.width <= 0 || box.height <= 0 || event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom - 60) return null;
+    if (box.width <= 0 || box.height <= 0 || event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom - (options.surface?0:60)) return null;
     const ratio=(event.clientX-box.left)/box.width;
     return ratio < .4 ? -1 : ratio > .6 ? 1 : 0;
   };
   const down = e => {
+    if(options.isLocked?.()){cancel();consume(e);return;}
     if (e.isPrimary === false) {cancel();return;}
     if (interactive(e.target) || e.button !== 0 || !player.state().ready) return;
     const side=point(e);if (side === null) return;
+    consume(e);
     restore();press={id:e.pointerId,x:e.clientX,y:e.clientY,side,at:Date.now(),source:source(),rate:player.state().rate,held:false};
     holdTimer=win.setTimeout(()=>{
       if (!press || !player.state().ready || source()!==press.source) return cancel();
-      if(player.command('rate',2)){press.held=true;lastTap=null;notify('Giữ 2×');}
+      if(player.command('rate',2)){press.held=true;lastTap=null;win.clearTimeout(tapTimer);notify('Giữ 2×');}
     },450);
   };
-  const move = e => {if(press && (e.pointerId!==press.id || Math.hypot(e.clientX-press.x,e.clientY-press.y)>14)) cancel();};
+  const move = e => {consume(e);if(press && (e.pointerId!==press.id || Math.hypot(e.clientX-press.x,e.clientY-press.y)>14)) cancel();};
   const up = e => {
+    if(options.exclusive && !root.contains(e.target) && !press)return;
+    if(options.isLocked?.()){cancel();consume(e);return;}
     if(!press || e.pointerId!==press.id)return;
     const p=press, now=Date.now();restore();
+    consume(e);
     if(p.held){suppressUntil=now+400;notify('Đã khôi phục tốc độ');e.preventDefault();e.stopImmediatePropagation();return;}
-    if(now-p.at>350 || !p.side || source()!==p.source || !player.state().ready)return;
+    if(now-p.at>350 || source()!==p.source || !player.state().ready)return;
+    if(!p.side){options.onTap?.();lastTap=null;return;}
     if(lastTap && now-lastTap.at<320 && p.side===lastTap.side && Math.hypot(p.x-lastTap.x,p.y-lastTap.y)<48){
-      player.command('seek',player.state().time+p.side*10);lastTap=null;suppressUntil=now+400;notify(p.side>0?'+10 giây':'−10 giây');e.preventDefault();e.stopImmediatePropagation();
-    } else lastTap={...p,at:now};
+      win.clearTimeout(tapTimer);player.command('seek',player.state().time+p.side*10);lastTap=null;suppressUntil=now+400;notify(p.side>0?'+10 giây':'−10 giây');e.preventDefault();e.stopImmediatePropagation();
+    } else {lastTap={...p,at:now};if(options.onTap){win.clearTimeout(tapTimer);tapTimer=win.setTimeout(()=>{lastTap=null;options.onTap();},320);}}
   };
-  const click = e => {if(Date.now()<suppressUntil && !interactive(e.target)){e.preventDefault();e.stopImmediatePropagation();}};
-  const menu = e => {if(press?.held){e.preventDefault();e.stopImmediatePropagation();}};
+  const click = e => {if(options.exclusive || Date.now()<suppressUntil && !interactive(e.target)){e.preventDefault();e.stopImmediatePropagation();}};
+  const menu = e => {if(options.exclusive || press?.held){e.preventDefault();e.stopImmediatePropagation();}};
+  const touch=e=>consume(e);
   const visibility = () => {if(win.document.hidden)cancel();};
   for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]]) root.addEventListener(name,fn,true);
+  if(options.exclusive)for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.addEventListener(name,touch,{passive:false});
   win.addEventListener('blur',cancel);win.addEventListener('pointerup',up,true);win.document.addEventListener('visibilitychange',visibility);
   video.addEventListener('emptied',cancel);video.addEventListener('loadstart',cancel);
-  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
+  return () => {cancel();for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',cancel],['lostpointercapture',cancel],['click',click],['dblclick',click],['contextmenu',menu]])root.removeEventListener(name,fn,true);for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.removeEventListener(name,touch);win.removeEventListener('blur',cancel);win.removeEventListener('pointerup',up,true);win.document.removeEventListener('visibilitychange',visibility);video.removeEventListener('emptied',cancel);video.removeEventListener('loadstart',cancel);};
+}
+
+
+// ---- lib/custom-controls.js ----
+
+function customPlayerControls(win,player,tools) {
+  const {video,root}=player,doc=win.document;
+  uiStyle(doc);
+  const shell=doc.createElement('div');shell.dataset.rpUi='player';shell.className='rp-player-shell';
+  const surface=doc.createElement('div');surface.dataset.rpGestureSurface='1';surface.className='rp-gesture-surface';surface.setAttribute('aria-label','Vùng thao tác trình phát RoPhim');shell.append(surface);
+  const chrome=doc.createElement('div');chrome.className='rp-player-chrome';shell.append(chrome);
+  const line=doc.createElement('div');line.className='rp-player-line';chrome.append(line);
+  const play=makeButton(doc,'Phát',()=>player.command(player.state().paused?'play':'pause'),line);
+  const time=doc.createElement('output');time.className='rp-player-time';line.append(time);
+  const seek=doc.createElement('input');seek.type='range';seek.min='0';seek.max='1000';seek.step='1';seek.value='0';seek.setAttribute('aria-label','Tua phim');chrome.append(seek);
+  let locked=false,hideTimer=0,scrubbing=false,disposed=false,nativeOwned=false,lastReady=false;
+  const savedAttributes=new Map(['controls','playsinline','webkit-playsinline'].map(name=>[name,video.getAttribute(name)]));
+  const restoreNative=()=>{
+    if(!nativeOwned)return;nativeOwned=false;delete root.dataset.rpCustomControls;
+    for(const [name,value] of savedAttributes){if(value===null)video.removeAttribute(name);else video.setAttribute(name,value);}
+  };
+  const lock=makeButton(doc,'Khóa',()=>setLocked(true),line);
+  const fullscreen=makeButton(doc,'Toàn màn hình',async()=>{
+    try{if(doc.fullscreenElement)await doc.exitFullscreen();else if(root.requestFullscreen)await root.requestFullscreen();else toast(shell,'Trình duyệt chưa hỗ trợ toàn màn hình khung');}
+    catch{toast(shell,'Không bật được toàn màn hình khung');}
+  },line);
+  const unlock=makeButton(doc,'Mở khóa',()=>setLocked(false),shell);unlock.className='rp-unlock';unlock.hidden=true;
+  const show=()=>{chrome.hidden=locked;tools.host.hidden=locked;win.clearTimeout(hideTimer);if(!locked && !player.state().paused && !tools.host.open)hideTimer=win.setTimeout(()=>{if(!scrubbing && !tools.host.open){chrome.hidden=true;tools.host.hidden=true;}},3500);};
+  function setLocked(value){locked=value;shell.dataset.rpLocked=String(value);unlock.hidden=!value;offGesturesCancel();show();update();}
+  let offGestures=()=>{},offGesturesCancel=()=>{};
+  offGestures=installGestures(win,player,text=>toast(shell,text),{surface,exclusive:true,isLocked:()=>locked,onTap:()=>{if(chrome.hidden)show();else{chrome.hidden=true;tools.host.hidden=true;}}});
+  // A lock action cancels an ongoing hold through the same cancellation path.
+  offGesturesCancel=()=>surface.dispatchEvent(new win.Event('pointercancel',{bubbles:false}));
+  const block=e=>e.stopPropagation();
+  const inputEvents=['pointerdown','pointermove','pointerup','touchstart','touchmove','touchend','touchcancel','mousedown','mouseup','click','dblclick','contextmenu','keydown','keyup'];
+  for(const node of [shell,tools.host])for(const name of inputEvents)node.addEventListener(name,block);
+  seek.addEventListener('pointerdown',()=>{scrubbing=true;win.clearTimeout(hideTimer);});
+  seek.addEventListener('input',()=>{scrubbing=true;time.textContent=format(Number(seek.value))+' / '+format(player.state().duration);});
+  seek.addEventListener('change',()=>{if(!locked)player.command('seek',Number(seek.value));scrubbing=false;show();});
+  seek.addEventListener('pointercancel',()=>{scrubbing=false;show();});
+  chrome.addEventListener('pointerdown',()=>{win.clearTimeout(hideTimer);});
+  const changed=()=>update();
+  for(const name of ['loadedmetadata','timeupdate','play','pause','ratechange','durationchange','emptied','loadstart'])video.addEventListener(name,changed);
+  const nativeObserver=new win.MutationObserver(()=>{if(nativeOwned && video.controls)video.controls=false;});nativeObserver.observe(video,{attributes:true,attributeFilter:['controls']});
+  function format(value){const seconds=Math.max(0,Math.floor(Number(value)||0));return Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');}
+  function update(){
+    if(disposed)return;const state=player.state();
+    surface.hidden=!state.ready;
+    if(!state.ready){chrome.hidden=true;tools.host.hidden=true;}
+    else if(!lastReady)show();
+    lastReady=state.ready;
+    if(state.ready){nativeOwned=true;root.dataset.rpCustomControls='1';if(video.controls)video.controls=false;video.setAttribute('playsinline','');video.setAttribute('webkit-playsinline','');}
+    else restoreNative();
+    for(const b of [play,lock,fullscreen,seek])b.disabled=!state.ready || locked;
+    play.textContent=state.paused?'Phát':'Dừng';
+    if(!scrubbing){seek.max=String(Math.max(1,state.duration));seek.value=String(state.time);time.textContent=format(state.time)+' / '+format(state.duration)+' · '+state.rate+'×';}
+    if(state.ready && state.paused && !locked){chrome.hidden=false;tools.host.hidden=false;}
+  }
+  if(win.getComputedStyle(root).position==='static')root.style.position='relative';
+  root.append(shell);update();show();
+  return {shell,surface,update,dispose(){if(disposed)return;disposed=true;win.clearTimeout(hideTimer);offGestures();nativeObserver.disconnect();for(const name of ['loadedmetadata','timeupdate','play','pause','ratechange','durationchange','emptied','loadstart'])video.removeEventListener(name,changed);for(const node of [shell,tools.host])for(const name of inputEvents)node.removeEventListener(name,block);restoreNative();shell.remove();}};
 }
 
 
@@ -491,7 +614,7 @@ function startGestures(win,page) {
     const update=()=>{for(const b of controls)b.disabled=!state()?.ready;};update();
     return {host,update,input};
   }
-  const unbind=()=>{offGestures();offGestures=()=>{};mounted?.host.remove();mounted=null;};
+  const unbind=()=>{offGestures();offGestures=()=>{};mounted?.custom?.dispose();mounted?.host.remove();mounted=null;};
   bridge=createBridge(win,page,'gestures',{
     update(info){
       site=info.site;context=info.context;
@@ -500,9 +623,10 @@ function startGestures(win,page) {
         if(pageHost)pageHost.hidden=!context;
         if(mounted){mounted.update();if(context && doc.activeElement!==mounted.input)mounted.input.value=store.get('rp.gestures.intro.'+introKey(context),90);}
       }else if(info.player && mounted?.player!==info.player){
-        unbind();mounted={...mountControls(info.player.root,info.player),player:info.player};offGestures=installGestures(win,info.player,text=>toast(mounted.host,text));
+        unbind();mounted={...mountControls(info.player.root,info.player),player:info.player};mounted.custom=customPlayerControls(win,info.player,mounted);
       }
       if(mounted && context && doc.activeElement!==mounted.input)mounted.input.value=store.get('rp.gestures.intro.'+introKey(context),90);
+      mounted?.custom?.update();
     },
     unbind,
     request:next,
