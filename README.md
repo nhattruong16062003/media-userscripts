@@ -10,13 +10,13 @@ Ba script độc lập: chặn quảng cáo, thao tác trình phát và lịch s
 
 | Script | Phiên bản | Link cài |
 | --- | --- | --- |
-| Chặn quảng cáo | 0.3.3 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.3/dist/rophim-noads.user.js) |
-| Thao tác trình phát | 0.3.3 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.3/dist/rophim-gestures.user.js) |
-| Lịch sử xem | 0.3.3 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.3/dist/rophim-history.user.js) |
+| Chặn quảng cáo | 0.3.4 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.4/dist/rophim-noads.user.js) |
+| Thao tác trình phát | 0.3.4 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.4/dist/rophim-gestures.user.js) |
+| Lịch sử xem | 0.3.4 | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/rophim-userscripts/v0.3.4/dist/rophim-history.user.js) |
 
 Đã cài thì bấm **Cập nhật** hoặc **Cài lại**; không cần chép mã vào editor. Xem [hướng dẫn Firefox Android và máy tính](docs/FIREFOX.md).
 
-Link cài gắn với phiên bản cụ thể. Trước khi bấm cập nhật, kiểm tra trang Tampermonkey hiện **0.3.3**. Nếu đang dùng cả ba script, cập nhật cả ba rồi tải lại trang phim. Giữ script Lịch sử hiện có khi cập nhật để giữ tiến độ.
+Link cài gắn với phiên bản cụ thể. Trước khi bấm cập nhật, kiểm tra trang Tampermonkey hiện **0.3.4**. Nếu đang dùng cả ba script, cập nhật cả ba rồi tải lại trang phim. Giữ script Lịch sử hiện có khi cập nhật để giữ tiến độ.
 
 ## Sử dụng
 
@@ -34,7 +34,7 @@ Script dùng `@include` cho tên miền chứa `rophim`; không cần thêm từ
 
 Giao diện gốc được ẩn trong suốt quá trình dùng điều khiển custom. Khi tải chậm, khung phát giữ màn chờ; sau 20 giây có nút **Thử lại**. Lỗi tải hiện thông báo và nút thử lại, không tự chuyển sang bộ nút gốc. Script vẫn dùng engine của website để nạp video.
 
-Nút toàn màn hình yêu cầu xoay ngang trên điện thoại; thoát toàn màn hình sẽ thả khóa hướng do script tạo. Trình duyệt cần cho phép toàn màn hình và khóa hướng; nếu không hỗ trợ khóa hướng, bạn có thể xoay máy bằng tay.
+Nút toàn màn hình yêu cầu xoay ngang trên điện thoại; tạm dừng vẫn giữ khung toàn màn hình và hướng ngang. Khi hướng bị trả về dọc, script yêu cầu khôi phục ngang trong khung hiện tại. Thoát toàn màn hình sẽ thả khóa hướng do script tạo. Trình duyệt cần cho phép toàn màn hình và khóa hướng; nếu không hỗ trợ khóa hướng, bạn có thể xoay máy bằng tay.
 
 Khi tập mới sẵn sàng, script thử bắt đầu phát một lần. Nếu Firefox chặn tự phát có tiếng, cho phép tự phát trong quyền website hoặc bấm **Phát** ở giữa video. Việc bạn chủ động tạm dừng sẽ được giữ nguyên.
 

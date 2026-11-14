@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.3.3
+// @version      0.3.4
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/rophim-userscripts
@@ -612,9 +612,9 @@ function playerIcon(name) {
     fullscreen:'<path d="M14 3h7v7l-2.5-2.5-4 4-2-2 4-4zM3 14l2.5 2.5 4-4 2 2-4 4L10 21H3z"/>',
     shrink:'<path d="m21 3-5.5 5.5L13 6v7h7l-2.5-2.5L23 5zM3 21l5.5-5.5L11 18v-7H4l2.5 2.5L1 19z"/>',
   };
-  const simple={lock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',unlock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/>'};
+  const simple={lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',unlock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>'};
   const solid=Object.hasOwn(filled,name);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" fill="${solid?'currentColor':'none'}" stroke="${solid?'none':'currentColor'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${filled[name] || simple[name] || paths[name] || ''}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" fill="${solid?'currentColor':'none'}" stroke="${solid?'none':'currentColor'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${filled[name] || (simple[name]?`<g transform="translate(0 -1.3)">${simple[name]}</g>`:paths[name]) || ''}</svg>`;
 }
 function playerUIStyle(doc) {
   if(doc.getElementById('rp-player-style'))return;
@@ -639,7 +639,7 @@ function playerUIStyle(doc) {
   .rp-player-line .rp-icon[data-rp-status="true"]{max-width:160px;font-size:12px;line-height:1.2;white-space:normal}
   .rp-player-shell .rp-pill{color:#fff;font:500 14px sans-serif;border:.5px solid rgba(255,255,255,.28);border-radius:999px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px) saturate(140%);-webkit-backdrop-filter:blur(10px) saturate(140%);padding:6px 14px;display:flex;align-items:center;gap:6px;white-space:nowrap}
   .rp-context-action{position:absolute;right:16px;bottom:68px;min-height:32px;pointer-events:auto}.rp-context-action svg{width:16px;height:16px}
-  .rp-player-shell .rp-lock{position:absolute;left:48px;top:50%;transform:translateY(-50%);width:48px;height:48px;padding:0;border-radius:50%;background:rgba(0,0,0,.3);border:.5px solid rgba(255,255,255,.35);color:#fff}.rp-player-shell .rp-lock svg{width:24px;height:24px}
+  .rp-player-shell .rp-lock{position:absolute;left:48px;top:50%;transform:translateY(-50%);width:48px;height:48px;padding:0;border-radius:50%;background:rgba(0,0,0,.12);border:.5px solid rgba(255,255,255,.35);color:#fff}.rp-player-shell .rp-lock svg{width:24px;height:24px}
   .rp-feedback-seek{position:absolute;top:40%;left:78%;transform:translate(-50%,-50%);pointer-events:none}.rp-feedback-seek svg{width:16px;height:16px}.rp-feedback-seek[data-side="right"] svg{animation:rp-nudge-right .35s ease-out}.rp-feedback-seek[data-side="left"] svg{animation:rp-nudge-left .35s ease-out}
   .rp-feedback-hold{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none}.rp-chevrons{display:flex}.rp-chevrons svg{width:9px;height:12px;fill:currentColor;stroke-width:0;margin-left:-1px;opacity:.3;animation:rp-run 1s ease-in-out infinite}.rp-chevrons svg:nth-child(2){animation-delay:.15s}.rp-chevrons svg:nth-child(3){animation-delay:.3s}
   .rp-player-settings{position:absolute;bottom:64px;right:16px;z-index:2;width:200px;padding:4px 12px 10px;border:0;border-radius:2px;background:#1a1a1a;color:#fff;pointer-events:auto}.rp-player-settings-header{display:flex;align-items:center;justify-content:space-between;font-size:13px}.rp-player-speed-options{display:flex;flex-wrap:wrap;gap:4px}.rp-player-shell .rp-speed{padding:6px 10px;min-height:38px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:13px}.rp-player-shell .rp-speed[aria-pressed="true"]{background:#555}
@@ -727,35 +727,58 @@ function frameLoading(win){
 // document which is replaced on an episode change.
 function fullscreenController(win,{onChange=()=>{}}={}){
   const doc=win.document,orientation=win.screen?.orientation;let target=null,epoch=0,attempt=-1,owned=false,inFlight=null,disposed=false,pending=null;
+  let recoveryTimer=0,recheck=false,recoveryAttempts=[];
   const mobile=()=>win.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(win.navigator.userAgent);
+  const active=()=>!disposed && target?.isConnected && doc.fullscreenElement===target && !doc.hidden && mobile();
+  const portrait=()=>typeof orientation?.type==='string'?orientation.type.startsWith('portrait'):win.innerHeight>win.innerWidth;
+  function clearRecovery(){win.clearTimeout(recoveryTimer);recoveryTimer=0;recheck=false;recoveryAttempts=[];}
+  // Firefox/Android may drop the effective orientation while the ancestor is
+  // still fullscreen. A resolved lock promise is not proof that it stays locked.
+  // Observe the real orientation/viewport; never re-enter fullscreen to repair it.
+  function verify(){
+    win.clearTimeout(recoveryTimer);recoveryTimer=0;
+    if(!active())return;
+    if(!owned){if(attempt!==epoch)lock();return;}
+    if(!portrait())return;
+    if(inFlight){recheck=true;return;}
+    const now=win.Date.now();recoveryAttempts=recoveryAttempts.filter(at=>now-at<5000);
+    if(recoveryAttempts.length>=3){doc.documentElement.dataset.rpOrientation='blocked';return;}
+    recoveryAttempts.push(now);lock(true);
+  }
+  function scheduleRecovery(){
+    if(!active())return;
+    win.clearTimeout(recoveryTimer);recoveryTimer=win.setTimeout(verify,120);
+  }
   function unlock(){if(owned){owned=false;try{orientation?.unlock?.();}catch{/* browser already released it */}}}
-  function lock(){
-    if(disposed || !target || doc.fullscreenElement!==target || !mobile() || owned || inFlight || attempt===epoch)return;
+  function lock(recovery=false){
+    if(!active() || inFlight || !recovery && (owned || attempt===epoch))return;
     if(typeof orientation?.lock!=='function'){doc.documentElement.dataset.rpOrientation='unsupported';return;}
     const job={epoch,node:target};attempt=epoch;inFlight=job;
     let request;try{request=orientation.lock('landscape');}catch{request=Promise.reject(new Error('orientation rejected'));}
     Promise.resolve(request).then(()=>{
       if(!disposed && job.epoch===epoch && doc.fullscreenElement===job.node){owned=true;doc.documentElement.dataset.rpOrientation='landscape';}
       else try{orientation.unlock();}catch{/* late success after exit */}
-    },()=>{if(!disposed && job.epoch===epoch)doc.documentElement.dataset.rpOrientation='blocked';}).finally(()=>{if(inFlight===job)inFlight=null;if(!disposed && job.epoch!==epoch)lock();});
+    },()=>{if(!disposed && job.epoch===epoch)doc.documentElement.dataset.rpOrientation='blocked';}).finally(()=>{if(inFlight===job)inFlight=null;if(!disposed && job.epoch!==epoch)lock();else if(recheck){recheck=false;scheduleRecovery();}});
   }
   const changed=()=>{
     if(disposed)return;
-    if(target && doc.fullscreenElement!==target){epoch++;unlock();target=null;delete doc.documentElement.dataset.rpOrientation;}
-    lock();onChange();
+    if(target && doc.fullscreenElement!==target){epoch++;clearRecovery();unlock();target=null;delete doc.documentElement.dataset.rpOrientation;}
+    lock();scheduleRecovery();onChange();
   };
   doc.addEventListener('fullscreenchange',changed);
+  orientation?.addEventListener?.('change',scheduleRecovery);
+  win.addEventListener('orientationchange',scheduleRecovery);win.addEventListener('resize',scheduleRecovery);doc.addEventListener('visibilitychange',scheduleRecovery);
   return {
     toggle(node){
       if(disposed || !node?.isConnected)return Promise.resolve('unavailable');
       if(pending)return pending;
       const exiting=doc.fullscreenElement===node;
-      if(!exiting){epoch++;unlock();target=node;}
+      if(!exiting){epoch++;clearRecovery();unlock();target=node;}
       let request;try{request=exiting?doc.exitFullscreen():node.requestFullscreen();}catch{if(!exiting){epoch++;target=null;}return Promise.resolve('error');}
       pending=Promise.resolve(request).then(()=>{if(disposed)return 'unavailable';changed();return doc.fullscreenElement===node?'fullscreen':'windowed';},()=>{if(doc.fullscreenElement!==node){epoch++;unlock();target=null;}return 'error';}).finally(()=>pending=null);
       return pending;
     },
-    dispose(){disposed=true;epoch++;unlock();target=null;doc.removeEventListener('fullscreenchange',changed);delete doc.documentElement.dataset.rpOrientation;},
+    dispose(){disposed=true;epoch++;clearRecovery();unlock();target=null;doc.removeEventListener('fullscreenchange',changed);orientation?.removeEventListener?.('change',scheduleRecovery);win.removeEventListener('orientationchange',scheduleRecovery);win.removeEventListener('resize',scheduleRecovery);doc.removeEventListener('visibilitychange',scheduleRecovery);delete doc.documentElement.dataset.rpOrientation;},
   };
 }
 
