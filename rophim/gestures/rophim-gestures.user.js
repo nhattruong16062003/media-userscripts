@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.12
+// @version      0.4.13
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -521,13 +521,25 @@ SOFTWARE.
         const duration = kind === "jw" ? api.getDuration() : video.duration;
         const time = kind === "jw" ? api.getPosition() : video.currentTime;
         const ad = !!isAd();
-        return { kind, failed: !!video.error, ready: video.isConnected && !video.error && playerFingerprint(candidate) === initialSource && mediaVisible(video, video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
+        const connected = video.isConnected && playerFingerprint(candidate) === initialSource && mediaVisible(video, video.ownerDocument.defaultView), engineState = kind === "jw" ? api.getState?.() : null, failed = !!video.error || engineState === "error";
+        const item = kind === "jw" ? api.getPlaylistItem?.() : null, file = item?.file || item?.sources?.[0]?.file;
+        const initializable = connected && !failed && !ad && video.readyState === 0 && kind === "jw" && ["idle", "paused"].includes(engineState) && typeof file === "string" && /^https?:\/\//.test(file);
+        return { kind, failed, initializable, ready: connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
       } catch {
         return { kind, ready: false, ad: true, time: 0, duration: 0, rate: 1, paused: true, ended: false, played: false };
       }
     };
     const command = (action, value) => {
       const s = state();
+      if (action === "initialize-play-audible") {
+        if (!s.initializable) return false;
+        api.setMute(false);
+        const volume = api.getVolume?.();
+        if (!finite(volume) || volume <= 0) api.setVolume?.(100);
+        api.play(true)?.catch?.(() => {
+        });
+        return true;
+      }
       if (!s.ready || s.ad) return false;
       switch (action) {
         case "seek":
@@ -1376,6 +1388,14 @@ SOFTWARE.
       holdTip.hidden = true;
     }
     function actionClick(action, node) {
+      if (action === "play" && !player.state().ready && player.state().initializable) {
+        autoPlayAttempted = true;
+        audio?.intent(false);
+        command("initialize-play-audible");
+        show();
+        update();
+        return;
+      }
       if (!player.state().ready) return;
       switch (action) {
         case "play":
@@ -1585,7 +1605,7 @@ SOFTWARE.
       if (disposed) return;
       const state = player.state(), becameReady = state.ready && !lastReady;
       lastReady = state.ready;
-      shell.hidden = !state.ready;
+      shell.hidden = !state.ready && !state.initializable;
       updateTracks();
       for (const node of tracks.querySelectorAll("button")) node.disabled = !state.ready || locked;
       if (locked && !inFullscreen()) {
@@ -1614,6 +1634,10 @@ SOFTWARE.
       if (becameReady || lastPaused !== null && state.paused !== lastPaused) show();
       lastPaused = state.paused;
       for (const node of [center, play, mute, fullscreen, settingsButton, seek, ...rates.children]) node.disabled = !state.ready || locked;
+      if (state.initializable && !locked) {
+        center.disabled = false;
+        play.disabled = false;
+      }
       for (const node of [center, play]) {
         const kind = state.paused ? "play" : "pause";
         if (node.dataset.rpIcon !== kind) {
@@ -1640,7 +1664,7 @@ SOFTWARE.
         paintTime(state.time, state.duration);
       }
       for (const node of rates.children) node.setAttribute("aria-pressed", String(Number(node.dataset.rpRate) === state.rate));
-      const intro = state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.duration - state.time <= 180;
+      const intro = state.ready && state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.ready && state.duration - state.time <= 180;
       contextAction.dataset.rpMode = nextPending?.node === contextAction || nextError?.node === contextAction ? "next" : intro ? "intro" : "next";
       contextAction.hidden = !intro && !context || !(intro || nearEnd || nextPending?.node === contextAction || nextError?.node === contextAction);
       line.dataset.rpNextStatus = String(nextPending?.node === next || nextError?.node === next);

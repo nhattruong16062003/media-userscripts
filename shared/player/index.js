@@ -3,5 +3,6 @@ export {audioPreferenceStore} from './audio-preferences.js';
 export {playerUIStyle,playerStartupGuard} from './player-ui.js';
 export {installGestures} from './gestures.js';
 export {fullscreenController} from './fullscreen.js';
+export {mediaPresentationRoot,mediaPlaylist,persistentMediaSession} from './persistent-media.js';
 export {loadingPanel,childLoading} from './loading.js';
 export {playerCandidate,attachPlayer,playerFingerprint,playerTracks,selectPlayerTrack} from '../engines/players.js';

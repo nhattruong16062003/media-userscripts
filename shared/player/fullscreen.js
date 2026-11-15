@@ -1,5 +1,6 @@
-// Orientation belongs to the stable parent fullscreen host, not the iframe
-// document which is replaced on an episode change.
+// Orientation belongs to the stable presentation host. Iframe integrations
+// must keep the real video and custom controls in that host's document; a
+// parent-only shell cannot supply Firefox Android with media dimensions.
 export function fullscreenController(win,{onChange=()=>{}}={}){
   const doc=win.document,orientation=win.screen?.orientation;let target=null,epoch=0,attempt=-1,owned=false,inFlight=null,disposed=false,pending=null;
   let recoveryTimer=0,recheck=false,recoveryAttempts=[];

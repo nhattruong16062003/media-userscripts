@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - mở bản trực tiếp
 // @namespace    motchill-source
-// @version      6.0.12
+// @version      6.0.13
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/source/motchill-source.user.js
@@ -402,7 +402,11 @@ function createMotchillSites() {
     if(!Array.isArray(data?.movie?.episodes) || !data.movie.episodes.length)return null;
     const frames=[...doc.querySelectorAll('.player-frame-stable iframe.player-frame-content')].filter(frame=>!isPrepared(frame));
     if(frames.length!==1)return null;
-    const frame=frames[0],source=url(frame.getAttribute('src'),pageUrl),id=source?.pathname.match(/^\/embed\/([1-9]\d*)\/?$/)?.[1];
+    const frame=frames[0],source=url(frame.getAttribute('src'),pageUrl);
+    // A persistent engine can change resource without navigating its iframe.
+    // The assignment is valid only for this exact document source AND route.
+    const assignment=frame.dataset.mcProviderSource===source?.href && frame.dataset.mcProviderPath===parsed.path ? frame.dataset.mcProviderId:null;
+    const id=assignment || source?.pathname.match(/^\/embed\/([1-9]\d*)\/?$/)?.[1];
     if(!id || !knownEmbedPage(source.href))return null;
     const matches=data.movie.episodes.filter(ep=>ep && String(ep.id)===id && ep.slug===parsed.episode && ep.type==='m3u8');
     if(matches.length!==1 || !translationKey(matches[0].server))return null;
@@ -1069,6 +1073,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   let relayFrame = null;
   let parentContext=null,parentFullscreen=false,parentPresented=window.top===window;
   const nextRequests=new Map();
+  const replacementRequests=new Map();let localReplacement=null;
+  const providerIdentity=value=>value && typeof value.id==='string' && /^[1-9]\d*$/.test(value.id) && typeof value.movieId==='string' && /^[1-9]\d*$/.test(value.movieId) && Number.isSafeInteger(value.season) && value.season>=1 && value.season<=1000 && typeof value.server==='string' && value.server.length<200 && sites.translationKey(value.server) ? {id:value.id,movieId:value.movieId,season:value.season,server:value.server}:null;
   function readParentContext(value,origin){
     const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
     if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !sites.translationKey(value.language))return null;
@@ -1156,6 +1162,19 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     closest() { return null; }
     play() { this.command('play'); return Promise.resolve(); }
     pause() { this.command('pause'); }
+    replaceMedia(value,signal){
+      if(validRemote(this.frame)!==this || !this.state.localPresentation || !this.state.playlist || !value?.playlist || signal?.aborted)return Promise.reject(new Error('Nguồn không còn hiện hành'));
+      const id=nonce(),mediaId=this.state.mediaId,token=this.session.token,frame=this.frame,origin=this.session.origin;
+      return new Promise((resolve,reject)=>{
+        const finish=(fn,result)=>{clearTimeout(timer);signal?.removeEventListener('abort',cancel);replacementRequests.delete(id);fn(result);};
+        const cancel=()=>{frame.contentWindow?.postMessage({tag:channel,type:'cancel-replace',token,id},origin);};
+        // Child readiness + seek may take 20s, and a failed load needs the
+        // same budget to roll back. Do not abandon its result halfway through
+        // recovery; the owner's commit deadline is deliberately longer.
+        const timer=setTimeout(()=>{cancel();finish(reject,new Error('Chưa xác nhận đổi nguồn'));},43000);replacementRequests.set(id,{frame,token,resolve:result=>finish(resolve,result),reject:error=>finish(reject,signal?.aborted?Object.assign(error,{name:'AbortError'}):error)});
+        signal?.addEventListener('abort',cancel,{once:true});frame.contentWindow.postMessage({tag:channel,type:'replace-media',token,id,mediaId,value},origin);
+      });
+    }
     command(action, value) {
       if(validRemote(this.frame)!==this)return false;
       if (action === 'start-zero') this.state = { ...this.state, startedAtZero: false, paused: true };
@@ -1210,17 +1229,31 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     }
     return options.onNext?.() || false;
   }
+  function requestIntro(){
+    const value=state();if(documentRole()!=='current' || !upstream || !value?.mediaId || value.ad)return false;
+    window.parent.postMessage({tag:channel,type:'intro-episode',token:upstream.token,mediaId:value.mediaId},upstream.origin);return true;
+  }
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || data.tag !== channel || !trustedOrigin(event.origin)) return;
     if (event.source === window.parent && window.parent !== window && parentOrigin === event.origin) {
+      if(data.type==='cancel-replace' && upstream?.token===data.token && localReplacement?.id===data.id){localReplacement.controller.abort();return;}
+      if(data.type==='replace-media' && upstream?.token===data.token){
+        const video=sites.findVideo(),value=data.value,provider=providerIdentity(value?.provider),playlist=typeof SharedPlayer!=='undefined' && SharedPlayer.mediaPlaylist(value?.playlist);
+        if(localReplacement || !options.replaceMedia || !video || video.closest('.jw-flag-ads,[data-ad]') || typeof data.mediaId!=='string' || !data.mediaId || data.mediaId!==(video.currentSrc || video.src || '') || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || !playlist || !provider || !Number.isFinite(value.position) || value.position<0 || typeof value.paused!=='boolean' || typeof value.muted!=='boolean' || !Number.isFinite(value.volume) || value.volume<0 || value.volume>1)return;
+        const job={id:data.id,token:data.token,controller:new AbortController()};localReplacement=job;
+        Promise.resolve(options.replaceMedia(video,{playlist,provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume},job.controller.signal)).then(()=>{
+          if(localReplacement===job && upstream?.token===job.token && !job.controller.signal.aborted){sendState();window.parent.postMessage({tag:channel,type:'replace-result',token:job.token,id:job.id,ok:true},upstream.origin);}
+        },()=>{if(localReplacement===job && upstream?.token===job.token){sendState();window.parent.postMessage({tag:channel,type:'replace-result',token:job.token,id:job.id,ok:false},upstream.origin);}}).finally(()=>{if(localReplacement===job)localReplacement=null;});return;
+      }
       if(data.type==='next-result' && upstream?.token===data.token && typeof data.id==='string'){
         const request=nextRequests.get(data.id);
-        if(request && request.token===data.token && request.mediaId===state()?.mediaId && ['navigating','missing','error'].includes(data.status)){
+        if(request && request.token===data.token && data.mediaId===request.mediaId && (data.status==='navigating' || request.mediaId===state()?.mediaId) && ['navigating','missing','error'].includes(data.status)){
           clearTimeout(request.timer);nextRequests.delete(data.id);request.resolve(data.status);
         }return;
       }
       if (data.type === 'hello' && typeof data.token === 'string' && data.token.length < 100) {
+        if(upstream?.token!==data.token)localReplacement?.controller.abort();
         upstream = { token: data.token, origin: event.origin };
         parentContext=readParentContext(data.context,event.origin);parentFullscreen=data.fullscreen===true;parentPresented=data.presented!==false;
         if (data.managed && ['prepared', 'current'].includes(data.role)) {
@@ -1293,15 +1326,25 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     const frame = frames().find((el) => el.contentWindow === event.source);
     if (!frame || sites.url(frame.src)?.origin !== event.origin) return;
     let session = sessions.get(frame);
+    if(data.type==='intro-episode'){
+      const receiver=validRemote(frame);
+      if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state.localPresentation || receiver.state.ad || receiver.state.changing || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || Date.now()-(session.lastIntro || 0)<500)return;
+      session.lastIntro=Date.now();options.onIntro?.();return;
+    }
+    if(data.type==='replace-result'){
+      const request=replacementRequests.get(data.id);
+      if(!request || request.frame!==frame || request.token!==data.token || session?.token!==data.token || session.src!==frame.src || session.origin!==event.origin)return;
+      if(data.ok===true)request.resolve(true);else request.reject(new Error('Không đổi được nguồn trong phiên'));return;
+    }
     if(data.type==='next-episode'){
       const receiver=validRemote(frame);
       if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state?.nativeEnhanced || !receiver.state.customCapable || receiver.state.ad || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || session.nextPending)return;
       const currentSession=session;session.nextPending=true;
       Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
-        if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId)return;
-        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
+        if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId && ok!==true && ok!=='navigating')return;
+        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
       }).catch(()=>{
-        if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:'error'},session.origin);
+        if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:'error'},session.origin);
       }).finally(()=>{currentSession.nextPending=false;});return;
     }
     if (data.type === 'fullscreen-toggle') {
@@ -1330,7 +1373,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const items=value.tracks?.[group];
       if(Array.isArray(items) && items.length<=100 && items.every(item=>item && Number.isInteger(item.id) && item.id>=0 && item.id<100 && typeof item.label==='string' && item.label.length<=100 && typeof item.active==='boolean'))tracks[group]=items.map(({id,label,active})=>({id,label,active}));
     }
-    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,played:value.played===true,tracks };
+    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,played:value.played===true,tracks,
+      localPresentation:value.localPresentation===true,playlist:channel==='motchill-player-controls-v2' && typeof SharedPlayer!=='undefined'?SharedPlayer.mediaPlaylist(value.playlist):null,provider:providerIdentity(value.provider),changing:value.changing===true };
     // Generic player chỉ có quyền báo video, không tự nhận là website gốc.
     if (sites.embedHosts.has(sites.url(frame.src).hostname)) value = { ...value, page: null, direct: false,
       sourceFrames: sourceFrames(value.sourceFrames).filter((value) => sites.knownEmbedPage(value)) };
@@ -1394,7 +1438,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     sendState();
     return video || (remote?.isConnected ? remote : null);
   }
-  return { poll, state, setRole, requestFullscreen,requestNext,get parentContext(){return parentContext;},get parentFullscreen(){return parentFullscreen;},get parentPresented(){return parentPresented;},getFrame: validRemote,
+  return { poll, state, setRole, requestFullscreen,requestNext,requestIntro,get parentContext(){return parentContext;},get parentFullscreen(){return parentFullscreen;},get parentPresented(){return parentPresented;},getFrame: validRemote,
     setNativeGestures(value) { nativeGestures = value === true; },
     get role() { return documentRole(); }, get managed() { documentRole(); return managed; }, get remote() { return remote; } };
 }

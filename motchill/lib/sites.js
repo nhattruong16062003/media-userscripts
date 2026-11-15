@@ -279,7 +279,11 @@ function createMotchillSites() {
     if(!Array.isArray(data?.movie?.episodes) || !data.movie.episodes.length)return null;
     const frames=[...doc.querySelectorAll('.player-frame-stable iframe.player-frame-content')].filter(frame=>!isPrepared(frame));
     if(frames.length!==1)return null;
-    const frame=frames[0],source=url(frame.getAttribute('src'),pageUrl),id=source?.pathname.match(/^\/embed\/([1-9]\d*)\/?$/)?.[1];
+    const frame=frames[0],source=url(frame.getAttribute('src'),pageUrl);
+    // A persistent engine can change resource without navigating its iframe.
+    // The assignment is valid only for this exact document source AND route.
+    const assignment=frame.dataset.mcProviderSource===source?.href && frame.dataset.mcProviderPath===parsed.path ? frame.dataset.mcProviderId:null;
+    const id=assignment || source?.pathname.match(/^\/embed\/([1-9]\d*)\/?$/)?.[1];
     if(!id || !knownEmbedPage(source.href))return null;
     const matches=data.movie.episodes.filter(ep=>ep && String(ep.id)===id && ep.slug===parsed.episode && ep.type==='m3u8');
     if(matches.length!==1 || !translationKey(matches[0].server))return null;

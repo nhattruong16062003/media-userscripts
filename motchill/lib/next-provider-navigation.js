@@ -3,7 +3,7 @@
 function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,hooks={}){
   let active=false,shell=null,currentMedia=null,identity='',override=null,disposed=false,lastURL='';
   let buttonClasses=null;
-  let rollback=null,clicked=null;
+  let rollback=null,clicked=null,transferring=false,recovering=null;
   const state=()=>sites.nextProviderState();
   const page=()=>sites.read();
   const key=()=>[location.href,state()?.frame.src].join('|');
@@ -48,7 +48,10 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       if(!current(candidate) || key()!==candidate.sourceKey)throw new Error('Nguồn chuẩn bị đã đổi');
       rollback={media:currentMedia,muted:!!currentMedia?.muted,paused:!!currentMedia && currentMedia.paused!==false};
       bridge.setRole(candidate.frame,'current');candidate.remote.command('start-zero');
-      await wait(()=>{if(!current(candidate))throw new Error('Nguồn không còn sẵn sàng');return candidate.remote.state.startedAtZero && !candidate.remote.paused && candidate.remote.currentTime<3;},signal);
+      // The child verifies seek-zero and its first actual Play before setting
+      // startedAtZero. A delayed parent poll may observe >3s; requiring that
+      // transient position again loses a valid acknowledgement on Android.
+      await wait(()=>{if(!current(candidate))throw new Error('Nguồn không còn sẵn sàng');return candidate.remote.state.startedAtZero && !candidate.remote.paused;},signal);
       const resume=candidate.target.resume;
       if(resume && ['server','translation'].includes(candidate.target.intent) && Number.isFinite(resume.position) && resume.position>=0 && Number.isFinite(resume.duration) && Math.abs(resume.duration-candidate.remote.duration)<=Math.max(30,candidate.remote.duration*.03)){
         const position=Math.min(resume.position,candidate.remote.duration-1);candidate.remote.currentTime=position;
@@ -56,9 +59,36 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       }
       return {playing:true,startedAt:0};
     },
-    commit(candidate,target,_result,operation){
+    async commit(candidate,target,_result,operation){
       if(operation.signal.aborted || !operation.isCurrent() || !current(candidate) || key()!==candidate.sourceKey)throw new Error('Tác vụ không còn hiện hành');
       const old=state()?.frame;if(!old)throw new Error('Khung cũ đã đổi');
+      if(currentMedia?.state.localPresentation){
+        const original=currentMedia,previousFile=original.state.playlist?.file,provider=candidate.remote.state.provider,playlist=candidate.remote.state.playlist;
+        if(!playlist || !provider || provider.movieId!==original.state.provider?.movieId || provider.season!==original.state.provider?.season || provider.id!==String(candidate.episode.id) || provider.server!==candidate.episode.server)throw new Error('Nguồn không cùng phim/mùa/server');
+        document.dispatchEvent(new Event('mc-before-server-change'));
+        // History must not bind a new media URL to the previous route during
+        // an asynchronous engine load. The same visible document stays full.
+        transferring=true;old.dataset.mcManaged='provider';bridge.setRole(old,'current');old.dataset.mcRole='prepared';
+        const resume=target.resume,compatible=resume && ['server','translation'].includes(target.intent) && Number.isFinite(resume.position) && Number.isFinite(resume.duration) && Math.abs(resume.duration-candidate.remote.duration)<=Math.max(30,candidate.remote.duration*.03);
+        try{
+          await original.replaceMedia({playlist,provider,position:compatible?resume.position:0,paused:target.intent==='server' && !!rollback?.paused,muted:rollback?.muted ?? false,volume:Number.isFinite(original.volume)?original.volume:1},operation.signal);
+          if(operation.signal.aborted || !operation.isCurrent() || old.src!==original.session.src)throw Object.assign(new Error('Đã hủy chuyển tập'),{name:'AbortError'});
+          const route=sites.route(target.url,sites.families.NEXT);
+          old.dataset.mcProviderSource=old.src;old.dataset.mcProviderPath=route.path;old.dataset.mcProviderId=String(candidate.episode.id);
+          History.prototype[target.pop?'replaceState':'pushState'].call(history,{...history.state,mcNativeEpisode:true},'',target.url);
+          old.dataset.mcRole='current';old.dataset.mcStartZero=compatible?'0':'1';currentMedia=original;
+          candidate.remote.pause();candidate.remote.muted=true;candidate.frame.remove();candidate.activated=true;
+          try{sessionStorage.setItem('active-server-'+state().data.movie.slug,candidate.episode.server);sessionStorage.setItem('active-server-type','m3u8');}catch{/* storage disabled */}
+          const info=page();document.title=info.title+' · '+info.episode;document.dispatchEvent(new CustomEvent('mc-episode-changed',{detail:info}));
+          syncButtons();rollback=null;override=null;identity=key();lastURL=location.href;bridge.poll();hooks.poll?.(currentMedia,identity);return;
+        }catch(error){
+          // Reveal a rolled-back resource only after its actual playlist is
+          // confirmed. An unknown/late result stays isolated from history.
+          recovering={frame:old,remote:original,file:previousFile};
+          if(original.state.playlist?.file===previousFile && !original.state.changing){old.dataset.mcRole='current';recovering=null;}
+          throw error;
+        }finally{transferring=false;}
+      }
       document.dispatchEvent(new Event('mc-before-server-change'));rollback?.media?.pause();
       bridge.setRole(old,'prepared');old.dataset.mcRole='prepared';old.hidden=true;old.style.display='none';
       candidate.frame.classList.remove('mc-native-prepared');candidate.frame.dataset.mcRole='current';candidate.frame.title='Trình phát phim';candidate.activated=true;
@@ -74,9 +104,11 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       bridge.poll();
       hooks.poll?.(currentMedia,identity);
     },
-    rollback(){if(rollback?.media){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
+    // A persistent child owns its rollback, including Pause/audio. Parent
+    // commands here could unmute or resume an unconfirmed intermediate source.
+    rollback(){if(rollback?.media && !rollback.media.state.localPresentation){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
     discard(candidate){if(!candidate.activated)candidate.frame.remove();},
-  });
+  },{commitTimeoutMs:45000});
   const style=document.createElement('style');style.dataset.mcNativeNavigation='1';style.textContent='.mc-native-prepared{position:fixed!important;left:-10000px!important;top:0!important;width:640px!important;height:360px!important;opacity:0!important;pointer-events:none!important}.player-frame-stable:fullscreen{width:100vw!important;height:100vh!important;padding:0!important;background:#000}';
   function syncButtons(){
     const current=state(),nodes=sites.nextProviderButtons();if(!current || !nodes.length)return;
@@ -85,6 +117,15 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     for(const node of nodes){const selected=label(node)===current.episode.server;node.setAttribute('aria-pressed',String(selected));if(buttonClasses)node.className=selected?buttonClasses.active:buttonClasses.idle;}
   }
   function poll(){
+    if(transferring)return true;
+    // The result message can arrive before the parent's next state heartbeat.
+    // Restore history eligibility only when the old resource is confirmed,
+    // including recovery that finishes after the outer operation was aborted.
+    if(recovering){
+      const {frame,remote,file}=recovering;
+      if(!frame.isConnected || frame.src!==remote.session.src)recovering=null;
+      else if(remote.state.playlist?.file===file && !remote.state.changing){frame.dataset.mcRole='current';recovering=null;}
+    }
     const source=state();if(!source){if(active){machine.cancel();identity='';active=false;}return false;}
     active=true;shell=source.frame.parentElement;if(!style.isConnected)(document.head || document.documentElement).append(style);
     const newKey=key();if(identity && identity!==newKey){machine.cancel();override=null;}identity=newKey;lastURL=location.href;syncButtons();
@@ -98,7 +139,7 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     override={...target,intent:target.intent || reason};machine.reset(key(),override);
     const success=await machine.go(reason);override=null;return success;
   }
-  function goNext(reason='manual'){const info=page();return info?.next?transitionTo(info.next,reason):Promise.resolve(false);}
+  function goNext(reason='manual'){if(!machine.busy)clicked=null;const info=page();return info?.next?transitionTo(info.next,reason):Promise.resolve(false);}
   function toggleFullscreen(){return shell?fullscreen.toggle(shell):Promise.resolve('unavailable');}
   document.addEventListener('click',event=>{
     const source=state();if(!source || !active)return;

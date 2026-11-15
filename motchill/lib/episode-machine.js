@@ -26,7 +26,7 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
     disposed.add(candidate);
     try { hooks.discard?.(candidate); } catch (_) { /* cleanup không che lỗi nguồn */ }
   }
-  async function limited(work, parentSignal, cleanup) {
+  async function limited(work, parentSignal, cleanup, limitMs=timeoutMs) {
     const operation = new AbortController();
     let deadline;
     let stop;
@@ -36,8 +36,8 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
       parentSignal.addEventListener('abort', stop, { once: true });
       deadline = setTimeout(() => {
         operation.abort();
-        reject(Object.assign(new Error('Nguồn phát chưa sẵn sàng sau 20 giây'), { name: 'TimeoutError' }));
-      }, timeoutMs);
+        reject(Object.assign(new Error('Nguồn phát chưa sẵn sàng'), { name: 'TimeoutError' }));
+      }, limitMs);
       if (parentSignal.aborted) stop();
     });
     const task = Promise.resolve().then(() => {
@@ -130,7 +130,7 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
             committing = true;
             await limited((s) => hooks.commit?.(candidate, target, result, {
               signal: s, isCurrent: () => epoch === generation && !s.aborted,
-            }), signal);
+            }), signal, undefined, options.commitTimeoutMs ?? timeoutMs);
             if (signal.aborted || epoch !== generation) throw abortError();
             prepared = null; // quyền sở hữu được bàn giao cho player hiện tại
             report('playing', 'Đã chuyển tập', reason);

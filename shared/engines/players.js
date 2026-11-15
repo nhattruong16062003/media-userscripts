@@ -84,11 +84,21 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true}={}) {
       const duration = kind === 'jw' ? api.getDuration() : video.duration;
       const time = kind === 'jw' ? api.getPosition() : video.currentTime;
       const ad = !!isAd();
-      return {kind,failed:!!video.error,ready:video.isConnected && !video.error && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
+      const connected=video.isConnected && playerFingerprint(candidate)===initialSource && mediaVisible(video,video.ownerDocument.defaultView),engineState=kind==='jw'?api.getState?.():null,failed=!!video.error || engineState==='error';
+      // JW may deliberately leave an empty <video> until an explicit Play.
+      // Native chrome is hidden, so our Play must remain reachable before
+      // metadata without authorizing gestures/seek on an unready resource.
+      const item=kind==='jw'?api.getPlaylistItem?.():null,file=item?.file || item?.sources?.[0]?.file;
+      const initializable=connected && !failed && !ad && video.readyState===0 && kind==='jw' && ['idle','paused'].includes(engineState) && typeof file==='string' && /^https?:\/\//.test(file);
+      return {kind,failed,initializable,ready:connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
     } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false,played:false}; }
   };
   const command = (action,value) => {
     const s = state();
+    if(action==='initialize-play-audible'){
+      if(!s.initializable)return false;
+      api.setMute(false);const volume=api.getVolume?.();if(!finite(volume) || volume<=0)api.setVolume?.(100);api.play(true)?.catch?.(()=>{});return true;
+    }
     if (!s.ready || s.ad) return false;
     switch (action) {
       case 'seek': if (!finite(value)) return false; if (kind === 'jw') api.seek(clampSeek(value,s.duration)); else video.currentTime = clampSeek(value,s.duration); break;

@@ -8,6 +8,9 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
+  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null;
+  const mobile=()=>window.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const localPresentation=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
   const waiting=new Map();
   let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
   const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');
@@ -57,23 +60,64 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     const found=candidate();
     const fingerprint=found?SharedPlayer.playerFingerprint(found):'';
     if(probe && (!found || probe.video!==found.video || probe.api!==found.api || probeSource!==fingerprint)){probe.dispose();probe=null;}
-    if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
+    if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
     const own=found?.video===video,state=own?probe.state():null;
-    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
+    const transfer=own && !!enhancementRoot() && found.kind==='jw' && typeof found.api.load==='function';
+    const provider=providerIdentity || (transfer && window.episode && {id:String(window.episode.id),movieId:String(window.episode.movieId),server:window.episode.server,season:window.episode.season_number});
+    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:transfer && localPresentation(),playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
   }
-  function commandTrack(video,group,id){const found=candidate(),state=localState(video);return state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
-  function playAudible(video){const state=localState(video);return state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
-  function restoreAudio(video,value){const state=localState(video);return state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
+  function commandTrack(video,group,id){const found=candidate(),state=localState(video);return !changing && state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
+  function playAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
+  function restoreAudio(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function enhanceLocal(video){
-    // The stable parent owns the full UI and fullscreen. The provider document
-    // only loads media and accepts authenticated commands; no native click,
-    // gesture or fullscreen handler is used by the overlay.
-    guard();return !!enhancementRoot() && candidate()?.video===video;
+    guard();
+    if(localPresentation() && bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared'){
+      const root=SharedPlayer.mediaPresentationRoot(window,video,enhancementRoot());
+      if(root){
+        if(!localFullscreen)localFullscreen=SharedPlayer.fullscreenController(window,{onChange:()=>mounted?.ui.update()});
+        const style=document.querySelector('[data-mc-local-fullscreen]') || document.createElement('style');
+        if(!style.isConnected){style.dataset.mcLocalFullscreen='1';style.textContent='#rp-player:fullscreen{width:100vw!important;height:100vh!important;margin:0!important;background:#000}#rp-player:fullscreen>.main-player,#rp-player:fullscreen>.main-player>#player{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}';document.documentElement.append(style);}
+        update(video,root,bridge.parentContext);
+        const state=mounted?.player.state();
+        if(state && !state.ready && !state.initializable){
+          if(!statusPanel)statusPanel=SharedPlayer.loadingPanel(window,root,{onRetry:()=>{const found=candidate(),item=found?.kind==='jw' && SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.());if(item && !found.video.closest('.jw-flag-ads,[data-ad]')){found.api.setMute(false);found.api.load(item);found.api.play(true)?.catch?.(()=>{});}}});
+          if(state.failed)statusPanel.fail();
+        }else{statusPanel?.dispose();statusPanel=null;}
+      }
+    }
+    return !!enhancementRoot() && candidate()?.video===video;
+  }
+  function replaceMedia(video,value,signal){
+    const found=candidate(),provider=value?.provider,playlist=SharedPlayer.mediaPlaylist(value?.playlist);
+    const original=providerIdentity || window.episode && {movieId:String(window.episode.movieId),season:window.episode.season_number};
+    if(!localPresentation() || found?.video!==video || !playlist || !provider || !/^[1-9]\d*$/.test(provider.id) || provider.movieId!==original?.movieId || provider.season!==original?.season || !sites.translationKey(provider.server))return Promise.reject(new Error('Không xác minh được tập mới'));
+    // This provider captures resumeData once at ready. Reusing its engine must
+    // not save episode 3 into episode 2's native key, including onunload's
+    // bracket assignment. Only that captured key is redirected; other storage
+    // and our separate GM history keep their original identity and contents.
+    if(!resumeAlias){
+      try{
+        const descriptor=Object.getOwnPropertyDescriptor(window,'localStorage'),target=window.localStorage;
+        if(!descriptor?.configurable || !/^[1-9]\d*$/.test(String(window.episode?.id)))throw new Error('Không thể giữ định danh tiến độ');
+        const initial='PlayerPosition-'+window.episode.id,active=()=>providerIdentity?'PlayerPosition-'+providerIdentity.id:initial;
+        const get=key=>String(key)===initial?changing?null:target.getItem(active()):target.getItem(key);
+        const set=(key,text)=>{if(String(key)!==initial)target.setItem(key,text);else if(!changing)target.setItem(active(),text);};
+        const remove=key=>{if(String(key)!==initial)target.removeItem(key);else if(!changing)target.removeItem(active());};
+        const proxy=new Proxy(target,{get(object,key){if(key==='getItem')return get;if(key==='setItem')return set;if(key==='removeItem')return remove;if(key===initial)return get(key);const result=Reflect.get(object,key,object);return typeof result==='function'?result.bind(object):result;},set(object,key,text){if(key===initial){set(key,text);return true;}return Reflect.set(object,key,text,object);},deleteProperty(object,key){if(key===initial){remove(key);return true;}return Reflect.deleteProperty(object,key);}});
+        const getter=()=>proxy;Object.defineProperty(window,'localStorage',{...descriptor,get:getter});resumeAlias={descriptor,getter};
+      }catch(error){return Promise.reject(error);}
+    }
+    if(!persistent)persistent=SharedPlayer.persistentMediaSession(window,{candidate,onPending:value=>{changing=value;},onIdentity:identity=>{providerIdentity=identity;}});
+    const root=enhancementRoot(),panel=SharedPlayer.loadingPanel(window,root,{});
+    return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).finally(()=>panel.dispose());
   }
   function update(media,root,page){
     if(disposed)return false;
     guard();prepareFrames();
     const local=!media?.frame && candidate(),remote=media?.frame && media.state?.customCapable===true;
+    if(remote && media.state.localPresentation===true){
+      detach();media.frame.dataset.mcDisplay='custom';const record=waiting.get(media.frame);record?.panel?.dispose();if(record)record.panel=null;return true;
+    }
     if(!root?.isConnected || !media || !(remote || local?.video===media)) {detach();return false;}
     const signature=remote?[media.session?.token,media.frame.src,media.state.mediaId].join('|'):SharedPlayer.playerFingerprint(local);
     if(mounted && (mounted.media!==media || mounted.root!==root || mounted.signature!==signature || !mounted.ui.shell.isConnected || local && (mounted.player.api!==local.api || mounted.player.nativeRoot!==local.root)))detach();
@@ -98,15 +142,17 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         };
         player={root,video:media,state,command,audio:()=>({muted:media.muted,volume:media.volume}),bounds:()=>root.getBoundingClientRect(),fingerprint:()=>[media.session?.token,media.frame.src,media.state.mediaId].join('|'),tracks:()=>media.state?.tracks || {},selectTrack(group,id){if(!state().ready || !['quality','audio','captions'].includes(group) || !Number.isInteger(id) || !media.state?.tracks?.[group]?.some(item=>item.id===id))return false;media.command('track-'+group,id);return true;}};
       }else{
-        player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
+        player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
+        const mediaState=player.state;
+        player.state=()=>{const value=mediaState();return changing?{...value,ready:false,initializable:false}:value;};
       }
-      const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:remote && media.state.nativeEnhanced?45000:undefined,
-        audioPreferences,canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
-        introSeconds:hooks.introSeconds,onIntro:hooks.onIntro,onNext:()=>Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
-        isFullscreen:hooks.isFullscreen,onFullscreen:hooks.onFullscreen});
+      const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
+        audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
+        introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
+        isFullscreen:()=>localPresentation()?document.fullscreenElement===root:hooks.isFullscreen(),onFullscreen:()=>localPresentation()?localFullscreen.toggle(root):hooks.onFullscreen()});
       mounted={media,root,signature,player,ui};
     }
-    mounted.ui.setContext({url:page.url,episodeID:page.episodeKey,lane:page.language,server:hooks.serverKey(),next:page.next});
+    mounted.ui.setContext({url:page.url,episodeID:page.episodeKey,lane:page.language,server:localPresentation()?page.server:hooks.serverKey(),next:page.next});
     if(remote){
       const record=waiting.get(media.frame),ready=mounted.player.state().ready && !mounted.ui.shell.hidden;
       if(ready){media.frame.dataset.mcDisplay='custom';record?.panel?.dispose();if(record)record.panel=null;}
@@ -114,5 +160,5 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,enhanceLocal,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,enhanceLocal,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }

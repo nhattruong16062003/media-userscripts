@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.12
+// @version      6.0.13
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -205,6 +205,9 @@ var SharedPlayer = (() => {
     fullscreenController: () => fullscreenController,
     installGestures: () => installGestures,
     loadingPanel: () => loadingPanel,
+    mediaPlaylist: () => mediaPlaylist,
+    mediaPresentationRoot: () => mediaPresentationRoot,
+    persistentMediaSession: () => persistentMediaSession,
     playerCandidate: () => playerCandidate,
     playerFingerprint: () => playerFingerprint,
     playerStartupGuard: () => playerStartupGuard,
@@ -775,6 +778,14 @@ var SharedPlayer = (() => {
       holdTip.hidden = true;
     }
     function actionClick(action, node) {
+      if (action === "play" && !player.state().ready && player.state().initializable) {
+        autoPlayAttempted = true;
+        audio?.intent(false);
+        command("initialize-play-audible");
+        show();
+        update();
+        return;
+      }
       if (!player.state().ready) return;
       switch (action) {
         case "play":
@@ -984,7 +995,7 @@ var SharedPlayer = (() => {
       if (disposed) return;
       const state = player.state(), becameReady = state.ready && !lastReady;
       lastReady = state.ready;
-      shell.hidden = !state.ready;
+      shell.hidden = !state.ready && !state.initializable;
       updateTracks();
       for (const node of tracks.querySelectorAll("button")) node.disabled = !state.ready || locked;
       if (locked && !inFullscreen()) {
@@ -1013,6 +1024,10 @@ var SharedPlayer = (() => {
       if (becameReady || lastPaused !== null && state.paused !== lastPaused) show();
       lastPaused = state.paused;
       for (const node of [center, play, mute, fullscreen, settingsButton, seek, ...rates.children]) node.disabled = !state.ready || locked;
+      if (state.initializable && !locked) {
+        center.disabled = false;
+        play.disabled = false;
+      }
       for (const node of [center, play]) {
         const kind = state.paused ? "play" : "pause";
         if (node.dataset.rpIcon !== kind) {
@@ -1039,7 +1054,7 @@ var SharedPlayer = (() => {
         paintTime(state.time, state.duration);
       }
       for (const node of rates.children) node.setAttribute("aria-pressed", String(Number(node.dataset.rpRate) === state.rate));
-      const intro = state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.duration - state.time <= 180;
+      const intro = state.ready && state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.ready && state.duration - state.time <= 180;
       contextAction.dataset.rpMode = nextPending?.node === contextAction || nextError?.node === contextAction ? "next" : intro ? "intro" : "next";
       contextAction.hidden = !intro && !context || !(intro || nearEnd || nextPending?.node === contextAction || nextError?.node === contextAction);
       line.dataset.rpNextStatus = String(nextPending?.node === next || nextError?.node === next);
@@ -1293,6 +1308,160 @@ var SharedPlayer = (() => {
     };
   }
 
+  // shared/player/persistent-media.js
+  function mediaPresentationRoot(win, video, root) {
+    return video?.ownerDocument === win.document && root?.ownerDocument === win.document && video.isConnected && root.isConnected && root !== video && root.contains(video) ? root : null;
+  }
+  var mediaURL = (value) => {
+    if (typeof value !== "string" || value.length > 8192) return null;
+    try {
+      const u = new URL(value);
+      return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : null;
+    } catch {
+      return null;
+    }
+  };
+  function mediaPlaylist(value) {
+    if (!value || typeof value !== "object") return null;
+    const file = mediaURL(value.file || value.sources?.[0]?.file);
+    if (!file) return null;
+    const result = { file, type: "hls", tracks: [] };
+    if (value.sources != null) {
+      if (!Array.isArray(value.sources) || value.sources.length > 30) return null;
+      result.sources = [];
+      for (const item of value.sources) {
+        const url = mediaURL(item?.file);
+        if (!url) return null;
+        result.sources.push({ file: url, type: "hls", ...typeof item.label === "string" ? { label: item.label.slice(0, 100) } : {} });
+      }
+      if (!result.sources.length) return null;
+    }
+    if (value.tracks != null) {
+      if (!Array.isArray(value.tracks) || value.tracks.length > 100) return null;
+      for (const item of value.tracks) {
+        if (!["captions", "subtitles", "thumbnails"].includes(item?.kind)) continue;
+        if (item.kind === "thumbnails" && !item.file) continue;
+        const url = mediaURL(item.file);
+        if (!url) return null;
+        result.tracks.push({ file: url, kind: item.kind, label: String(item.label || "").slice(0, 100), srclang: String(item.srclang || "").slice(0, 30), default: item.default === true });
+      }
+    }
+    return result;
+  }
+  function persistentMediaSession(win, { candidate, onPending = () => {
+  }, onIdentity = () => {
+  } }) {
+    let generation = 0, busy = false, disposed = false;
+    const abort = () => Object.assign(new Error("Ngu\u1ED3n ph\xE1t \u0111\xE3 thay \u0111\u1ED5i"), { name: "AbortError" });
+    const current = (c) => !disposed && candidate()?.api === c.api && c.root.isConnected;
+    function snapshot() {
+      const c = candidate();
+      return c?.kind === "jw" && typeof c.api.load === "function" ? mediaPlaylist(c.api.getPlaylistItem?.()) : null;
+    }
+    async function load(c, playlist, { signal, position = 0, paused = true, muted = true, volume = 1 }, epoch) {
+      if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
+      const check = () => {
+        if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
+        const item = mediaPlaylist(c.api.getPlaylistItem?.()), v2 = c.root.querySelector("video");
+        if (item?.file !== playlist.file || !v2 || v2.error || v2.readyState < 2 || !Number.isFinite(v2.duration) || v2.duration <= 0) return null;
+        return v2;
+      };
+      c.api.setMute(true);
+      c.api.load(playlist);
+      if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
+      await Promise.resolve(c.api.play(true));
+      const v = await new Promise((resolve, reject) => {
+        let timer, deadline;
+        const finish = (fn, value) => {
+          win.clearInterval(timer);
+          win.clearTimeout(deadline);
+          signal?.removeEventListener("abort", cancel);
+          fn(value);
+        };
+        const cancel = () => finish(reject, abort());
+        const tick = () => {
+          try {
+            const video = check();
+            if (video) finish(resolve, video);
+          } catch (error) {
+            finish(reject, error);
+          }
+        };
+        signal?.addEventListener("abort", cancel, { once: true });
+        timer = win.setInterval(tick, 50);
+        deadline = win.setTimeout(() => finish(reject, new Error("Ngu\u1ED3n ph\xE1t ch\u01B0a s\u1EB5n s\xE0ng")), 15e3);
+        tick();
+      });
+      if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
+      c.api.pause(true);
+      const target = Math.max(0, Math.min(position, v.duration - 0.25));
+      c.api.seek(target);
+      await new Promise((resolve, reject) => {
+        let timer, deadline;
+        const finish = (fn, value) => {
+          win.clearInterval(timer);
+          win.clearTimeout(deadline);
+          signal?.removeEventListener("abort", cancel);
+          fn(value);
+        };
+        const cancel = () => finish(reject, abort());
+        const tick = () => {
+          try {
+            const video = check();
+            if (video && !video.seeking && Math.abs(c.api.getPosition() - target) < 1) finish(resolve);
+          } catch (error) {
+            finish(reject, error);
+          }
+        };
+        signal?.addEventListener("abort", cancel, { once: true });
+        timer = win.setInterval(tick, 50);
+        deadline = win.setTimeout(() => finish(reject, new Error("Ch\u01B0a x\xE1c nh\u1EADn v\u1ECB tr\xED phim")), 5e3);
+        tick();
+      });
+      if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
+      if (paused) c.api.pause(true);
+      else await Promise.resolve(c.api.play(true));
+      if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
+      if (typeof c.api.setVolume === "function" && Number.isFinite(volume) && volume >= 0 && volume <= 1) c.api.setVolume(volume * 100);
+      c.api.setMute(muted);
+      return v;
+    }
+    return { snapshot, get busy() {
+      return busy;
+    }, async replace(value, options = {}) {
+      if (busy || disposed) throw new Error("\u0110ang chuy\u1EC3n ngu\u1ED3n");
+      const c = candidate(), playlist = mediaPlaylist(value), previous = snapshot();
+      if (!playlist || !previous || !c || c.kind !== "jw" || !mediaPresentationRoot(win, c.video, c.root)) throw new Error("Ngu\u1ED3n kh\xF4ng h\u1ED7 tr\u1EE3 \u0111\u1ED5i trong phi\xEAn");
+      const before = { position: c.api.getPosition(), paused: c.video.paused, muted: c.api.getMute(), volume: c.api.getVolume?.() / 100 }, epoch = ++generation;
+      busy = true;
+      onPending(true);
+      try {
+        const video = await load(c, playlist, options, epoch);
+        onIdentity(options.identity);
+        return video;
+      } catch (error) {
+        if (current(c) && epoch === generation) try {
+          await load(c, previous, { ...before, paused: options.signal?.aborted || before.paused }, epoch);
+        } catch {
+        }
+        throw error;
+      } finally {
+        if (epoch === generation) {
+          busy = false;
+          onPending(false);
+        }
+      }
+    }, cancel() {
+      generation++;
+      busy = false;
+      onPending(false);
+    }, dispose() {
+      disposed = true;
+      generation++;
+      busy = false;
+    } };
+  }
+
   // shared/player/loading.js
   function loadingPanel(win, host, { fixed = false, onRetry = () => {
   } } = {}) {
@@ -1509,13 +1678,25 @@ var SharedPlayer = (() => {
         const duration = kind === "jw" ? api.getDuration() : video.duration;
         const time = kind === "jw" ? api.getPosition() : video.currentTime;
         const ad = !!isAd();
-        return { kind, failed: !!video.error, ready: video.isConnected && !video.error && playerFingerprint(candidate) === initialSource && mediaVisible(video, video.ownerDocument.defaultView) && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
+        const connected = video.isConnected && playerFingerprint(candidate) === initialSource && mediaVisible(video, video.ownerDocument.defaultView), engineState = kind === "jw" ? api.getState?.() : null, failed = !!video.error || engineState === "error";
+        const item = kind === "jw" ? api.getPlaylistItem?.() : null, file = item?.file || item?.sources?.[0]?.file;
+        const initializable = connected && !failed && !ad && video.readyState === 0 && kind === "jw" && ["idle", "paused"].includes(engineState) && typeof file === "string" && /^https?:\/\//.test(file);
+        return { kind, failed, initializable, ready: connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
       } catch {
         return { kind, ready: false, ad: true, time: 0, duration: 0, rate: 1, paused: true, ended: false, played: false };
       }
     };
     const command = (action, value) => {
       const s = state();
+      if (action === "initialize-play-audible") {
+        if (!s.initializable) return false;
+        api.setMute(false);
+        const volume = api.getVolume?.();
+        if (!finite(volume) || volume <= 0) api.setVolume?.(100);
+        api.play(true)?.catch?.(() => {
+        });
+        return true;
+      }
       if (!s.ready || s.ad) return false;
       switch (action) {
         case "seek":
@@ -1861,7 +2042,11 @@ function createMotchillSites() {
     if(!Array.isArray(data?.movie?.episodes) || !data.movie.episodes.length)return null;
     const frames=[...doc.querySelectorAll('.player-frame-stable iframe.player-frame-content')].filter(frame=>!isPrepared(frame));
     if(frames.length!==1)return null;
-    const frame=frames[0],source=url(frame.getAttribute('src'),pageUrl),id=source?.pathname.match(/^\/embed\/([1-9]\d*)\/?$/)?.[1];
+    const frame=frames[0],source=url(frame.getAttribute('src'),pageUrl);
+    // A persistent engine can change resource without navigating its iframe.
+    // The assignment is valid only for this exact document source AND route.
+    const assignment=frame.dataset.mcProviderSource===source?.href && frame.dataset.mcProviderPath===parsed.path ? frame.dataset.mcProviderId:null;
+    const id=assignment || source?.pathname.match(/^\/embed\/([1-9]\d*)\/?$/)?.[1];
     if(!id || !knownEmbedPage(source.href))return null;
     const matches=data.movie.episodes.filter(ep=>ep && String(ep.id)===id && ep.slug===parsed.episode && ep.type==='m3u8');
     if(matches.length!==1 || !translationKey(matches[0].server))return null;
@@ -2528,6 +2713,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   let relayFrame = null;
   let parentContext=null,parentFullscreen=false,parentPresented=window.top===window;
   const nextRequests=new Map();
+  const replacementRequests=new Map();let localReplacement=null;
+  const providerIdentity=value=>value && typeof value.id==='string' && /^[1-9]\d*$/.test(value.id) && typeof value.movieId==='string' && /^[1-9]\d*$/.test(value.movieId) && Number.isSafeInteger(value.season) && value.season>=1 && value.season<=1000 && typeof value.server==='string' && value.server.length<200 && sites.translationKey(value.server) ? {id:value.id,movieId:value.movieId,season:value.season,server:value.server}:null;
   function readParentContext(value,origin){
     const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
     if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !sites.translationKey(value.language))return null;
@@ -2615,6 +2802,19 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     closest() { return null; }
     play() { this.command('play'); return Promise.resolve(); }
     pause() { this.command('pause'); }
+    replaceMedia(value,signal){
+      if(validRemote(this.frame)!==this || !this.state.localPresentation || !this.state.playlist || !value?.playlist || signal?.aborted)return Promise.reject(new Error('Nguồn không còn hiện hành'));
+      const id=nonce(),mediaId=this.state.mediaId,token=this.session.token,frame=this.frame,origin=this.session.origin;
+      return new Promise((resolve,reject)=>{
+        const finish=(fn,result)=>{clearTimeout(timer);signal?.removeEventListener('abort',cancel);replacementRequests.delete(id);fn(result);};
+        const cancel=()=>{frame.contentWindow?.postMessage({tag:channel,type:'cancel-replace',token,id},origin);};
+        // Child readiness + seek may take 20s, and a failed load needs the
+        // same budget to roll back. Do not abandon its result halfway through
+        // recovery; the owner's commit deadline is deliberately longer.
+        const timer=setTimeout(()=>{cancel();finish(reject,new Error('Chưa xác nhận đổi nguồn'));},43000);replacementRequests.set(id,{frame,token,resolve:result=>finish(resolve,result),reject:error=>finish(reject,signal?.aborted?Object.assign(error,{name:'AbortError'}):error)});
+        signal?.addEventListener('abort',cancel,{once:true});frame.contentWindow.postMessage({tag:channel,type:'replace-media',token,id,mediaId,value},origin);
+      });
+    }
     command(action, value) {
       if(validRemote(this.frame)!==this)return false;
       if (action === 'start-zero') this.state = { ...this.state, startedAtZero: false, paused: true };
@@ -2669,17 +2869,31 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     }
     return options.onNext?.() || false;
   }
+  function requestIntro(){
+    const value=state();if(documentRole()!=='current' || !upstream || !value?.mediaId || value.ad)return false;
+    window.parent.postMessage({tag:channel,type:'intro-episode',token:upstream.token,mediaId:value.mediaId},upstream.origin);return true;
+  }
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || data.tag !== channel || !trustedOrigin(event.origin)) return;
     if (event.source === window.parent && window.parent !== window && parentOrigin === event.origin) {
+      if(data.type==='cancel-replace' && upstream?.token===data.token && localReplacement?.id===data.id){localReplacement.controller.abort();return;}
+      if(data.type==='replace-media' && upstream?.token===data.token){
+        const video=sites.findVideo(),value=data.value,provider=providerIdentity(value?.provider),playlist=typeof SharedPlayer!=='undefined' && SharedPlayer.mediaPlaylist(value?.playlist);
+        if(localReplacement || !options.replaceMedia || !video || video.closest('.jw-flag-ads,[data-ad]') || typeof data.mediaId!=='string' || !data.mediaId || data.mediaId!==(video.currentSrc || video.src || '') || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || !playlist || !provider || !Number.isFinite(value.position) || value.position<0 || typeof value.paused!=='boolean' || typeof value.muted!=='boolean' || !Number.isFinite(value.volume) || value.volume<0 || value.volume>1)return;
+        const job={id:data.id,token:data.token,controller:new AbortController()};localReplacement=job;
+        Promise.resolve(options.replaceMedia(video,{playlist,provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume},job.controller.signal)).then(()=>{
+          if(localReplacement===job && upstream?.token===job.token && !job.controller.signal.aborted){sendState();window.parent.postMessage({tag:channel,type:'replace-result',token:job.token,id:job.id,ok:true},upstream.origin);}
+        },()=>{if(localReplacement===job && upstream?.token===job.token){sendState();window.parent.postMessage({tag:channel,type:'replace-result',token:job.token,id:job.id,ok:false},upstream.origin);}}).finally(()=>{if(localReplacement===job)localReplacement=null;});return;
+      }
       if(data.type==='next-result' && upstream?.token===data.token && typeof data.id==='string'){
         const request=nextRequests.get(data.id);
-        if(request && request.token===data.token && request.mediaId===state()?.mediaId && ['navigating','missing','error'].includes(data.status)){
+        if(request && request.token===data.token && data.mediaId===request.mediaId && (data.status==='navigating' || request.mediaId===state()?.mediaId) && ['navigating','missing','error'].includes(data.status)){
           clearTimeout(request.timer);nextRequests.delete(data.id);request.resolve(data.status);
         }return;
       }
       if (data.type === 'hello' && typeof data.token === 'string' && data.token.length < 100) {
+        if(upstream?.token!==data.token)localReplacement?.controller.abort();
         upstream = { token: data.token, origin: event.origin };
         parentContext=readParentContext(data.context,event.origin);parentFullscreen=data.fullscreen===true;parentPresented=data.presented!==false;
         if (data.managed && ['prepared', 'current'].includes(data.role)) {
@@ -2752,15 +2966,25 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     const frame = frames().find((el) => el.contentWindow === event.source);
     if (!frame || sites.url(frame.src)?.origin !== event.origin) return;
     let session = sessions.get(frame);
+    if(data.type==='intro-episode'){
+      const receiver=validRemote(frame);
+      if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state.localPresentation || receiver.state.ad || receiver.state.changing || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || Date.now()-(session.lastIntro || 0)<500)return;
+      session.lastIntro=Date.now();options.onIntro?.();return;
+    }
+    if(data.type==='replace-result'){
+      const request=replacementRequests.get(data.id);
+      if(!request || request.frame!==frame || request.token!==data.token || session?.token!==data.token || session.src!==frame.src || session.origin!==event.origin)return;
+      if(data.ok===true)request.resolve(true);else request.reject(new Error('Không đổi được nguồn trong phiên'));return;
+    }
     if(data.type==='next-episode'){
       const receiver=validRemote(frame);
       if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state?.nativeEnhanced || !receiver.state.customCapable || receiver.state.ad || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || session.nextPending)return;
       const currentSession=session;session.nextPending=true;
       Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
-        if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId)return;
-        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
+        if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId && ok!==true && ok!=='navigating')return;
+        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
       }).catch(()=>{
-        if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:'error'},session.origin);
+        if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:'error'},session.origin);
       }).finally(()=>{currentSession.nextPending=false;});return;
     }
     if (data.type === 'fullscreen-toggle') {
@@ -2789,7 +3013,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const items=value.tracks?.[group];
       if(Array.isArray(items) && items.length<=100 && items.every(item=>item && Number.isInteger(item.id) && item.id>=0 && item.id<100 && typeof item.label==='string' && item.label.length<=100 && typeof item.active==='boolean'))tracks[group]=items.map(({id,label,active})=>({id,label,active}));
     }
-    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,played:value.played===true,tracks };
+    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,played:value.played===true,tracks,
+      localPresentation:value.localPresentation===true,playlist:channel==='motchill-player-controls-v2' && typeof SharedPlayer!=='undefined'?SharedPlayer.mediaPlaylist(value.playlist):null,provider:providerIdentity(value.provider),changing:value.changing===true };
     // Generic player chỉ có quyền báo video, không tự nhận là website gốc.
     if (sites.embedHosts.has(sites.url(frame.src).hostname)) value = { ...value, page: null, direct: false,
       sourceFrames: sourceFrames(value.sourceFrames).filter((value) => sites.knownEmbedPage(value)) };
@@ -2853,7 +3078,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     sendState();
     return video || (remote?.isConnected ? remote : null);
   }
-  return { poll, state, setRole, requestFullscreen,requestNext,get parentContext(){return parentContext;},get parentFullscreen(){return parentFullscreen;},get parentPresented(){return parentPresented;},getFrame: validRemote,
+  return { poll, state, setRole, requestFullscreen,requestNext,requestIntro,get parentContext(){return parentContext;},get parentFullscreen(){return parentFullscreen;},get parentPresented(){return parentPresented;},getFrame: validRemote,
     setNativeGestures(value) { nativeGestures = value === true; },
     get role() { return documentRole(); }, get managed() { documentRole(); return managed; }, get remote() { return remote; } };
 }
@@ -2888,7 +3113,7 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
     disposed.add(candidate);
     try { hooks.discard?.(candidate); } catch (_) { /* cleanup không che lỗi nguồn */ }
   }
-  async function limited(work, parentSignal, cleanup) {
+  async function limited(work, parentSignal, cleanup, limitMs=timeoutMs) {
     const operation = new AbortController();
     let deadline;
     let stop;
@@ -2898,8 +3123,8 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
       parentSignal.addEventListener('abort', stop, { once: true });
       deadline = setTimeout(() => {
         operation.abort();
-        reject(Object.assign(new Error('Nguồn phát chưa sẵn sàng sau 20 giây'), { name: 'TimeoutError' }));
-      }, timeoutMs);
+        reject(Object.assign(new Error('Nguồn phát chưa sẵn sàng'), { name: 'TimeoutError' }));
+      }, limitMs);
       if (parentSignal.aborted) stop();
     });
     const task = Promise.resolve().then(() => {
@@ -2992,7 +3217,7 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
             committing = true;
             await limited((s) => hooks.commit?.(candidate, target, result, {
               signal: s, isCurrent: () => epoch === generation && !s.aborted,
-            }), signal);
+            }), signal, undefined, options.commitTimeoutMs ?? timeoutMs);
             if (signal.aborted || epoch !== generation) throw abortError();
             prepared = null; // quyền sở hữu được bàn giao cho player hiện tại
             report('playing', 'Đã chuyển tập', reason);
@@ -3307,7 +3532,8 @@ function startMotchillPlayerController(sites) {
   const bridge = createMotchillVideoBridge(sites, channel, { includePrepared: true,
     introSeconds:()=>learning?.introEnd(),userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
-    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value) });
+    onIntro:()=>{if(media?.isConnected)learning.skipIntro(media,contextKey());},
+    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -4071,7 +4297,7 @@ function startMotchillPlayerController(sites) {
 function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,hooks={}){
   let active=false,shell=null,currentMedia=null,identity='',override=null,disposed=false,lastURL='';
   let buttonClasses=null;
-  let rollback=null,clicked=null;
+  let rollback=null,clicked=null,transferring=false,recovering=null;
   const state=()=>sites.nextProviderState();
   const page=()=>sites.read();
   const key=()=>[location.href,state()?.frame.src].join('|');
@@ -4116,7 +4342,10 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       if(!current(candidate) || key()!==candidate.sourceKey)throw new Error('Nguồn chuẩn bị đã đổi');
       rollback={media:currentMedia,muted:!!currentMedia?.muted,paused:!!currentMedia && currentMedia.paused!==false};
       bridge.setRole(candidate.frame,'current');candidate.remote.command('start-zero');
-      await wait(()=>{if(!current(candidate))throw new Error('Nguồn không còn sẵn sàng');return candidate.remote.state.startedAtZero && !candidate.remote.paused && candidate.remote.currentTime<3;},signal);
+      // The child verifies seek-zero and its first actual Play before setting
+      // startedAtZero. A delayed parent poll may observe >3s; requiring that
+      // transient position again loses a valid acknowledgement on Android.
+      await wait(()=>{if(!current(candidate))throw new Error('Nguồn không còn sẵn sàng');return candidate.remote.state.startedAtZero && !candidate.remote.paused;},signal);
       const resume=candidate.target.resume;
       if(resume && ['server','translation'].includes(candidate.target.intent) && Number.isFinite(resume.position) && resume.position>=0 && Number.isFinite(resume.duration) && Math.abs(resume.duration-candidate.remote.duration)<=Math.max(30,candidate.remote.duration*.03)){
         const position=Math.min(resume.position,candidate.remote.duration-1);candidate.remote.currentTime=position;
@@ -4124,9 +4353,36 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       }
       return {playing:true,startedAt:0};
     },
-    commit(candidate,target,_result,operation){
+    async commit(candidate,target,_result,operation){
       if(operation.signal.aborted || !operation.isCurrent() || !current(candidate) || key()!==candidate.sourceKey)throw new Error('Tác vụ không còn hiện hành');
       const old=state()?.frame;if(!old)throw new Error('Khung cũ đã đổi');
+      if(currentMedia?.state.localPresentation){
+        const original=currentMedia,previousFile=original.state.playlist?.file,provider=candidate.remote.state.provider,playlist=candidate.remote.state.playlist;
+        if(!playlist || !provider || provider.movieId!==original.state.provider?.movieId || provider.season!==original.state.provider?.season || provider.id!==String(candidate.episode.id) || provider.server!==candidate.episode.server)throw new Error('Nguồn không cùng phim/mùa/server');
+        document.dispatchEvent(new Event('mc-before-server-change'));
+        // History must not bind a new media URL to the previous route during
+        // an asynchronous engine load. The same visible document stays full.
+        transferring=true;old.dataset.mcManaged='provider';bridge.setRole(old,'current');old.dataset.mcRole='prepared';
+        const resume=target.resume,compatible=resume && ['server','translation'].includes(target.intent) && Number.isFinite(resume.position) && Number.isFinite(resume.duration) && Math.abs(resume.duration-candidate.remote.duration)<=Math.max(30,candidate.remote.duration*.03);
+        try{
+          await original.replaceMedia({playlist,provider,position:compatible?resume.position:0,paused:target.intent==='server' && !!rollback?.paused,muted:rollback?.muted ?? false,volume:Number.isFinite(original.volume)?original.volume:1},operation.signal);
+          if(operation.signal.aborted || !operation.isCurrent() || old.src!==original.session.src)throw Object.assign(new Error('Đã hủy chuyển tập'),{name:'AbortError'});
+          const route=sites.route(target.url,sites.families.NEXT);
+          old.dataset.mcProviderSource=old.src;old.dataset.mcProviderPath=route.path;old.dataset.mcProviderId=String(candidate.episode.id);
+          History.prototype[target.pop?'replaceState':'pushState'].call(history,{...history.state,mcNativeEpisode:true},'',target.url);
+          old.dataset.mcRole='current';old.dataset.mcStartZero=compatible?'0':'1';currentMedia=original;
+          candidate.remote.pause();candidate.remote.muted=true;candidate.frame.remove();candidate.activated=true;
+          try{sessionStorage.setItem('active-server-'+state().data.movie.slug,candidate.episode.server);sessionStorage.setItem('active-server-type','m3u8');}catch{/* storage disabled */}
+          const info=page();document.title=info.title+' · '+info.episode;document.dispatchEvent(new CustomEvent('mc-episode-changed',{detail:info}));
+          syncButtons();rollback=null;override=null;identity=key();lastURL=location.href;bridge.poll();hooks.poll?.(currentMedia,identity);return;
+        }catch(error){
+          // Reveal a rolled-back resource only after its actual playlist is
+          // confirmed. An unknown/late result stays isolated from history.
+          recovering={frame:old,remote:original,file:previousFile};
+          if(original.state.playlist?.file===previousFile && !original.state.changing){old.dataset.mcRole='current';recovering=null;}
+          throw error;
+        }finally{transferring=false;}
+      }
       document.dispatchEvent(new Event('mc-before-server-change'));rollback?.media?.pause();
       bridge.setRole(old,'prepared');old.dataset.mcRole='prepared';old.hidden=true;old.style.display='none';
       candidate.frame.classList.remove('mc-native-prepared');candidate.frame.dataset.mcRole='current';candidate.frame.title='Trình phát phim';candidate.activated=true;
@@ -4142,9 +4398,11 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       bridge.poll();
       hooks.poll?.(currentMedia,identity);
     },
-    rollback(){if(rollback?.media){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
+    // A persistent child owns its rollback, including Pause/audio. Parent
+    // commands here could unmute or resume an unconfirmed intermediate source.
+    rollback(){if(rollback?.media && !rollback.media.state.localPresentation){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
     discard(candidate){if(!candidate.activated)candidate.frame.remove();},
-  });
+  },{commitTimeoutMs:45000});
   const style=document.createElement('style');style.dataset.mcNativeNavigation='1';style.textContent='.mc-native-prepared{position:fixed!important;left:-10000px!important;top:0!important;width:640px!important;height:360px!important;opacity:0!important;pointer-events:none!important}.player-frame-stable:fullscreen{width:100vw!important;height:100vh!important;padding:0!important;background:#000}';
   function syncButtons(){
     const current=state(),nodes=sites.nextProviderButtons();if(!current || !nodes.length)return;
@@ -4153,6 +4411,15 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     for(const node of nodes){const selected=label(node)===current.episode.server;node.setAttribute('aria-pressed',String(selected));if(buttonClasses)node.className=selected?buttonClasses.active:buttonClasses.idle;}
   }
   function poll(){
+    if(transferring)return true;
+    // The result message can arrive before the parent's next state heartbeat.
+    // Restore history eligibility only when the old resource is confirmed,
+    // including recovery that finishes after the outer operation was aborted.
+    if(recovering){
+      const {frame,remote,file}=recovering;
+      if(!frame.isConnected || frame.src!==remote.session.src)recovering=null;
+      else if(remote.state.playlist?.file===file && !remote.state.changing){frame.dataset.mcRole='current';recovering=null;}
+    }
     const source=state();if(!source){if(active){machine.cancel();identity='';active=false;}return false;}
     active=true;shell=source.frame.parentElement;if(!style.isConnected)(document.head || document.documentElement).append(style);
     const newKey=key();if(identity && identity!==newKey){machine.cancel();override=null;}identity=newKey;lastURL=location.href;syncButtons();
@@ -4166,7 +4433,7 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     override={...target,intent:target.intent || reason};machine.reset(key(),override);
     const success=await machine.go(reason);override=null;return success;
   }
-  function goNext(reason='manual'){const info=page();return info?.next?transitionTo(info.next,reason):Promise.resolve(false);}
+  function goNext(reason='manual'){if(!machine.busy)clicked=null;const info=page();return info?.next?transitionTo(info.next,reason):Promise.resolve(false);}
   function toggleFullscreen(){return shell?fullscreen.toggle(shell):Promise.resolve('unavailable');}
   document.addEventListener('click',event=>{
     const source=state();if(!source || !active)return;
@@ -4395,6 +4662,9 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
+  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null;
+  const mobile=()=>window.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const localPresentation=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
   const waiting=new Map();
   let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
   const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');
@@ -4444,23 +4714,64 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     const found=candidate();
     const fingerprint=found?SharedPlayer.playerFingerprint(found):'';
     if(probe && (!found || probe.video!==found.video || probe.api!==found.api || probeSource!==fingerprint)){probe.dispose();probe=null;}
-    if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
+    if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
     const own=found?.video===video,state=own?probe.state():null;
-    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
+    const transfer=own && !!enhancementRoot() && found.kind==='jw' && typeof found.api.load==='function';
+    const provider=providerIdentity || (transfer && window.episode && {id:String(window.episode.id),movieId:String(window.episode.movieId),server:window.episode.server,season:window.episode.season_number});
+    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:transfer && localPresentation(),playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
   }
-  function commandTrack(video,group,id){const found=candidate(),state=localState(video);return state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
-  function playAudible(video){const state=localState(video);return state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
-  function restoreAudio(video,value){const state=localState(video);return state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
+  function commandTrack(video,group,id){const found=candidate(),state=localState(video);return !changing && state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
+  function playAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
+  function restoreAudio(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function enhanceLocal(video){
-    // The stable parent owns the full UI and fullscreen. The provider document
-    // only loads media and accepts authenticated commands; no native click,
-    // gesture or fullscreen handler is used by the overlay.
-    guard();return !!enhancementRoot() && candidate()?.video===video;
+    guard();
+    if(localPresentation() && bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared'){
+      const root=SharedPlayer.mediaPresentationRoot(window,video,enhancementRoot());
+      if(root){
+        if(!localFullscreen)localFullscreen=SharedPlayer.fullscreenController(window,{onChange:()=>mounted?.ui.update()});
+        const style=document.querySelector('[data-mc-local-fullscreen]') || document.createElement('style');
+        if(!style.isConnected){style.dataset.mcLocalFullscreen='1';style.textContent='#rp-player:fullscreen{width:100vw!important;height:100vh!important;margin:0!important;background:#000}#rp-player:fullscreen>.main-player,#rp-player:fullscreen>.main-player>#player{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}';document.documentElement.append(style);}
+        update(video,root,bridge.parentContext);
+        const state=mounted?.player.state();
+        if(state && !state.ready && !state.initializable){
+          if(!statusPanel)statusPanel=SharedPlayer.loadingPanel(window,root,{onRetry:()=>{const found=candidate(),item=found?.kind==='jw' && SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.());if(item && !found.video.closest('.jw-flag-ads,[data-ad]')){found.api.setMute(false);found.api.load(item);found.api.play(true)?.catch?.(()=>{});}}});
+          if(state.failed)statusPanel.fail();
+        }else{statusPanel?.dispose();statusPanel=null;}
+      }
+    }
+    return !!enhancementRoot() && candidate()?.video===video;
+  }
+  function replaceMedia(video,value,signal){
+    const found=candidate(),provider=value?.provider,playlist=SharedPlayer.mediaPlaylist(value?.playlist);
+    const original=providerIdentity || window.episode && {movieId:String(window.episode.movieId),season:window.episode.season_number};
+    if(!localPresentation() || found?.video!==video || !playlist || !provider || !/^[1-9]\d*$/.test(provider.id) || provider.movieId!==original?.movieId || provider.season!==original?.season || !sites.translationKey(provider.server))return Promise.reject(new Error('Không xác minh được tập mới'));
+    // This provider captures resumeData once at ready. Reusing its engine must
+    // not save episode 3 into episode 2's native key, including onunload's
+    // bracket assignment. Only that captured key is redirected; other storage
+    // and our separate GM history keep their original identity and contents.
+    if(!resumeAlias){
+      try{
+        const descriptor=Object.getOwnPropertyDescriptor(window,'localStorage'),target=window.localStorage;
+        if(!descriptor?.configurable || !/^[1-9]\d*$/.test(String(window.episode?.id)))throw new Error('Không thể giữ định danh tiến độ');
+        const initial='PlayerPosition-'+window.episode.id,active=()=>providerIdentity?'PlayerPosition-'+providerIdentity.id:initial;
+        const get=key=>String(key)===initial?changing?null:target.getItem(active()):target.getItem(key);
+        const set=(key,text)=>{if(String(key)!==initial)target.setItem(key,text);else if(!changing)target.setItem(active(),text);};
+        const remove=key=>{if(String(key)!==initial)target.removeItem(key);else if(!changing)target.removeItem(active());};
+        const proxy=new Proxy(target,{get(object,key){if(key==='getItem')return get;if(key==='setItem')return set;if(key==='removeItem')return remove;if(key===initial)return get(key);const result=Reflect.get(object,key,object);return typeof result==='function'?result.bind(object):result;},set(object,key,text){if(key===initial){set(key,text);return true;}return Reflect.set(object,key,text,object);},deleteProperty(object,key){if(key===initial){remove(key);return true;}return Reflect.deleteProperty(object,key);}});
+        const getter=()=>proxy;Object.defineProperty(window,'localStorage',{...descriptor,get:getter});resumeAlias={descriptor,getter};
+      }catch(error){return Promise.reject(error);}
+    }
+    if(!persistent)persistent=SharedPlayer.persistentMediaSession(window,{candidate,onPending:value=>{changing=value;},onIdentity:identity=>{providerIdentity=identity;}});
+    const root=enhancementRoot(),panel=SharedPlayer.loadingPanel(window,root,{});
+    return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).finally(()=>panel.dispose());
   }
   function update(media,root,page){
     if(disposed)return false;
     guard();prepareFrames();
     const local=!media?.frame && candidate(),remote=media?.frame && media.state?.customCapable===true;
+    if(remote && media.state.localPresentation===true){
+      detach();media.frame.dataset.mcDisplay='custom';const record=waiting.get(media.frame);record?.panel?.dispose();if(record)record.panel=null;return true;
+    }
     if(!root?.isConnected || !media || !(remote || local?.video===media)) {detach();return false;}
     const signature=remote?[media.session?.token,media.frame.src,media.state.mediaId].join('|'):SharedPlayer.playerFingerprint(local);
     if(mounted && (mounted.media!==media || mounted.root!==root || mounted.signature!==signature || !mounted.ui.shell.isConnected || local && (mounted.player.api!==local.api || mounted.player.nativeRoot!==local.root)))detach();
@@ -4485,15 +4796,17 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         };
         player={root,video:media,state,command,audio:()=>({muted:media.muted,volume:media.volume}),bounds:()=>root.getBoundingClientRect(),fingerprint:()=>[media.session?.token,media.frame.src,media.state.mediaId].join('|'),tracks:()=>media.state?.tracks || {},selectTrack(group,id){if(!state().ready || !['quality','audio','captions'].includes(group) || !Number.isInteger(id) || !media.state?.tracks?.[group]?.some(item=>item.id===id))return false;media.command('track-'+group,id);return true;}};
       }else{
-        player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
+        player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
+        const mediaState=player.state;
+        player.state=()=>{const value=mediaState();return changing?{...value,ready:false,initializable:false}:value;};
       }
-      const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:remote && media.state.nativeEnhanced?45000:undefined,
-        audioPreferences,canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
-        introSeconds:hooks.introSeconds,onIntro:hooks.onIntro,onNext:()=>Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
-        isFullscreen:hooks.isFullscreen,onFullscreen:hooks.onFullscreen});
+      const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
+        audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
+        introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
+        isFullscreen:()=>localPresentation()?document.fullscreenElement===root:hooks.isFullscreen(),onFullscreen:()=>localPresentation()?localFullscreen.toggle(root):hooks.onFullscreen()});
       mounted={media,root,signature,player,ui};
     }
-    mounted.ui.setContext({url:page.url,episodeID:page.episodeKey,lane:page.language,server:hooks.serverKey(),next:page.next});
+    mounted.ui.setContext({url:page.url,episodeID:page.episodeKey,lane:page.language,server:localPresentation()?page.server:hooks.serverKey(),next:page.next});
     if(remote){
       const record=waiting.get(media.frame),ready=mounted.player.state().ready && !mounted.ui.shell.hidden;
       if(ready){media.frame.dataset.mcDisplay='custom';record?.panel?.dispose();if(record)record.panel=null;}
@@ -4501,7 +4814,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,enhanceLocal,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,enhanceLocal,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }
 
 // END MOTCHILL SITES

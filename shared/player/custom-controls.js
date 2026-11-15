@@ -60,6 +60,7 @@ export function customPlayerControls(win,player,options={}) {
   function setLocked(value){if(value && !inFullscreen())return;cancelGestures();locked=value;settings.hidden=true;win.clearTimeout(lockTimer);if(value)revealLock();else show();update();}
   function cancelGestures(){(nativeMode?root:surface).dispatchEvent(new win.Event('pointercancel'));holdTip.hidden=true;}
   function actionClick(action,node){
+    if(action==='play' && !player.state().ready && player.state().initializable){autoPlayAttempted=true;audio?.intent(false);command('initialize-play-audible');show();update();return;}
     if(!player.state().ready)return;
     switch(action){
       case 'play':autoPlayAttempted=true;if(player.state().paused)audio?.intent(false);command(player.state().paused?'play-audible':'pause');show();break;
@@ -109,7 +110,7 @@ export function customPlayerControls(win,player,options={}) {
   function format(value){const seconds=Math.max(0,Math.floor(Number(value)||0));return Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');}
   function paintTime(position,duration){time.textContent=format(position)+' / '+format(duration);seek.style.setProperty('--rp-played',(duration>0?100*position/duration:0)+'%');}
   function update(){
-    if(disposed)return;const state=player.state(),becameReady=state.ready&&!lastReady;lastReady=state.ready;shell.hidden=!state.ready;
+    if(disposed)return;const state=player.state(),becameReady=state.ready&&!lastReady;lastReady=state.ready;shell.hidden=!state.ready&&!state.initializable;
     updateTracks();for(const node of tracks.querySelectorAll('button'))node.disabled=!state.ready || locked;
     if(locked && !inFullscreen()){cancelGestures();locked=false;settings.hidden=true;win.clearTimeout(lockTimer);show();}
     if(!state.ready){cancelGestures();scrubbing=false;locked=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);}
@@ -117,13 +118,14 @@ export function customPlayerControls(win,player,options={}) {
     nativeOwned=true;if(!nativeMode)nativeRoot.dataset.rpCustomControls='1';if(element){if(element.controls)element.controls=false;element.setAttribute('playsinline','');element.setAttribute('webkit-playsinline','');}
     if(becameReady || lastPaused!==null && state.paused!==lastPaused)show();lastPaused=state.paused;
     for(const node of [center,play,mute,fullscreen,settingsButton,seek,...rates.children])node.disabled=!state.ready||locked;
+    if(state.initializable&&!locked){center.disabled=false;play.disabled=false;}
     for(const node of [center,play]){const kind=state.paused?'play':'pause';if(node.dataset.rpIcon!==kind){node.innerHTML=playerIcon(kind);node.dataset.rpIcon=kind;}node.setAttribute('aria-label',state.paused?'Phát':'Tạm dừng');}
     const muted=player.audio?.().muted ?? video.muted;mute.innerHTML=playerIcon(muted?'muted':'volume');mute.setAttribute('aria-label',muted?'Bật tiếng':'Tắt tiếng');if(nativeMode)for(const node of root.querySelectorAll('.btn-muted')){node.classList.toggle('fa-volume-mute',muted);node.classList.toggle('fa-volume-high',!muted);node.setAttribute('aria-label',muted?'Bật tiếng':'Tắt tiếng');}
     fullscreen.innerHTML=playerIcon(inFullscreen()?'shrink':'fullscreen');fullscreen.setAttribute('aria-label',inFullscreen()?'Thu nhỏ':'Toàn màn hình');
     lock.innerHTML=playerIcon(locked?'lock':'unlock');lock.setAttribute('aria-label',locked?'Mở khóa màn hình':'Khóa màn hình');
     if(!scrubbing){seek.max=String(Math.max(1,state.duration));seek.value=String(state.time);paintTime(state.time,state.duration);}
     for(const node of rates.children)node.setAttribute('aria-pressed',String(Number(node.dataset.rpRate)===state.rate));
-    const intro=state.time<introEnd()-5 && state.duration>=600,nearEnd=state.duration-state.time<=180;
+    const intro=state.ready && state.time<introEnd()-5 && state.duration>=600,nearEnd=state.ready && state.duration-state.time<=180;
     contextAction.dataset.rpMode=(nextPending?.node===contextAction || nextError?.node===contextAction)?'next':intro?'intro':'next';
     contextAction.hidden=(!intro && !context) || !(intro || nearEnd || nextPending?.node===contextAction || nextError?.node===contextAction);
     line.dataset.rpNextStatus=String(nextPending?.node===next || nextError?.node===next);
