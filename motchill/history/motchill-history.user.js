@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - lịch sử xem
 // @namespace    motchill-history
-// @version      6.0.13
+// @version      6.0.14
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js
@@ -1376,6 +1376,10 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     let value = data.value;
     if (value === null) { remotes.delete(frame); if (frame === activeFrame) { remote = null; activeFrame = null; } return; }
     if (!value || !Number.isFinite(value.position) || !Number.isFinite(value.duration) || value.position < 0 || value.duration < 0 || value.position > value.duration + 1) return;
+    // Diagnostics are optional and numeric only; never relay a media URL or
+    // arbitrary message as display markup through this extension of the bridge.
+    const load=typeof SharedPlayer!=='undefined' && SharedPlayer.validLoadMetrics(value.load)?Object.fromEntries(['ahead','status','bytesPerSecond','online','bufferPolicy'].map(key=>[key,value.load[key]])):null;
+    value={...value,load};
     // This field comes through the same frame/window/origin/nonce checks as
     // mediaId. It conveys a media URL only, never original-page authority.
     const tracks={};

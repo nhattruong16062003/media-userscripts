@@ -64,7 +64,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     const own=found?.video===video,state=own?probe.state():null;
     const transfer=own && !!enhancementRoot() && found.kind==='jw' && typeof found.api.load==='function';
     const provider=providerIdentity || (transfer && window.episode && {id:String(window.episode.id),movieId:String(window.episode.movieId),server:window.episode.server,season:window.episode.season_number});
-    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:transfer && localPresentation(),playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
+    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:transfer && localPresentation(),playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,load:state.load,...probe.audio()}: {})};
   }
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return !changing && state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
   function playAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
@@ -82,6 +82,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         if(state && !state.ready && !state.initializable){
           if(!statusPanel)statusPanel=SharedPlayer.loadingPanel(window,root,{onRetry:()=>{const found=candidate(),item=found?.kind==='jw' && SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.());if(item && !found.video.closest('.jw-flag-ads,[data-ad]')){found.api.setMute(false);found.api.load(item);found.api.play(true)?.catch?.(()=>{});}}});
           if(state.failed)statusPanel.fail();
+          statusPanel.update(state.load);
         }else{statusPanel?.dispose();statusPanel=null;}
       }
     }
@@ -126,7 +127,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
       if(remote){
         const current=()=>media.isConnected && media.state?.customCapable===true && bridge.getFrame(media.frame)===media && signature===[media.session?.token,media.frame.src,media.state.mediaId].join('|');
         const state=()=>{const value=media.state || {},ad=value.ad===true,duration=media.duration,time=media.currentTime;
-          return {kind:'remote',failed:!!value.error,ready:current() && !ad && !value.error && Number.isFinite(duration) && duration>0 && Number.isFinite(time) && media.readyState>=1,ad,time,duration,rate:media.playbackRate,paused:media.paused,ended:media.ended,played:value.played===true};};
+          return {kind:'remote',failed:!!value.error,ready:current() && !ad && !value.error && Number.isFinite(duration) && duration>0 && Number.isFinite(time) && media.readyState>=1,ad,time,duration,rate:media.playbackRate,paused:media.paused,ended:media.ended,played:value.played===true,load:SharedPlayer.validLoadMetrics(value.load)?value.load:null};};
         const command=(action,value)=>{
           if(!state().ready)return false;
           switch(action){
@@ -156,7 +157,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     if(remote){
       const record=waiting.get(media.frame),ready=mounted.player.state().ready && !mounted.ui.shell.hidden;
       if(ready){media.frame.dataset.mcDisplay='custom';record?.panel?.dispose();if(record)record.panel=null;}
-      else{if(media.frame.dataset.mcDisplay==='custom')record?.reset();if(mounted.player.state().failed)record?.panel?.fail();}
+      else{if(media.frame.dataset.mcDisplay==='custom')record?.reset();if(mounted.player.state().failed)record?.panel?.fail();record?.panel?.update(mounted.player.state().load);}
     }
     return true;
   }

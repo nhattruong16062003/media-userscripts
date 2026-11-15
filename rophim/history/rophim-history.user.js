@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.4.13
+// @version      0.4.14
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -434,6 +434,373 @@
     }
   }
 
+  // shared/player/media-network.js
+  var probes = /* @__PURE__ */ new WeakMap();
+  var http = (value, base) => {
+    if (typeof value !== "string" || !value || value.length > 8192) return "";
+    try {
+      const u = new URL(value, base);
+      return /^https?:$/.test(u.protocol) ? u.href : "";
+    } catch {
+      return "";
+    }
+  };
+  function manifestLinks(text, base) {
+    if (typeof text !== "string" || text.length > 5e5 || !text.trimStart().startsWith("#EXTM3U")) return null;
+    const manifests = [], segments = [];
+    let variant = false;
+    for (const line of text.split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s) continue;
+      if (s.startsWith("#EXT-X-STREAM-INF:")) {
+        variant = true;
+        continue;
+      }
+      if (s.startsWith("#EXT-X-MEDIA:") || s.startsWith("#EXT-X-I-FRAME-STREAM-INF:")) {
+        const u = http(s.match(/URI="([^"]+)"/)?.[1], base);
+        if (u) manifests.push(u);
+      } else if (s.startsWith("#EXT-X-MAP:") || s.startsWith("#EXT-X-PART:")) {
+        const u = http(s.match(/URI="([^"]+)"/)?.[1], base);
+        if (u) segments.push(u);
+      } else if (!s.startsWith("#")) {
+        const u = http(s, base);
+        if (u) (variant ? manifests : segments).push(u);
+        variant = false;
+      }
+      if (manifests.length + segments.length > 6e3) return null;
+    }
+    return { manifests, segments };
+  }
+  function mediaNetworkProbe(win) {
+    if (probes.has(win)) return probes.get(win).acquire();
+    const manifests = /* @__PURE__ */ new Map(), samples = [], pending = /* @__PURE__ */ new Set();
+    let disposed = false, observer = null, refs = 0, revision = 0, lastRevision = -1, lastSource = "", lastFiles = /* @__PURE__ */ new Set(), knownSegments = /* @__PURE__ */ new Set();
+    const clock = () => win.performance?.now?.() ?? 0;
+    const later = (fn) => typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(() => {
+      if (!disposed) fn();
+    }, { timeout: 2e3 }) : win.setTimeout(() => {
+      if (!disposed) fn();
+    }, 0);
+    const wanted = (url) => /\.m3u8(?:$|[?#])/i.test(url) || pending.has(url);
+    function accept(url, text, alias = "") {
+      if (disposed) return;
+      const links = manifestLinks(text, url);
+      if (!links) return;
+      manifests.set(url, links);
+      if (alias && alias !== url) manifests.set(alias, links);
+      revision++;
+      for (const child of links.manifests) pending.add(child);
+      while (manifests.size > 24) manifests.delete(manifests.keys().next().value);
+      knownSegments = new Set([...manifests.values()].flatMap((v) => v.segments));
+      while (knownSegments.size > 12e3 && manifests.size > 1) {
+        manifests.delete(manifests.keys().next().value);
+        knownSegments = new Set([...manifests.values()].flatMap((v) => v.segments));
+      }
+      if (pending.size > 96) pending.clear();
+    }
+    const originalFetch = win.fetch;
+    const fetch = typeof originalFetch === "function" ? function(...args) {
+      const result = Reflect.apply(originalFetch, this, args), url = http(typeof args[0] === "string" ? args[0] : args[0]?.url || String(args[0] || ""), win.location.href);
+      if (wanted(url)) result.then((response) => {
+        if (disposed || !response.ok || Number(response.headers?.get("content-length")) > 5e5) return;
+        const copy = response.clone(), reader = copy.body?.getReader?.();
+        if (!reader) return;
+        later(() => (async () => {
+          let bytes = 0, text = "", decoder = new (win.TextDecoder || globalThis.TextDecoder)();
+          try {
+            for (; ; ) {
+              const part = await reader.read();
+              if (part.done) break;
+              bytes += part.value.byteLength;
+              if (disposed || bytes > 5e5) {
+                await reader.cancel();
+                return;
+              }
+              text += decoder.decode(part.value, { stream: true });
+            }
+            text += decoder.decode();
+            later(() => accept(http(response.url, win.location.href) || url, text, url));
+          } catch {
+          } finally {
+            reader.releaseLock();
+          }
+        })().catch(() => {
+        }));
+      }).catch(() => {
+      });
+      return result;
+    } : null;
+    if (fetch) try {
+      win.fetch = fetch;
+    } catch {
+    }
+    const proto = win.XMLHttpRequest?.prototype, originalOpen = proto?.open, requests = /* @__PURE__ */ new WeakMap();
+    const open = originalOpen ? function(method, url, ...rest) {
+      const absolute = http(url, win.location.href);
+      const previous = requests.get(this);
+      if (previous) for (const [type, fn] of previous) this.removeEventListener(type, fn);
+      const listeners = [];
+      requests.set(this, listeners);
+      const listen = (type, fn) => {
+        listeners.push([type, fn]);
+        this.addEventListener(type, fn, { once: true });
+      };
+      if (knownSegments.has(absolute)) {
+        let start = clock();
+        listen("loadstart", () => {
+          start = clock();
+        });
+        listen("load", (event) => {
+          const end = clock();
+          if (this.status >= 200 && this.status < 300 && event.loaded > 0 && end > start) collect({ entryType: "resource", name: absolute, responseStart: start, responseEnd: end, transferSize: event.loaded, actual: true });
+        });
+      }
+      if (wanted(absolute)) {
+        const loaded = () => {
+          try {
+            if (this.status >= 200 && this.status < 300 && (!this.responseType || this.responseType === "text")) {
+              const url2 = this.responseURL || absolute, text = this.responseText;
+              if (text.length <= 5e5) later(() => accept(url2, text, absolute));
+            }
+          } catch {
+          }
+        };
+        listen("load", loaded);
+      }
+      return Reflect.apply(originalOpen, this, [method, url, ...rest]);
+    } : null;
+    if (open) try {
+      proto.open = open;
+    } catch {
+    }
+    const collect = (entry) => {
+      if (disposed || entry.entryType !== "resource" || !Number.isFinite(entry.responseEnd) || entry.responseEnd <= 0) return;
+      samples.push({ url: entry.name, start: entry.responseStart, end: entry.responseEnd, bytes: entry.transferSize, actual: entry.actual === true });
+      const cutoff = clock() - 6e3;
+      while (samples.length && (samples[0].end < cutoff || samples.length > 160)) samples.shift();
+    };
+    try {
+      if (win.PerformanceObserver) {
+        observer = new win.PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) collect(entry);
+        });
+        observer.observe({ type: "resource", buffered: false });
+      }
+    } catch {
+    }
+    function urls(source) {
+      if (source === lastSource && revision === lastRevision) return lastFiles;
+      const files = /* @__PURE__ */ new Set(), seen = /* @__PURE__ */ new Set();
+      const visit = (url, depth) => {
+        if (depth > 3 || seen.has(url)) return;
+        seen.add(url);
+        const item = manifests.get(url);
+        if (!item) return;
+        for (const file of item.segments) files.add(file);
+        for (const child of item.manifests) visit(child, depth + 1);
+      };
+      visit(source, 0);
+      if (!manifests.has(source) && source && !/\.m3u8(?:$|[?#])/i.test(source)) files.add(source);
+      lastSource = source;
+      lastRevision = revision;
+      lastFiles = files;
+      return files;
+    }
+    const probe = {
+      speed(source, since = 0) {
+        const files = urls(source), now = clock(), active = samples.filter((s) => s.end >= Math.max(since, now - 5e3) && files.has(s.url));
+        const actual = active.filter((s) => s.actual), measured = (actual.length ? actual : active).filter((s) => s.bytes > 0 && Number.isFinite(s.start) && s.end > s.start);
+        if (!measured.length) return null;
+        const intervals = measured.map((s) => [s.start, s.end]).sort((a, b) => a[0] - b[0]);
+        let ms = 0, end = -Infinity;
+        for (const [start, stop] of intervals) {
+          ms += Math.max(0, stop - Math.max(start, end));
+          end = Math.max(end, stop);
+        }
+        return ms > 0 ? measured.reduce((sum, s) => sum + s.bytes, 0) * 1e3 / ms : null;
+      },
+      source(declared) {
+        return manifests.has(declared) ? declared : "";
+      },
+      acquire() {
+        refs++;
+        let released = false;
+        return { speed: probe.speed, source: probe.source, dispose() {
+          if (released) return;
+          released = true;
+          if (--refs > 0) return;
+          disposed = true;
+          observer?.disconnect();
+          if (win.fetch === fetch) win.fetch = originalFetch;
+          if (proto?.open === open) proto.open = originalOpen;
+          manifests.clear();
+          samples.length = 0;
+          pending.clear();
+          knownSegments.clear();
+          probes.delete(win);
+        } };
+      }
+    };
+    probes.set(win, probe);
+    return probe.acquire();
+  }
+
+  // shared/player/buffering.js
+  function bufferedAhead(video, time = video.currentTime) {
+    if (!Number.isFinite(time) || time < 0) return 0;
+    try {
+      for (let i = 0; i < video.buffered.length; i++) if (video.buffered.start(i) <= time && time <= video.buffered.end(i)) return Math.max(0, video.buffered.end(i) - time);
+    } catch {
+    }
+    return 0;
+  }
+  var nonnegative = (n) => Number.isFinite(n) && n >= 0 && n <= 1e12;
+  function validLoadMetrics(value) {
+    return !!value && nonnegative(value.ahead) && ["loading", "buffering", "playing", "paused", "ready", "ended", "error"].includes(value.status) && (value.bytesPerSecond === null || nonnegative(value.bytesPerSecond)) && typeof value.online === "boolean" && ["native", "observed", "expanded", "limited"].includes(value.bufferPolicy);
+  }
+  function loadMetricsText(value) {
+    if (!validLoadMetrics(value)) return "\u2193 \u2014 \xB7 T\u1EA3i tr\u01B0\u1EDBc \u2014";
+    const speed = value.bytesPerSecond;
+    const rate = speed === null ? "\u2014" : speed >= 1e6 ? (speed / 1e6).toLocaleString("vi-VN", { maximumFractionDigits: 1 }) + " MB/s" : Math.round(speed / 1e3).toLocaleString("vi-VN") + " kB/s";
+    return "\u2193 " + rate + " \xB7 T\u1EA3i tr\u01B0\u1EDBc " + Math.floor(value.ahead) + " gi\xE2y";
+  }
+  function mediaLoadMonitor(candidate, { active = () => true, allowExpansion = false } = {}) {
+    const { video, kind, api } = candidate, win = video.ownerDocument.defaultView, clock = () => win.performance.now();
+    const network = mediaNetworkProbe(win);
+    let source = "", since = clock(), waiting = false, disposed = false;
+    let stableSince = null, lastTime = null, lastAdvance = clock(), engine = null, engineOff = null, fragments = [], policy = "native", tuning = null, limited = false;
+    const events = ["waiting", "stalled", "playing", "canplay", "pause", "ended", "error", "emptied", "loadstart", "seeking", "seeked"];
+    const onEvent = (event) => {
+      if (["emptied", "loadstart"].includes(event.type)) {
+        reset();
+        waiting = false;
+      } else if (["waiting", "stalled", "seeking"].includes(event.type)) {
+        waiting = true;
+        stableSince = null;
+      } else if (["playing", "canplay", "seeked", "pause", "ended"].includes(event.type)) waiting = false;
+    };
+    for (const type of events) video.addEventListener(type, onEvent);
+    function restore() {
+      if (tuning) {
+        for (const [key, value] of Object.entries(tuning.before)) if (tuning.engine.config[key] === tuning.after[key]) tuning.engine.config[key] = value;
+        tuning = null;
+      }
+      policy = limited ? "limited" : "native";
+    }
+    function reset() {
+      restore();
+      source = "";
+      since = clock();
+      fragments = [];
+      stableSince = null;
+      lastTime = null;
+      lastAdvance = clock();
+      limited = false;
+    }
+    function bindEngine() {
+      let next = null;
+      try {
+        const provider = kind === "jw" ? api?.getProvider?.() : null;
+        for (const h of [provider?.hlsjs, provider?.hls, win.hls, win.art?.hls]) if (h?.media === video && h.config && typeof h.on === "function" && typeof h.off === "function") {
+          next = h;
+          break;
+        }
+      } catch {
+      }
+      if (next === engine) return;
+      restore();
+      engineOff?.();
+      engine = next;
+      engineOff = null;
+      fragments = [];
+      if (engine) {
+        const fragment = (_event, data) => {
+          const stats = data?.stats || data?.frag?.stats, s = stats?.loading;
+          if (!active() || data?.frag?.type && data.frag.type !== "main" || !s || !nonnegative(stats.loaded) || !(s.end > s.start) || s.start < since) return;
+          fragments.push({ bytes: stats.loaded, start: s.start, end: s.end });
+          if (fragments.length > 32) fragments.shift();
+        };
+        const error = (_event, data) => {
+          if (data?.details === "bufferFullError" || data?.error?.name === "QuotaExceededError") {
+            limited = true;
+            restore();
+          }
+        };
+        const bound = engine;
+        bound.on("hlsFragLoaded", fragment);
+        bound.on("hlsError", error);
+        engineOff = () => {
+          bound.off("hlsFragLoaded", fragment);
+          bound.off("hlsError", error);
+        };
+      }
+    }
+    function snapshot(state) {
+      const now = clock(), time = state.time;
+      const current = kind === "jw" ? api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file : video.currentSrc || video.src;
+      if (current !== source) {
+        reset();
+        source = current || "";
+        waiting = false;
+      }
+      bindEngine();
+      const ahead = bufferedAhead(video, time), enabled = active() && !state.ad;
+      if (lastTime === null || Math.abs(time - lastTime) > 0.02) {
+        lastTime = time;
+        lastAdvance = now;
+      }
+      const stalled = !video.paused && !video.ended && (video.readyState < 3 && (waiting || now - lastAdvance > 900) || now - lastAdvance > 1500 && ahead < 0.25);
+      const status = state.failed ? "error" : video.ended ? "ended" : video.paused ? "paused" : stalled ? "buffering" : video.readyState < 2 ? "loading" : state.ready ? "playing" : "ready";
+      if (!enabled || status !== "playing" || video.seeking || ahead < 15) {
+        stableSince = null;
+        if (tuning && stalled) {
+          limited = true;
+          restore();
+        }
+      } else if (stableSince === null) stableSince = now;
+      if (allowExpansion && enabled && engine && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && !tuning && stableSince !== null && now - stableSince >= 15e3 && Number.isFinite(video.duration) && video.duration > 0) {
+        const level = engine.levels?.[engine.currentLevel], bitrate = level?.maxBitrate || level?.bitrate;
+        const config = engine.config, old = config.maxBufferLength, cap = config.maxMaxBufferLength;
+        if (bitrate > 0 && Number.isFinite(old) && Number.isFinite(cap) && cap >= old) {
+          const target = Math.min(120, Math.floor(24 * 1024 * 1024 * 8 / bitrate));
+          if (target > old) {
+            const before = { maxBufferLength: old, maxMaxBufferLength: cap }, after = { maxBufferLength: target, maxMaxBufferLength: Math.max(cap, target) };
+            Object.assign(config, after);
+            tuning = { engine, before, after };
+            policy = "expanded";
+          }
+        }
+      }
+      const diagnosticSource = /^https?:\/\//.test(source) ? source : network.source(candidate.declaredSource);
+      let speed = enabled ? network.speed(diagnosticSource, since) : null;
+      const recent = fragments.filter((s) => s.end >= Math.max(since, now - 5e3));
+      if (enabled && recent.length) {
+        const bytes = recent.reduce((n, s) => n + s.bytes, 0);
+        let duration = 0, end = -Infinity;
+        for (const s of [...recent].sort((a, b) => a.start - b.start)) {
+          duration += Math.max(0, s.end - Math.max(end, s.start));
+          end = Math.max(end, s.end);
+        }
+        if (duration > 0) speed = bytes * 1e3 / duration;
+      }
+      return { ahead: enabled ? ahead : 0, status, bytesPerSecond: nonnegative(speed) ? speed : null, online: win.navigator.onLine !== false, bufferPolicy: policy };
+    }
+    return { snapshot(state) {
+      if (disposed) return null;
+      try {
+        return snapshot(state);
+      } catch {
+        return { ahead: 0, status: "ready", bytesPerSecond: null, online: win.navigator.onLine !== false, bufferPolicy: "native" };
+      }
+    }, dispose() {
+      disposed = true;
+      restore();
+      engineOff?.();
+      network.dispose();
+      for (const type of events) video.removeEventListener(type, onEvent);
+    } };
+  }
+
   // shared/engines/players.js
   function mediaVisible(node, win) {
     if (!node?.isConnected) return false;
@@ -457,7 +824,15 @@
       return null;
     }
     const artRoot = video.closest(".art-video-player");
-    if (artRoot && video.classList.contains("art-video")) return { kind: "art-native", video, root: artRoot };
+    if (artRoot && video.classList.contains("art-video")) {
+      let declaredSource = "";
+      try {
+        const url = new URL(win.location.href).searchParams.get("url");
+        if (artRoot.parentElement?.id === "player" && /^https?:\/\//.test(url || "")) declaredSource = new URL(url).href;
+      } catch {
+      }
+      return { kind: "art-native", video, root: artRoot, declaredSource };
+    }
     if (video.id === "vid" && video.classList.contains("vid") && doc.querySelector(".guildline") && doc.querySelector(".loading-screen")) return { kind: "native-cdn", video, root: video.parentElement };
     const nativeRoot = nativeContract(video);
     if (nativeRoot?.nodeType === 1 && nativeRoot.contains(video)) return { kind: "html5", video, root: nativeRoot };
@@ -486,10 +861,11 @@
       return false;
     }
   }
-  function attachPlayer(candidate, { canRestoreAudio = () => true } = {}) {
+  function attachPlayer(candidate, { canRestoreAudio = () => true, monitorLoad = true } = {}) {
     const { kind, video, root, api } = candidate;
     const initialSource = playerFingerprint(candidate);
     let audioGeneration = 0;
+    const loadMonitor = monitorLoad ? mediaLoadMonitor(candidate, { active: canRestoreAudio }) : null;
     const audio = () => {
       try {
         const muted = kind === "jw" && typeof api.getMute === "function" ? api.getMute() : video.muted, volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
@@ -552,7 +928,8 @@
         const connected = video.isConnected && playerFingerprint(candidate) === initialSource && mediaVisible(video, video.ownerDocument.defaultView), engineState = kind === "jw" ? api.getState?.() : null, failed = !!video.error || engineState === "error";
         const item = kind === "jw" ? api.getPlaylistItem?.() : null, file = item?.file || item?.sources?.[0]?.file;
         const initializable = connected && !failed && !ad && video.readyState === 0 && kind === "jw" && ["idle", "paused"].includes(engineState) && typeof file === "string" && /^https?:\/\//.test(file);
-        return { kind, failed, initializable, ready: connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
+        const value = { kind, failed, initializable, ready: connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
+        return loadMonitor ? { ...value, load: loadMonitor.snapshot(value) } : value;
       } catch {
         return { kind, ready: false, ad: true, time: 0, duration: 0, rate: 1, paused: true, ended: false, played: false };
       }
@@ -618,6 +995,7 @@
       return () => subscribers.delete(notify);
     }, dispose() {
       audioGeneration++;
+      loadMonitor?.dispose();
       subscribers.clear();
       for (const [event, handler] of handlers) api.off?.(event, handler);
     } };
@@ -713,7 +1091,7 @@
           session.seq = d.seq;
           session.seen = Date.now();
           media = d.media;
-          remote = { ...d.state };
+          remote = { ...d.state, load: validLoadMetrics(d.state.load) ? Object.fromEntries(["ahead", "status", "bytesPerSecond", "online", "bufferPolicy"].map((key) => [key, d.state.load[key]])) : null };
           controlsReady = d.controlsReady === true;
           emit();
         } else if (d.type === "request" && ["next", "fullscreen"].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media === media && remote?.ready && !remote.ad && Date.now() - session.seen <= 4e3) {
@@ -810,7 +1188,7 @@
           clearRequests();
           callbacks.unbind?.(local);
           local?.dispose();
-          local = candidate ? attachPlayer(candidate) : null;
+          local = candidate ? attachPlayer(candidate, { monitorLoad: feature === "gestures" }) : null;
           lastSource = source;
           media = local ? token(win) : "";
           emit();

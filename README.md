@@ -10,16 +10,20 @@ Chọn bộ dành cho website bạn sử dụng. RoPhim có ba script: chặn qu
 
 | Website | Chặn quảng cáo | Điều khiển trình phát | Lịch sử xem |
 | --- | --- | --- | --- |
-| **RoPhim 0.4.13** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.13/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.13/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.13/rophim/history/rophim-history.user.js) |
-| **Motchill 6.0.13** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.13/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.13/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.13/motchill/history/motchill-history.user.js) |
+| **RoPhim 0.4.14** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.14/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.14/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.14/rophim/history/rophim-history.user.js) |
+| **Motchill 6.0.14** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.14/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.14/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.14/motchill/history/motchill-history.user.js) |
 
-Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.13](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.13/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
+Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.14](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.14/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
 
 Đã cài bản cũ thì mở link mới để **cập nhật tại chỗ**, giữ nguyên script Lịch sử để giữ tiến độ. Không cần gỡ Tampermonkey hoặc chép mã thủ công. Kiểm tra đúng tên script và phiên bản trước khi xác nhận. Nếu có hai bản cùng chức năng cho cùng website, chỉ bật một bản.
 
-Với bản Motchill **6.0.13**, cập nhật cả bốn script Motchill để player, lịch sử và các chức năng đi kèm cùng nhận đúng tập sau khi chuyển tập.
+Với bản Motchill **6.0.14**, cập nhật cả bốn script Motchill để player, lịch sử và các chức năng đi kèm cùng nhận đúng tập sau khi chuyển tập.
 
 ## Sử dụng
+
+Khi hiện bộ điều khiển, dòng nhỏ trên thanh tua cho biết tốc độ nhận dữ liệu phim và số giây đã tải trước liên tục từ vị trí đang xem. Khi phim thiếu dữ liệu sẽ có vòng chờ cùng thông số; phát tiếp được thì vòng chờ tự ẩn. Chủ động tạm dừng không làm hiện vòng chờ. Thông số ẩn cùng bộ nút để không che phim.
+
+Tốc độ chỉ hiện khi nguồn cho phép đo dữ liệu tải; dấu **—** nghĩa là chưa đo được, không đồng nghĩa mạng ngừng. Engine có thể tạm ngừng tải khi đã đủ bộ đệm. Chi tiết nằm trong Cài đặt. Bản này giữ cơ chế và giới hạn tải trước hiện có, ưu tiên mở phim nhanh và phát mượt; chưa bật tăng bộ đệm khi chưa xác minh hiệu năng của nguồn.
 
 Các nguồn tương thích dùng bộ điều khiển custom. Với nguồn Next như trang tập trên motchilll.vip, trên điện thoại bộ nút custom nằm cùng khung với video thật để giữ hướng ngang khi Phát/Tạm dừng. Chọn chất lượng và phụ đề mà nguồn cung cấp trong menu cài đặt custom. Chuyển tập hoặc server trong nguồn tương thích giữ nguyên khung video và fullscreen; tập tiếp theo giữ đúng server và bản dịch đang chọn. Nếu dữ liệu không xác định được duy nhất tập phù hợp, tiện ích giữ tập hiện tại để tránh phát nhầm.
 

@@ -1,6 +1,7 @@
 import {isSiteOrigin, FRAME_ORIGINS,isFrameURL, safeURL, token, finite, diagnostic, watchDOM} from './core.js';
 import {detectSite, readContext, contextKey} from './sites.js';
 import {playerCandidate, attachPlayer, playerFingerprint} from './players.js';
+import {validLoadMetrics} from '../../shared/player/buffering.js';
 
 export function validState(s) {
   return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && (s.failed === undefined || typeof s.failed === 'boolean') && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
@@ -53,7 +54,7 @@ export function createBridge(win, page, feature, callbacks = {}) {
     if (top) {
       if (!boundFrame?.isConnected || boundFrame.contentWindow !== event.source || boundFrame.src !== session.src || contextKey(context) !== session.key) return;
       if (d.type === 'state' && validState(d.state) && /^[a-f\d]{32}$/.test(d.media)) {
-        session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state};controlsReady=d.controlsReady===true;emit();
+        session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state,load:validLoadMetrics(d.state.load)?Object.fromEntries(['ahead','status','bytesPerSecond','online','bufferPolicy'].map(key=>[key,d.state.load[key]])):null};controlsReady=d.controlsReady===true;emit();
       } else if (d.type === 'request' && ['next','fullscreen'].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
         session.seq = d.seq;
         if(session.requesting && Date.now()<=session.requesting.until)return;
@@ -112,7 +113,7 @@ export function createBridge(win, page, feature, callbacks = {}) {
       let source = '';
       try { source = candidate ? playerFingerprint(candidate) : ''; } catch { /* not ready */ }
       if (candidate?.video !== local?.video || candidate?.api !== local?.api || candidate?.kind !== local?.kind || source !== lastSource) {
-        clearRequests();callbacks.unbind?.(local); local?.dispose();local = candidate ? attachPlayer(candidate) : null;lastSource = source;media = local ? token(win) : '';emit();
+        clearRequests();callbacks.unbind?.(local); local?.dispose();local = candidate ? attachPlayer(candidate,{monitorLoad:feature==='gestures'}) : null;lastSource = source;media = local ? token(win) : '';emit();
       }
       if(local){emit();report();}
       diagnostic(win.document,feature,local ? local.kind + '/' + (local.state().ready ? 'ready' : 'chờ metadata/nội dung') : 'player chưa nhận diện');

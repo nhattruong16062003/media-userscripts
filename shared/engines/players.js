@@ -1,4 +1,5 @@
 import {finite, clampSeek,audioPreference} from '../media.js';
+import {mediaLoadMonitor} from '../player/buffering.js';
 
 export function mediaVisible(node, win) {
   if (!node?.isConnected) return false;
@@ -21,7 +22,13 @@ export function playerCandidate(win, page = win, {nativeContract=()=>false}={}) 
     return null;
   }
   const artRoot = video.closest('.art-video-player');
-  if (artRoot && video.classList.contains('art-video')) return {kind:'art-native',video,root:artRoot};
+  if (artRoot && video.classList.contains('art-video')) {
+    // The surveyed embed consumes ?url= into #player > .art-video-player.
+    // Diagnostics additionally require seeing this exact manifest response;
+    // this declaration alone never authorizes playback, commands or history.
+    let declaredSource='';try{const url=new URL(win.location.href).searchParams.get('url');if(artRoot.parentElement?.id==='player' && /^https?:\/\//.test(url || ''))declaredSource=new URL(url).href;}catch{/* absent contract */}
+    return {kind:'art-native',video,root:artRoot,declaredSource};
+  }
   if (video.id === 'vid' && video.classList.contains('vid') && doc.querySelector('.guildline') && doc.querySelector('.loading-screen')) return {kind:'native-cdn',video,root:video.parentElement};
   const nativeRoot=nativeContract(video);
   if(nativeRoot?.nodeType===1 && nativeRoot.contains(video))return {kind:'html5',video,root:nativeRoot};
@@ -44,10 +51,11 @@ export function selectPlayerTrack(candidate,kind,id){
   if(candidate?.kind!=='jw' || !Object.hasOwn(names,kind) || !Number.isInteger(id) || !playerTracks(candidate)[kind]?.some(item=>item.id===id))return false;
   try{candidate.api[names[kind]](id);return true;}catch{return false;}
 }
-export function attachPlayer(candidate,{canRestoreAudio=()=>true}={}) {
+export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=true}={}) {
   const {kind,video,root,api} = candidate;
   const initialSource=playerFingerprint(candidate);
   let audioGeneration=0;
+  const loadMonitor=monitorLoad?mediaLoadMonitor(candidate,{active:canRestoreAudio}):null;
   const audio=()=>{
     try{const muted=kind==='jw' && typeof api.getMute==='function'?api.getMute():video.muted,volume=kind==='jw' && typeof api.getVolume==='function'?api.getVolume()/100:video.volume;return {muted:!!muted,volume:finite(volume) && volume>=0 && volume<=1?volume:1};}
     catch{return {muted:!!video.muted,volume:finite(video.volume)?video.volume:1};}
@@ -90,7 +98,8 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true}={}) {
       // metadata without authorizing gestures/seek on an unready resource.
       const item=kind==='jw'?api.getPlaylistItem?.():null,file=item?.file || item?.sources?.[0]?.file;
       const initializable=connected && !failed && !ad && video.readyState===0 && kind==='jw' && ['idle','paused'].includes(engineState) && typeof file==='string' && /^https?:\/\//.test(file);
-      return {kind,failed,initializable,ready:connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
+      const value={kind,failed,initializable,ready:connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
+      return loadMonitor?{...value,load:loadMonitor.snapshot(value)}:value;
     } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false,played:false}; }
   };
   const command = (action,value) => {
@@ -122,7 +131,7 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true}={}) {
     }
     return true;
   };
-  return {kind,video,root,api,state,command,audio,tracks:()=>playerTracks(candidate),selectTrack:(group,id)=>state().ready && selectPlayerTrack(candidate,group,id),fingerprint:()=>playerFingerprint(candidate),subscribe(notify){subscribers.add(notify);return ()=>subscribers.delete(notify);},dispose() {audioGeneration++;subscribers.clear();for (const [event,handler] of handlers) api.off?.(event,handler); }};
+  return {kind,video,root,api,state,command,audio,tracks:()=>playerTracks(candidate),selectTrack:(group,id)=>state().ready && selectPlayerTrack(candidate,group,id),fingerprint:()=>playerFingerprint(candidate),subscribe(notify){subscribers.add(notify);return ()=>subscribers.delete(notify);},dispose() {audioGeneration++;loadMonitor?.dispose();subscribers.clear();for (const [event,handler] of handlers) api.off?.(event,handler); }};
 }
 export function playerFingerprint(candidate) {
   try {

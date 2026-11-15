@@ -59,7 +59,7 @@ function startGestures(win,page) {
         unbind();
         if(info.player)mounted={player:info.player,ui:customPlayerControls(win,info.player,{autoPlay:true,isFullscreen:()=>frameFullscreen,onNext:()=>bridge?.request('next') ?? false,onFullscreen:()=>{const pending=bridge?.request('fullscreen');return pending && pending.then(status=>{if(status==='fullscreen' || status==='windowed'){frameFullscreen=status==='fullscreen';mounted?.ui.update();}return status;});}})};
       }
-      mounted?.ui.setContext(context);childGate?.update(controlsReady());
+      mounted?.ui.setContext(context);childGate?.update(controlsReady(),info.state?.load);
     },
     unbind,request:next,controlsReady,
   });

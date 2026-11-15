@@ -1,6 +1,7 @@
 import {playerIcon,playerUIStyle} from './player-ui.js';
 import {installGestures} from './gestures.js';
 import {audioPreferenceSession} from './audio-preferences.js';
+import {validLoadMetrics,loadMetricsText} from './buffering.js';
 
 // The same approved UI talks only to the attached player's command/state API.
 export function customPlayerControls(win,player,options={}) {
@@ -23,6 +24,10 @@ export function customPlayerControls(win,player,options={}) {
   const seekTip=doc.createElement('output');seekTip.className='rp-feedback-seek rp-pill';seekTip.hidden=true;shell.append(seekTip);
   const holdTip=doc.createElement('output');holdTip.className='rp-feedback-hold rp-pill';holdTip.hidden=true;holdTip.innerHTML='2x <span class="rp-chevrons">'+Array(3).fill(playerIcon('play')).join('')+'</span>';shell.append(holdTip);
   const chrome=doc.createElement('div');chrome.className='rp-player-chrome';shell.append(chrome);
+  const loadReadout=doc.createElement('output');loadReadout.className='rp-load-readout';chrome.append(loadReadout);
+  const buffering=doc.createElement('div');buffering.className='rp-buffering';buffering.hidden=true;buffering.setAttribute('role','status');buffering.setAttribute('aria-label','Đang tải phim');shell.append(buffering);
+  const spinner=doc.createElement('span');spinner.className='rp-watch-spinner';spinner.setAttribute('aria-hidden','true');buffering.append(spinner);
+  const loadingStats=doc.createElement('output');buffering.append(loadingStats);
   const timeline=doc.createElement('label');timeline.className='rp-player-timeline';chrome.append(timeline);
   const seek=doc.createElement('input');seek.type='range';seek.min='0';seek.max='1';seek.step='.1';seek.value='0';seek.setAttribute('aria-label','Tua phim');timeline.append(seek);
   const line=doc.createElement('div');line.className='rp-player-line';chrome.append(line);
@@ -36,6 +41,7 @@ export function customPlayerControls(win,player,options={}) {
   const rates=doc.createElement('div');rates.className='rp-player-speed-options';settings.append(rates);
   for(const rate of [.75,1,1.25,1.5,2]){const node=doc.createElement('button');node.type='button';node.className='rp-speed';node.dataset.rpRate=String(rate);node.textContent=rate+'x';node.addEventListener('click',()=>{if(!locked){command('rate',rate);settings.hidden=true;show();update();}});rates.append(node);}
   const tracks=doc.createElement('div');tracks.className='rp-player-tracks';settings.append(tracks);let trackSignature='';
+  const loadDetail=doc.createElement('div');loadDetail.className='rp-load-detail';settings.append(loadDetail);
   function updateTracks(){
     const groups=player.tracks?.() || {},signature=JSON.stringify(groups);
     if(signature===trackSignature)return;trackSignature=signature;tracks.replaceChildren();
@@ -99,7 +105,9 @@ export function customPlayerControls(win,player,options={}) {
   const releaseScrub=()=>{if(scrubbing){win.clearTimeout(scrubTimer);scrubTimer=win.setTimeout(()=>{if(!disposed){scrubbing=false;update();}},0);}};win.addEventListener('pointerup',releaseScrub);
   chrome.addEventListener('pointerdown',()=>win.clearTimeout(hideTimer));
   const fsChanged=()=>{if(!inFullscreen() && locked)setLocked(false);show();update();};doc.addEventListener('fullscreenchange',fsChanged);
-  const changed=()=>update();const mediaEvents=['error','loadedmetadata','canplay','timeupdate','play','pause','ratechange','volumechange','durationchange','emptied','loadstart'];for(const name of mediaEvents)video.addEventListener(name,changed);
+  const changed=()=>update();const mediaEvents=['error','loadedmetadata','canplay','timeupdate','play','pause','ratechange','volumechange','durationchange','emptied','loadstart','waiting','stalled','playing','progress','seeking','seeked'];for(const name of mediaEvents)video.addEventListener(name,changed);
+  // timeupdate stops during a stall. Keep a light heartbeat for the loading UI.
+  const loadTimer=win.setInterval(()=>{if(!doc.hidden)update();},1000);
   const checkpointAudio=()=>{try{audio?.checkpoint(player.state(),!!context && options.canRestoreAudio?.()!==false);}catch{/* detached provider */}};win.addEventListener('pagehide',checkpointAudio);
   doc.addEventListener('visibilitychange',changed);
   const offPlayer=player.subscribe?.(changed);
@@ -111,6 +119,11 @@ export function customPlayerControls(win,player,options={}) {
   function paintTime(position,duration){time.textContent=format(position)+' / '+format(duration);seek.style.setProperty('--rp-played',(duration>0?100*position/duration:0)+'%');}
   function update(){
     if(disposed)return;const state=player.state(),becameReady=state.ready&&!lastReady;lastReady=state.ready;shell.hidden=!state.ready&&!state.initializable;
+    const metrics=validLoadMetrics(state.load)?state.load:null,loading=!!metrics && state.ready && !state.ad && ['loading','buffering'].includes(metrics.status) && !state.paused && !state.ended;
+    const loadText=loadMetricsText(metrics);loadReadout.textContent=loadText;loadReadout.hidden=!metrics || loading;
+    buffering.hidden=!loading;loadingStats.textContent=loadText;shell.dataset.rpBuffering=String(loading);
+    const hint=!metrics?'Nguồn chưa cung cấp thông số tải.':!metrics.online?'Thiết bị đang ngoại tuyến.':metrics.status==='error'?'Nguồn phát hoặc giải mã gặp lỗi.':metrics.status==='buffering'?'Đang chờ dữ liệu; chưa đủ bằng chứng kết luận do mạng hay máy chủ.':metrics.bytesPerSecond===null?'Không đo được tốc độ tải của nguồn này; — không có nghĩa là mạng ngừng.':'Tốc độ nhận dữ liệu phim trong các lượt tải gần đây. Engine có thể tạm nghỉ khi đã đủ bộ đệm.';
+    loadDetail.textContent=hint+(metrics?' '+(metrics.bufferPolicy==='expanded'?'Đã mở rộng tải trước có giới hạn.':metrics.bufferPolicy==='limited'?'Giữ giới hạn tải để bảo vệ phát phim.':'Bộ đệm do engine quản lý.'):'');
     updateTracks();for(const node of tracks.querySelectorAll('button'))node.disabled=!state.ready || locked;
     if(locked && !inFullscreen()){cancelGestures();locked=false;settings.hidden=true;win.clearTimeout(lockTimer);show();}
     if(!state.ready){cancelGestures();scrubbing=false;locked=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);}
@@ -161,6 +174,6 @@ export function customPlayerControls(win,player,options={}) {
   root.append(shell);update();
   return {shell,surface,update,setContext(value){const key=c=>c ? [c.url,c.episodeID,c.lane,c.server].join('|') : '';const oldKey=key(context);context=value;if(oldKey && oldKey!==key(value)){nextPending=null;nextError=null;win.clearTimeout(nextTimer);setLocked(false);}update();},
     requestResult(status){if(status!=='navigating')finishNext(status);},
-    dispose(){if(disposed)return;checkpointAudio();disposed=true;root.removeEventListener('click',nativeClick,true);root.removeEventListener('click',nativeVolume,true);root.removeEventListener('pointerup',nativeVolume,true);offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);doc.removeEventListener('visibilitychange',changed);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);win.removeEventListener('pagehide',checkpointAudio);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
+    dispose(){if(disposed)return;checkpointAudio();disposed=true;win.clearInterval(loadTimer);root.removeEventListener('click',nativeClick,true);root.removeEventListener('click',nativeVolume,true);root.removeEventListener('pointerup',nativeVolume,true);offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);doc.removeEventListener('visibilitychange',changed);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);win.removeEventListener('pagehide',checkpointAudio);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
   };
 }
