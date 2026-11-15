@@ -36,7 +36,7 @@ await save('motchill/lib/sites.js','// Generated from lib/sites/index.js and fam
 for(const kind of ['noads','gestures','history','source']){
   if(kind!=='source'){
   const {version}=JSON.parse(await readFile(path.join(root,'rophim/package.json'),'utf8')),title={noads:'Chặn quảng cáo',gestures:'Thao tác trình phát',history:'Lịch sử xem'}[kind];
-  const header=['// ==UserScript==',`// @name         RoPhim — ${title}`,'// @namespace    rophim-userscripts.local',`// @version      ${version}`,'// @author       zic',`// @description  ${title} cho trang xem RoPhim.`,`// @homepageURL  ${repository}/tree/main/rophim`,`// @supportURL   ${repository}/issues`,`// @downloadURL  ${raw}/rophim/${kind}/rophim-${kind}.user.js`,`// @updateURL    ${raw}/rophim/${kind}/rophim-${kind}.user.js`,String.raw`// @include      /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]*rophim[a-z0-9-]*(?:\.[a-z0-9-]+)+(?::\d+)?\//`,...['https://player.phimapi.com/player/*','https://api.clubc.org/embed/*','https://dora.nobitayeuxuka.xyz/temp*'].map(v=>'// @match        '+v),'// @run-at       document-start','// @grant        unsafeWindow',...(kind==='noads'?[]:['GM_getValue','GM_setValue','GM_listValues','GM_deleteValue'].map(v=>'// @grant        '+v)),'// ==/UserScript=='].join('\n');
+  const header=['// ==UserScript==',`// @name         RoPhim — ${title}`,'// @namespace    rophim-userscripts.local',`// @version      ${version}`,'// @author       zic',`// @description  ${title} cho trang xem RoPhim.`,`// @homepageURL  ${repository}/tree/main/rophim`,`// @supportURL   ${repository}/issues`,`// @downloadURL  ${raw}/rophim/${kind}/rophim-${kind}.user.js`,`// @updateURL    ${raw}/rophim/${kind}/rophim-${kind}.user.js`,String.raw`// @include      /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]*rophim[a-z0-9-]*(?:\.[a-z0-9-]+)+(?::\d+)?\//`,...['https://player.phimapi.com/player/*','https://api.clubc.org/embed/*','https://api.rophim10.ink/embed/*','https://dora.nobitayeuxuka.xyz/temp*'].map(v=>'// @match        '+v),'// @run-at       document-start','// @grant        unsafeWindow',...(kind==='noads'?[]:['GM_getValue','GM_setValue','GM_listValues','GM_deleteValue'].map(v=>'// @grant        '+v)),'// ==/UserScript=='].join('\n');
   const output=await build({absWorkingDir:root,entryPoints:[`rophim/${kind}/entry.js`],bundle:true,write:false,format:'iife',target:'es2020',legalComments:'inline',treeShaking:false});
   await save(`rophim/${kind}/rophim-${kind}.user.js`,header+'\n\n'+(kind==='gestures'?license:'')+output.outputFiles[0].text);
   }
@@ -44,7 +44,7 @@ for(const kind of ['noads','gestures','history','source']){
   let headerMotchill=entry.slice(0,entry.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length);
   const mcVersion=JSON.parse(await readFile(path.join(root,'motchill/package.json'),'utf8')).version;
   headerMotchill=metadata('motchill',kind,mcVersion,headerMotchill);
-  const libs=['sites.js','video-bridge.js',...(kind==='gestures'?['episode-machine.js','player-adapters.js','player-controller.js','translations.js','custom-player.js']:[])];
+  const libs=['sites.js','video-bridge.js',...(kind==='gestures'?['episode-machine.js','player-adapters.js','player-controller.js','next-provider-navigation.js','translations.js','custom-player.js']:[])];
   const body=[];
   for(const file of libs)body.push('// ---- lib/'+file+' ----\n'+(file==='sites.js'?sites:await readFile(path.join(root,'motchill/lib',file),'utf8')));
   const start=entry.indexOf('// BEGIN MOTCHILL SITES (generated)'),end=entry.indexOf('// END MOTCHILL SITES')+'// END MOTCHILL SITES'.length;

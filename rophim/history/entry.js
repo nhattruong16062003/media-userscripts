@@ -1,4 +1,4 @@
-import {storageAPI,isSiteOrigin,watchDOM,FRAME_ORIGINS,safeURL} from '../lib/core.js';
+import {storageAPI,isSiteOrigin,watchDOM,FRAME_ORIGINS,isFrameURL,safeURL} from '../lib/core.js';
 import {runFamily} from '../../shared/bridge/ownership.js';
 import {laneKey} from '../lib/identity.js';
 import {contextKey} from '../lib/sites.js';
@@ -100,4 +100,4 @@ function startHistory(win,page) {
   if(top && isSiteOrigin(win.location.origin)){doc.addEventListener('visibilitychange',()=>{if(doc.hidden)persist();else home();});win.addEventListener('pagehide',persist);offHome=watchDOM(win,home);homeTimer=win.setInterval(home,3000);home();}
   win.addEventListener('pagehide',event=>{if(!event.persisted){stopped=true;bridge.dispose();offHome();win.clearInterval(homeTimer);}});
 }
-runFamily(window,{family:'rophim',feature:'history',isSiteURL:isSiteOrigin,isFrameURL:value=>FRAME_ORIGINS.has(safeURL(value)?.origin),isFrameOrigin:value=>FRAME_ORIGINS.has(safeURL(value)?.origin)},()=>startHistory(window,typeof unsafeWindow==='undefined' ? window : unsafeWindow));
+runFamily(window,{family:'rophim',feature:'history',isSiteURL:isSiteOrigin,isFrameURL,isFrameOrigin:value=>FRAME_ORIGINS.has(safeURL(value)?.origin)},()=>startHistory(window,typeof unsafeWindow==='undefined' ? window : unsafeWindow));

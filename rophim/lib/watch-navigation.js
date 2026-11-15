@@ -1,4 +1,4 @@
-import {safeURL,FRAME_ORIGINS} from './core.js';
+import {safeURL,FRAME_ORIGINS,isFrameURL} from './core.js';
 import {detectSite,readContext,contextKey,commitWatchSite} from './sites.js';
 import {sameFilm,laneKey} from './identity.js';
 import {frameLoading} from './player-loading.js';
@@ -33,11 +33,11 @@ export function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
         nextSite.preferences={selectedVidTypeRophim:current.lane,selectedServerRophim:current.server};
         const panel=[...parsed.querySelectorAll('.server-picker[data-panel]')].find(n=>n.dataset.panel===(current.lane==='tm'?'thuyetminh':'vietsub'));
         const selected=[...panel?.querySelectorAll('[data-server][data-value]') || []].find(n=>n.dataset.server===current.server);
-        if(!selected || !FRAME_ORIGINS.has(safeURL(selected.dataset.value)?.origin))return 'unavailable';
+        if(!selected || !isFrameURL(selected.dataset.value))return 'unavailable';
         nextSite.frame.src=selected.dataset.value;
       }
       const next=readContext(nextSite,parsed),embed=safeURL(nextSite.frame.src);
-      if(!next || !sameFilm(current,next) || !embed || !FRAME_ORIGINS.has(embed.origin))return 'unavailable';
+      if(!next || !sameFilm(current,next) || !embed || !isFrameURL(embed.href))return 'unavailable';
       if(keepLane && (laneKey(next.lane)!==laneKey(current.lane) || next.season!==current.season))return 'missing';
       if(!live())return 'unavailable';
       loading.begin(frame);

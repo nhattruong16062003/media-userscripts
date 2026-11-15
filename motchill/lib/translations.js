@@ -98,7 +98,7 @@ function startMotchillTranslations(sites, controller, options = {}) {
   }
   async function select(language) {
     if (destroyed || busy) return false;
-    if (controller.machine?.busy) { message('Đang chuyển tập, vui lòng đợi player sẵn sàng.'); return false; }
+    if ((controller.activeMachine || controller.machine)?.busy) { message('Đang chuyển tập, vui lòng đợi player sẵn sàng.'); return false; }
     const state = snapshot();
     if (!state || language === state.page.language || !state.variants.has(language)) return false;
     const entries = state.variants.get(language);
@@ -117,7 +117,7 @@ function startMotchillTranslations(sites, controller, options = {}) {
     try {
       const stored = await lookupProgress(target);
       if (epoch !== generation || controller.page?.url !== oldUrl || controller.page?.episodeKey !== state.page.episodeKey) return false;
-      if (controller.machine?.busy) { message('Đang chuyển tập, vui lòng đợi player sẵn sàng.'); return false; }
+      if ((controller.activeMachine || controller.machine)?.busy) { message('Đang chuyển tập, vui lòng đợi player sẵn sàng.'); return false; }
       if (!['found', 'missing', 'unavailable'].includes(stored.status)) {
         if (stored.status !== 'cancelled') message('Chưa đọc được lịch sử của bản dịch. Hãy bấm bản dịch để thử lại; vẫn giữ tập đang xem.');
         return false;

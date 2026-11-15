@@ -38,16 +38,17 @@ function createMotchillPlayerAdapters(sites) {
     const config = selectors(family);
     const native = family === sites.families.NEXT_REVIVE
       ? [...(reviveServerContainer(doc)?.querySelectorAll(':scope > div > button') || [])]
-      : [...doc.querySelectorAll(config.buttons)];
+      : [...doc.querySelectorAll(config.buttons),...(family===sites.families.NEXT?sites.nextProviderButtons(doc):[])];
     const nodes = [...new Set([...native, ...doc.querySelectorAll('[data-mc-server-key]')])].filter((node) => !node.closest('.mc-translations'));
     return nodes.map((node) => {
-      const label = node.getAttribute('data-apx-server-label') || node.querySelector('.title')?.textContent || node.textContent;
+      const label = node.dataset.mcNativeLabel || node.getAttribute('data-apx-server-label') || node.querySelector('.title')?.textContent || node.textContent;
       const title = String(label || '').replace(/\s+/g, ' ').trim();
-      if (!title || family === sites.families.NEXT && !/^server\b/i.test(title)) return null;
-      const kind = node.dataset.type || node.dataset.apxProvider || '';
+      if (!title || family === sites.families.NEXT && !/^server\b/i.test(title) && !sites.nextProviderButtons(doc).includes(node)) return null;
+      const kind = node.dataset.type || node.dataset.apxProvider || (family===sites.families.NEXT && sites.nextProviderState(doc)?'embed':'');
       // data-id/data-post chứa ID tập nên không được dùng để đối chiếu tập sau.
       const identity = node.dataset.mcServerKey || [sites.normalize(title), node.dataset.source || '', kind, node.dataset.srv || ''].join('|');
-      const selected = node.getAttribute('aria-pressed') === 'true' || node.getAttribute('aria-selected') === 'true'
+      const nativeChoice=family===sites.families.NEXT?sites.translationServers(doc,family).find(entry=>entry.node===node):null;
+      const selected = nativeChoice?nativeChoice.selected:node.getAttribute('aria-pressed') === 'true' || node.getAttribute('aria-selected') === 'true'
         || node.classList.contains('active') || node.classList.contains('btn-active') || node.classList.contains('btn-success') || node.classList.contains('on') || node.classList.contains('is-active')
         || family === sites.families.NEXT_REVIVE && node.classList.contains('text-[#39FF89]') && [...node.classList].some((name) => name.startsWith('shadow-['));
       const weakSelected = node.classList.contains('current');

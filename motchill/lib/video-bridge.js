@@ -49,13 +49,24 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   let startGeneration = 0;
   let seekStartOff = () => {};
   let relayFrame = null;
+  let parentContext=null,parentFullscreen=false,parentPresented=window.top===window;
+  const nextRequests=new Map();
+  function readParentContext(value,origin){
+    const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
+    if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !sites.translationKey(value.language))return null;
+    const result=Object.fromEntries(['url','family','slug','film','episode','episodeKey','language','server'].map(key=>[key,String(value[key] || '').slice(0,2048)]));
+    if(Number.isFinite(value.introSeconds) && value.introSeconds>=0 && value.introSeconds<=300)result.introSeconds=value.introSeconds;
+    const next=sites.url(value.next?.url),nextRoute=next && sites.route(next.href,result.family);
+    if(next?.origin===origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
+    return result;
+  }
   const remotes = new Map();
   function frames() {
     const ordinary = sites.playerFrames();
     if (!options.includePrepared) return ordinary;
-    const prepared = [...document.querySelectorAll('iframe[data-mc-managed="episode"]')].filter((frame) => {
+    const prepared = [...document.querySelectorAll('iframe[data-mc-managed="episode"],iframe[data-mc-managed="provider"]')].filter((frame) => {
       const target = sites.url(frame.src);
-      return frame.isConnected && target && target.origin === location.origin;
+      return frame.isConnected && target && (frame.dataset.mcManaged==='provider'?sites.knownEmbedPage(target.href):target.origin === location.origin);
     });
     return [...new Set([...ordinary, ...prepared])];
   }
@@ -72,13 +83,14 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   function setRole(frame, value) {
     const session = sessions.get(frame);
     if (!session || !['prepared', 'current'].includes(value)) return;
+    session.assignedRole=value;
     frame.contentWindow?.postMessage({ tag: channel, type: 'role', token: session.token, role: value, managed: true }, session.origin);
   }
   function hello(frame, session) {
     const currentRole = documentRole();
     frame.contentWindow?.postMessage({ tag: channel, type: 'hello', token: session.token,
-      managed: frame.dataset.mcManaged === 'episode' || managed,
-      role: frame.dataset.mcRole || currentRole }, session.origin);
+      managed: ['episode','provider'].includes(frame.dataset.mcManaged) || managed,
+      role: session.assignedRole || frame.dataset.mcRole || currentRole,presented:!sites.isPrepared(frame),context:{...sites.adapter().read(),introSeconds:options.introSeconds?.()},fullscreen:!!document.fullscreenElement?.contains(frame) }, session.origin);
   }
   function openSession(frame,origin){
     const previous=sessions.get(frame);if(previous?.loaded)frame.removeEventListener('load',previous.loaded);
@@ -167,12 +179,32 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     if (upstream) window.parent.postMessage({ tag: channel, type: 'fullscreen-toggle', token: upstream.token }, upstream.origin);
     else document.dispatchEvent(new CustomEvent('mc-fullscreen-request'));
   }
+  function requestNext(){
+    if(documentRole()!=='current')return false;
+    if(upstream){
+      if(nextRequests.size)return false;
+      const id=nonce(),mediaId=state()?.mediaId;if(!mediaId)return false;
+      return new Promise(resolve=>{
+        const timer=setTimeout(()=>{nextRequests.delete(id);resolve('timeout');},45000);
+        nextRequests.set(id,{resolve,timer,mediaId,token:upstream.token});
+        window.parent.postMessage({tag:channel,type:'next-episode',token:upstream.token,id,mediaId},upstream.origin);
+      });
+    }
+    return options.onNext?.() || false;
+  }
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || data.tag !== channel || !trustedOrigin(event.origin)) return;
     if (event.source === window.parent && window.parent !== window && parentOrigin === event.origin) {
+      if(data.type==='next-result' && upstream?.token===data.token && typeof data.id==='string'){
+        const request=nextRequests.get(data.id);
+        if(request && request.token===data.token && request.mediaId===state()?.mediaId && ['navigating','missing','error'].includes(data.status)){
+          clearTimeout(request.timer);nextRequests.delete(data.id);request.resolve(data.status);
+        }return;
+      }
       if (data.type === 'hello' && typeof data.token === 'string' && data.token.length < 100) {
         upstream = { token: data.token, origin: event.origin };
+        parentContext=readParentContext(data.context,event.origin);parentFullscreen=data.fullscreen===true;parentPresented=data.presented!==false;
         if (data.managed && ['prepared', 'current'].includes(data.role)) {
           managed = true; role = data.role; roleFromParent = true;
           for (const frame of frames()) setRole(frame, role);
@@ -243,6 +275,17 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     const frame = frames().find((el) => el.contentWindow === event.source);
     if (!frame || sites.url(frame.src)?.origin !== event.origin) return;
     let session = sessions.get(frame);
+    if(data.type==='next-episode'){
+      const receiver=validRemote(frame);
+      if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state?.nativeEnhanced || !receiver.state.customCapable || receiver.state.ad || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || session.nextPending)return;
+      const currentSession=session;session.nextPending=true;
+      Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
+        if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId)return;
+        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
+      }).catch(()=>{
+        if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:'error'},session.origin);
+      }).finally(()=>{currentSession.nextPending=false;});return;
+    }
     if (data.type === 'fullscreen-toggle') {
       const receiver = validRemote(frame);
       if (!session || session.token !== data.token || session.origin !== event.origin || session.src !== frame.src
@@ -269,7 +312,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const items=value.tracks?.[group];
       if(Array.isArray(items) && items.length<=100 && items.every(item=>item && Number.isInteger(item.id) && item.id>=0 && item.id<100 && typeof item.label==='string' && item.label.length<=100 && typeof item.active==='boolean'))tracks[group]=items.map(({id,label,active})=>({id,label,active}));
     }
-    value = { ...value, mediaSource: mediaSource(value.mediaSource),customCapable:value.customCapable===true,played:value.played===true,tracks };
+    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,played:value.played===true,tracks };
     // Generic player chỉ có quyền báo video, không tự nhận là website gốc.
     if (sites.embedHosts.has(sites.url(frame.src).hostname)) value = { ...value, page: null, direct: false,
       sourceFrames: sourceFrames(value.sourceFrames).filter((value) => sites.knownEmbedPage(value)) };
@@ -325,6 +368,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         const session = openSession(frame,target.origin);
         hello(frame, session);
       }
+      else if(channel==='motchill-player-controls-v2')hello(frame,sessions.get(frame));
     }
     if (parentOrigin && window.parent !== window && trustedOrigin(parentOrigin) && !upstream) window.parent.postMessage({ tag: channel, type: 'ready' }, parentOrigin);
     const video = sites.findVideo();
@@ -332,7 +376,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     sendState();
     return video || (remote?.isConnected ? remote : null);
   }
-  return { poll, state, setRole, requestFullscreen, getFrame: validRemote,
+  return { poll, state, setRole, requestFullscreen,requestNext,get parentContext(){return parentContext;},get parentFullscreen(){return parentFullscreen;},get parentPresented(){return parentPresented;},getFrame: validRemote,
     setNativeGestures(value) { nativeGestures = value === true; },
     get role() { return documentRole(); }, get managed() { documentRole(); return managed; }, get remote() { return remote; } };
 }

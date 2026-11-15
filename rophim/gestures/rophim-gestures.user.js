@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.6
+// @version      0.4.7
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -11,6 +11,7 @@
 // @include      /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]*rophim[a-z0-9-]*(?:\.[a-z0-9-]+)+(?::\d+)?\//
 // @match        https://player.phimapi.com/player/*
 // @match        https://api.clubc.org/embed/*
+// @match        https://api.rophim10.ink/embed/*
 // @match        https://dora.nobitayeuxuka.xyz/temp*
 // @run-at       document-start
 // @grant        unsafeWindow
@@ -141,7 +142,11 @@ SOFTWARE.
   }
 
   // rophim/lib/core.js
-  var FRAME_ORIGINS = /* @__PURE__ */ new Set(["https://player.phimapi.com", "https://api.clubc.org", "https://dora.nobitayeuxuka.xyz"]);
+  var FRAME_ORIGINS = /* @__PURE__ */ new Set(["https://player.phimapi.com", "https://api.clubc.org", "https://dora.nobitayeuxuka.xyz", "https://api.rophim10.ink"]);
+  function isFrameURL(value) {
+    const url = safeURL(value);
+    return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
+  }
   function safeURL(value, base) {
     try {
       const u = new URL(value, base);
@@ -152,7 +157,7 @@ SOFTWARE.
   }
   function isSiteOrigin(value) {
     const url = safeURL(value);
-    return !!url && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
+    return !!url && !FRAME_ORIGINS.has(url.origin) && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
   }
   var normalize = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
   var bounded = (value, max = 200) => String(value || "").slice(0, max);
@@ -606,7 +611,7 @@ SOFTWARE.
   function createBridge(win, page, feature, callbacks = {}) {
     const channel = "rophim." + feature + ".v1";
     const top = win.parent === win;
-    if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return { dispose() {
+    if (top ? !isSiteOrigin(win.location.origin) : !isFrameURL(win.location.href)) return { dispose() {
     }, state: () => null, command: () => false };
     let session = null, site = null, context = null, local = null, media = "", lastSource = "", remote = null, generation = 0, sequence = 0, disposed = false;
     let boundFrame = null, frameFullscreen = false, controlsReady = false;
@@ -737,7 +742,7 @@ SOFTWARE.
           resetRemote();
           boundFrame?.addEventListener("load", loaded);
         }
-        if (!nextContext2 || !frame || !url || !FRAME_ORIGINS.has(url.origin) || !frame.contentWindow || frame.hasAttribute("sandbox") && !frame.sandbox.contains("allow-same-origin")) {
+        if (!nextContext2 || !frame || !url || !isFrameURL(url.href) || !frame.contentWindow || frame.hasAttribute("sandbox") && !frame.sandbox.contains("allow-same-origin")) {
           diagnostic(win.document, feature, nextContext2 ? "iframe ch\u01B0a c\u1EA5p quy\u1EC1n/kh\xF4ng nh\u1EADn di\u1EC7n" : "ch\u1EDD ngu\u1ED3n website");
           return;
         }
@@ -851,6 +856,8 @@ SOFTWARE.
   .rp-watch-loading{position:absolute;inset:0;z-index:2147483645;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#fff;font:14px/1.4 Arial,sans-serif;pointer-events:auto}.rp-watch-loading.rp-loading-fixed{position:fixed}.rp-watch-loading [hidden]{display:none!important}.rp-loading-retry{font:inherit;padding:8px 18px;border:1px solid #ffffff55;border-radius:6px;background:#ffffff18;color:#fff;cursor:pointer;min-height:42px}.rp-watch-spinner{width:28px;height:28px;border:2px solid #ffffff38;border-top-color:#fff;border-radius:50%;animation:rp-watch-spin .8s linear infinite}@keyframes rp-watch-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.rp-watch-spinner{animation:none}}
   [data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-vtitle-bar,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}
   [data-rp-custom-controls="1"] .loading-screen{pointer-events:none!important}
+  [data-rp-native-enhancement="1"] #skip-intro,[data-rp-native-enhancement="1"] #skip-outro,[data-rp-native-enhancement="1"] .item-next,[data-rp-native-enhancement="1"] #toggle-eps,[data-rp-native-enhancement="1"] #video_eps{display:none!important;pointer-events:none!important}
+  [data-rp-native-chrome="false"] .custom-control,[data-rp-native-chrome="false"] .jw-controls,[data-rp-native-chrome="false"] #player_top,[data-rp-native-chrome="false"] .jw-display,[data-rp-native-locked="true"] .custom-control,[data-rp-native-locked="true"] .jw-controls,[data-rp-native-locked="true"] #player_top,[data-rp-native-locked="true"] .jw-display,[data-rp-native-locked="true"] .player-dm,[data-rp-native-locked="true"] #video_pop{visibility:hidden!important;pointer-events:none!important}
   [data-rp-ui="player"].rp-player-shell{position:absolute;inset:0;z-index:2147483642;pointer-events:none;font:14px/1.4 Arial,sans-serif;color:#fff;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .rp-player-shell *{box-sizing:border-box}.rp-player-shell[hidden],.rp-player-shell [hidden]{display:none!important}
   .rp-player-shell button{font:inherit;color:#fff;cursor:pointer;touch-action:manipulation}.rp-player-shell button:focus-visible,.rp-player-shell input:focus-visible{outline:2px solid #fff;outline-offset:2px}.rp-player-shell button:disabled{cursor:default}
@@ -896,7 +903,7 @@ SOFTWARE.
   function installGestures(win, player, notify = () => {
   }, options = {}) {
     const { video } = player, root = options.surface || player.root;
-    const interactive = (target) => options.surface?.contains(target) ? false : !!target?.closest?.('[data-rp-ui],a,button,input,select,textarea,[contenteditable="true"],[role="slider"],[role="button"],.jw-controlbar,.jw-settings-menu,.jw-rightclick,.art-controls,.art-settings,.art-contextmenus');
+    const interactive = (target) => options.surface?.contains(target) ? false : options.isInteractive?.(target) || !!target?.closest?.('[data-rp-ui],a,button,input,select,textarea,[contenteditable="true"],[role="slider"],[role="button"],.jw-controlbar,.jw-settings-menu,.jw-rightclick,.art-controls,.art-settings,.art-contextmenus');
     let press = null, lastTap = null, holdTimer = 0, tapTimer = 0, suppressUntil = 0;
     const source = () => player.fingerprint?.() || video.currentSrc || video.src;
     const consume = (e) => {
@@ -1035,18 +1042,20 @@ SOFTWARE.
       }
     };
     const click = (e) => {
-      if (options.exclusive || Date.now() < suppressUntil && !interactive(e.target)) {
+      if (!interactive(e.target) && (options.exclusive || Date.now() < suppressUntil)) {
         e.preventDefault();
         e.stopImmediatePropagation();
       }
     };
     const menu = (e) => {
-      if (options.exclusive || press?.held) {
+      if (!interactive(e.target) && (options.exclusive || press?.held)) {
         e.preventDefault();
         e.stopImmediatePropagation();
       }
     };
-    const touch = (e) => consume(e);
+    const touch = (e) => {
+      if (!interactive(e.target)) consume(e);
+    };
     const visibility = () => {
       if (win.document.hidden) cancel();
     };
@@ -1139,11 +1148,13 @@ SOFTWARE.
   function customPlayerControls(win, player, options = {}) {
     const { video, root } = player, doc = win.document, nativeRoot = player.nativeRoot || root, element = video.nodeType === 1 ? video : null;
     playerUIStyle(doc);
+    const nativeMode = options.nativeUI === true;
     const shell = doc.createElement("div");
     shell.dataset.rpUi = "player";
     shell.className = "rp-player-shell";
     shell.dataset.rpLocked = "false";
     shell.dataset.rpChrome = "true";
+    if (nativeMode) shell.dataset.rpMode = "native-enhancement";
     const surface = doc.createElement("div");
     surface.className = "rp-gesture-surface";
     surface.dataset.rpGestureSurface = "1";
@@ -1307,6 +1318,8 @@ SOFTWARE.
       if (!nativeOwned) return;
       nativeOwned = false;
       delete nativeRoot.dataset.rpCustomControls;
+      delete nativeRoot.dataset.rpNativeChrome;
+      delete nativeRoot.dataset.rpNativeLocked;
       if (element) for (const [name, value] of savedAttributes) {
         if (value === null) element.removeAttribute(name);
         else element.setAttribute(name, value);
@@ -1316,6 +1329,16 @@ SOFTWARE.
       shell.dataset.rpChrome = String(chromeVisible);
       shell.dataset.rpLocked = String(locked);
       lock.hidden = !lastReady || !inFullscreen() || locked && !lockVisible;
+      if (nativeMode) {
+        const changed2 = nativeRoot.dataset.rpNativeChrome !== String(chromeVisible);
+        nativeRoot.dataset.rpNativeChrome = String(chromeVisible);
+        nativeRoot.dataset.rpNativeLocked = String(locked);
+        if (changed2 && chromeVisible && !locked) {
+          const engine = root.querySelector(".jwplayer");
+          engine?.classList.remove("jw-flag-user-inactive");
+          engine?.dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true }));
+        }
+      }
     }
     function show() {
       chromeVisible = true;
@@ -1348,7 +1371,7 @@ SOFTWARE.
       update();
     }
     function cancelGestures() {
-      surface.dispatchEvent(new win.Event("pointercancel"));
+      (nativeMode ? root : surface).dispatchEvent(new win.Event("pointercancel"));
       holdTip.hidden = true;
     }
     function actionClick(action, node) {
@@ -1424,7 +1447,7 @@ SOFTWARE.
       cancelGestures();
       nextPending = { node, source: player.fingerprint?.(), key: context?.episodeID };
       update();
-      nextTimer = win.setTimeout(() => finishNext("timeout"), 15e3);
+      nextTimer = win.setTimeout(() => finishNext("timeout"), nativeMode ? 45e3 : 15e3);
       const active = nextPending;
       try {
         const result = options.onNext?.();
@@ -1442,10 +1465,11 @@ SOFTWARE.
     }
     const offGestures = installGestures(win, player, () => {
     }, {
-      surface,
+      surface: nativeMode ? void 0 : surface,
       exclusive: true,
       isLocked: () => locked,
       allowLockedMediaGestures: true,
+      isInteractive: nativeMode ? (target) => !!target?.closest?.(".custom-control,.player-control,.item-btn,.player-dm,#player_top,#video_pop,#video_eps") : void 0,
       onLockedTap: () => {
         if (lockVisible) {
           lockVisible = false;
@@ -1579,7 +1603,7 @@ SOFTWARE.
         win.clearTimeout(nextTimer);
       }
       nativeOwned = true;
-      nativeRoot.dataset.rpCustomControls = "1";
+      if (!nativeMode) nativeRoot.dataset.rpCustomControls = "1";
       if (element) {
         if (element.controls) element.controls = false;
         element.setAttribute("playsinline", "");
@@ -1599,6 +1623,11 @@ SOFTWARE.
       const muted = player.audio?.().muted ?? video.muted;
       mute.innerHTML = playerIcon(muted ? "muted" : "volume");
       mute.setAttribute("aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
+      if (nativeMode) for (const node of root.querySelectorAll(".btn-muted")) {
+        node.classList.toggle("fa-volume-mute", muted);
+        node.classList.toggle("fa-volume-high", !muted);
+        node.setAttribute("aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
+      }
       fullscreen.innerHTML = playerIcon(inFullscreen() ? "shrink" : "fullscreen");
       fullscreen.setAttribute("aria-label", inFullscreen() ? "Thu nh\u1ECF" : "To\xE0n m\xE0n h\xECnh");
       lock.innerHTML = playerIcon(locked ? "lock" : "unlock");
@@ -1633,6 +1662,33 @@ SOFTWARE.
       root.style.position = "relative";
       positioned = true;
     }
+    const nativeClick = (event) => {
+      if (!nativeMode || !player.state().ready) return;
+      const playButton = event.target.closest?.(".jw-btn-play,.jw-icon-playback,.jw-display-icon-display,.item-play,.item-pause");
+      const muteButton = event.target.closest?.(".btn-muted,.jw-icon-volume");
+      if (!playButton && !muteButton) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!locked) actionClick(playButton ? "play" : "mute", playButton ? play : mute);
+    };
+    const nativeVolume = (event) => {
+      if (!nativeMode || locked || !event.target.closest?.("#volume,.jw-slider-volume")) return;
+      win.queueMicrotask(() => {
+        if (disposed || locked || !player.state().ready) return;
+        const value = player.audio?.() || {};
+        audio?.intent(value.muted === true || value.volume === 0);
+        update();
+      });
+    };
+    if (nativeMode) {
+      center.remove();
+      chrome.remove();
+      settings.remove();
+      surface.remove();
+      root.addEventListener("click", nativeClick, true);
+      root.addEventListener("click", nativeVolume, true);
+      root.addEventListener("pointerup", nativeVolume, true);
+    }
     root.append(shell);
     update();
     return {
@@ -1658,6 +1714,9 @@ SOFTWARE.
         if (disposed) return;
         checkpointAudio();
         disposed = true;
+        root.removeEventListener("click", nativeClick, true);
+        root.removeEventListener("click", nativeVolume, true);
+        root.removeEventListener("pointerup", nativeVolume, true);
         offGestures();
         offPlayer?.();
         nativeObserver.disconnect();
@@ -2045,11 +2104,11 @@ SOFTWARE.
           nextSite.preferences = { selectedVidTypeRophim: current.lane, selectedServerRophim: current.server };
           const panel = [...parsed.querySelectorAll(".server-picker[data-panel]")].find((n) => n.dataset.panel === (current.lane === "tm" ? "thuyetminh" : "vietsub"));
           const selected = [...panel?.querySelectorAll("[data-server][data-value]") || []].find((n) => n.dataset.server === current.server);
-          if (!selected || !FRAME_ORIGINS.has(safeURL(selected.dataset.value)?.origin)) return "unavailable";
+          if (!selected || !isFrameURL(selected.dataset.value)) return "unavailable";
           nextSite.frame.src = selected.dataset.value;
         }
         const next = readContext(nextSite, parsed), embed = safeURL(nextSite.frame.src);
-        if (!next || !sameFilm(current, next) || !embed || !FRAME_ORIGINS.has(embed.origin)) return "unavailable";
+        if (!next || !sameFilm(current, next) || !embed || !isFrameURL(embed.href)) return "unavailable";
         if (keepLane && (laneKey(next.lane) !== laneKey(current.lane) || next.season !== current.season)) return "missing";
         if (!live()) return "unavailable";
         loading.begin(frame);
@@ -2135,13 +2194,13 @@ SOFTWARE.
   }
 
   // shared/bridge/ownership.js
-  function runFamily(win, { family, feature, isSiteURL, isFrameURL, isFrameOrigin = () => false }, start) {
+  function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin = () => false }, start) {
     const tag = "media-userscripts-owner-v1", doc = win.document;
     let active = false, disposed = false, timer = 0;
     const challenge = Array.from(win.crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
     const allowed = (value) => {
       try {
-        return !!(isSiteURL(value) || isFrameURL(value));
+        return !!(isSiteURL(value) || isFrameURL2(value));
       } catch {
         return false;
       }
@@ -2189,7 +2248,7 @@ SOFTWARE.
     };
     win.addEventListener("message", receive);
     if (isSiteURL(win.location.href)) activate();
-    else if (win.parent !== win && isFrameURL(win.location.href)) {
+    else if (win.parent !== win && isFrameURL2(win.location.href)) {
       timer = win.setInterval(ask, 1e3);
       ask();
     }
@@ -2301,5 +2360,5 @@ SOFTWARE.
       }
     });
   }
-  runFamily(window, { family: "rophim", feature: "gestures", isSiteURL: isSiteOrigin, isFrameURL: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin), isFrameOrigin: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin) }, () => startGestures(window, typeof unsafeWindow === "undefined" ? window : unsafeWindow));
+  runFamily(window, { family: "rophim", feature: "gestures", isSiteURL: isSiteOrigin, isFrameURL, isFrameOrigin: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin) }, () => startGestures(window, typeof unsafeWindow === "undefined" ? window : unsafeWindow));
 })();

@@ -1,11 +1,15 @@
 // Permission boundaries only. Website names may change; source contracts select adapters.
-export const FRAME_ORIGINS = new Set(['https://player.phimapi.com', 'https://api.clubc.org', 'https://dora.nobitayeuxuka.xyz']);
+export const FRAME_ORIGINS = new Set(['https://player.phimapi.com', 'https://api.clubc.org', 'https://dora.nobitayeuxuka.xyz', 'https://api.rophim10.ink']);
+export function isFrameURL(value) {
+  const url=safeURL(value);
+  return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin!=='https://api.rophim10.ink' || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
+}
 export function safeURL(value, base) {
   try { const u = new URL(value, base); return u.protocol === 'https:' && !u.username && !u.password ? u : null; } catch { return null; }
 }
 export function isSiteOrigin(value) {
   const url=safeURL(value);
-  return !!url && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
+  return !!url && !FRAME_ORIGINS.has(url.origin) && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
 }
 export const normalize = value => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 export const bounded = (value, max = 200) => String(value || '').slice(0, max);

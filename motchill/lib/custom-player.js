@@ -3,6 +3,7 @@
 function createMotchillCustomPlayer(sites,bridge,hooks){
   if(typeof SharedPlayer==='undefined')return null;
   const nativeContract=video=>video.matches('#video') && video.closest('#player-wrap')?.querySelector('#controls #fs-btn') ? video.closest('#player-wrap'):false;
+  const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_mask):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
   const waiting=new Map();
@@ -13,7 +14,8 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     // origin, open a bridge session or infer an engine from the server label.
     const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,.mc-player-stage>iframe')]
       .filter(frame=>frame.tagName==='IFRAME' && sites.visible(frame) && !sites.isPrepared(frame) && sites.url(frame.getAttribute('src')));
-    return [...new Set([...sites.playerFrames(),...slots])];
+    const nativeFrame=sites.nextProviderState?.()?.frame;
+    return [...new Set([...sites.playerFrames(),...slots])].filter(frame=>frame!==nativeFrame);
   }
   function prepareFrames(){
     if(disposed || window.top!==window)return;
@@ -38,7 +40,10 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
   }
   function guard(){
-    if(disposed || guardOff || !document.documentElement)return;
+    if(disposed || !document.documentElement)return;
+    const native=enhancementRoot();
+    if(native){native.dataset.rpNativeEnhancement='1';guardOff?.();guardOff=null;return;}
+    if(guardOff)return;
     // Only known engine contracts are hidden. Ad/challenge UI is independent.
     guardOff=SharedPlayer.playerStartupGuard(window);
     const style=document.createElement('style');style.dataset.mcCustomGuard='1';
@@ -54,11 +59,28 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     if(probe && (!found || probe.video!==found.video || probe.api!==found.api || probeSource!==fingerprint)){probe.dispose();probe=null;}
     if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
     const own=found?.video===video,state=own?probe.state():null;
-    return {customCapable:!!own,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
+    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,...probe.audio()}: {})};
   }
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
   function playAudible(video){const state=localState(video);return state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
   function restoreAudio(video,value){const state=localState(video);return state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
+  function enhanceLocal(video){
+    guard();const root=enhancementRoot(),found=candidate();
+    if(!root || !found || found.video!==video || bridge.role==='prepared' || bridge.parentPresented===false){if(mounted?.native)detach();return false;}
+    const signature=SharedPlayer.playerFingerprint(found);
+    if(mounted && (!mounted.native || mounted.media!==video || mounted.signature!==signature || !mounted.ui.shell.isConnected))detach();
+    if(!mounted){
+      const player=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>bridge.role!=='prepared'});player.nativeRoot=root;player.root=root;
+      const ui=SharedPlayer.customPlayerControls(window,player,{nativeUI:true,audioPreferences,
+        canRestoreAudio:()=>bridge.role!=='prepared',introSeconds:()=>bridge.parentContext?.introSeconds ?? hooks.introSeconds(),onIntro:()=>{const end=bridge.parentContext?.introSeconds ?? hooks.introSeconds();player.command('seek',Math.min(end,video.duration));},
+        onNext:()=>bridge.requestNext(),isFullscreen:()=>bridge.parentFullscreen,onFullscreen:()=>bridge.requestFullscreen()});
+      mounted={native:true,media:video,root,signature,player,ui};
+    }
+    for(const node of root.querySelectorAll('.item-max,.item-min'))node.classList.toggle('d-none',node.classList.contains('item-max')?bridge.parentFullscreen:!bridge.parentFullscreen);
+    const page=bridge.parentContext;
+    mounted.ui.setContext(page?{url:page.url,episodeID:page.episodeKey,lane:page.language,server:page.server,next:page.next}:null);
+    return true;
+  }
   function update(media,root,page){
     if(disposed)return false;
     guard();prepareFrames();
@@ -103,5 +125,5 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,enhanceLocal,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }

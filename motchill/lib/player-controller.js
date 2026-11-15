@@ -90,11 +90,11 @@ function createMotchillPlayerLearning(sites, getPage, options = {}) {
 // Điều khiển chung; website adapter chọn tập, player bridge xử lý native/JW/iframe.
 function startMotchillPlayerController(sites) {
   const channel = 'motchill-player-controls-v2';
-  let learning,customUI=null;
+  let learning,customUI=null,nativeNavigation=null;
   const bridge = createMotchillVideoBridge(sites, channel, { includePrepared: true,
-    userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
+    introSeconds:()=>learning?.introEnd(),userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
-    playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value) });
+    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -139,10 +139,10 @@ function startMotchillPlayerController(sites) {
   const getDocument = () => {
     try { return currentFrame?.contentDocument || document; } catch (_) { return document; }
   };
-  const getPage = () => currentFrame ? bridge.getFrame(currentFrame)?.state?.page || currentPage : sites.adapter().read() || bridge.state()?.page;
+  const getPage = () => currentFrame ? bridge.getFrame(currentFrame)?.state?.page || currentPage : sites.adapter().read() || bridge.state()?.page || bridge.parentContext;
   learning = createMotchillPlayerLearning(sites, getPage, { isCurrent: () => bridge.role !== 'prepared' });
   customUI=typeof createMotchillCustomPlayer==='function'?createMotchillCustomPlayer(sites,bridge,{
-    introSeconds:()=>learning.introEnd(),onIntro:()=>learning.skipIntro(media,contextKey()),
+    onNativeIntro:video=>learning.skipIntro(video,contextKey()),introSeconds:()=>learning.introEnd(),onIntro:()=>learning.skipIntro(media,contextKey()),
     onNext:()=>goNext('manual'),serverKey:()=>selectedServerKey,
     isFullscreen:()=>!!shell && document.fullscreenElement===shell,onFullscreen:()=>toggleFullscreen(),
   }):null;
@@ -357,6 +357,10 @@ function startMotchillPlayerController(sites) {
   function childMode() {
     customUI?.guard();
     const local = sites.findVideo();
+    if(customUI?.nativeRoot){
+      if(local && bridge.role==='prepared')players.prepareMedia(local);
+      if(local)customUI.enhanceLocal(local);bridge.setNativeGestures?.(bridge.role!=='prepared');return;
+    }
     const frame = bridge.remote?.frame || sites.playerFrames()[0];
     if (bridge.managed) {
       if (local && bridge.role === 'prepared') {
@@ -390,6 +394,7 @@ function startMotchillPlayerController(sites) {
     stage.append(node); return node;
   }
   function toggleFullscreen() {
+    if(nativeNavigation?.active)return nativeNavigation.toggleFullscreen();
     if (!shell?.isConnected) return Promise.resolve('unavailable');
     if(fullscreenManager)return fullscreenManager.toggle(shell);
     if (document.fullscreenElement) document.exitFullscreen?.();
@@ -477,6 +482,7 @@ function startMotchillPlayerController(sites) {
     return [info?.url, info?.language, selectedServerKey, selectionVersion].join('|');
   }
   function goNext(reason) {
+    if(nativeNavigation?.active)return nativeNavigation.goNext(reason);
     if (!activePage()?.next) return Promise.resolve(false);
     learning.cancelIntro();
     retryAction = null;
@@ -485,6 +491,7 @@ function startMotchillPlayerController(sites) {
     return machine.go(reason);
   }
   function transitionTo(target, reason = 'manual') {
+    if(nativeNavigation?.active)return nativeNavigation.transitionTo(target,reason);
     if (!target?.url || machine.busy) return Promise.resolve(false);
     learning.cancelIntro();
     retryAction = null;
@@ -693,6 +700,7 @@ function startMotchillPlayerController(sites) {
     ensureStyle();
     const found = bridge.poll();
     if (window.top !== window) { childMode(); return; }
+    if(nativeNavigation?.poll())return;
     if (shell && (!shell.isConnected || !stage?.isConnected || !shell.contains(stage) || !shell.classList.contains('mc-shell'))) {
       // JW/server handlers may replace the player's innerHTML while retaining
       // its root element. A connected root alone does not mean our UI survived.
@@ -768,6 +776,7 @@ function startMotchillPlayerController(sites) {
   let restoringServer = null;
   const providerSignature = (value) => [value?.frame?.src || '', value?.state?.direct ? 'direct' : '', ...(value?.state?.sourceFrames || [])].join('|');
   document.addEventListener('click', (e) => {
+    if(nativeNavigation?.active)return;
     const mirror = e.target.closest?.('[data-mc-server-key]');
     if (currentFrame && mirror) { e.preventDefault(); e.stopImmediatePropagation(); }
     const choice = mirror ? { key: mirror.dataset.mcServerKey } : players.serverChoices(document).find((item) => item.node === e.target || item.node.contains(e.target));
@@ -815,7 +824,10 @@ function startMotchillPlayerController(sites) {
     if (video.readyState >= 2 && Number.isFinite(video.duration) && video.duration > 0 && !video.paused) video.pause();
   };
   for (const event of ['play', 'playing', 'volumechange', 'loadedmetadata', 'loadeddata', 'canplay', 'timeupdate']) document.addEventListener(event, guardPreparedPlayback, true);
-  document.addEventListener('mc-player-role', guardPreparedPlayback);
+  document.addEventListener('mc-player-role', event=>{
+    guardPreparedPlayback(event);
+    if(customUI?.nativeRoot){const video=sites.findVideo();if(video)customUI.enhanceLocal(video);}
+  });
   document.addEventListener('mc-reveal-controls', () => {
     const video = sites.findVideo();
     const host = video?.closest('.jwplayer,#player-wrap,.art-video-player') || video;
@@ -829,11 +841,12 @@ function startMotchillPlayerController(sites) {
   document.addEventListener('mc-fullscreen-request', () => { if (window.top === window) toggleFullscreen(); });
   document.addEventListener('click', (e) => {
     if (window.top === window || !bridge.requestFullscreen || bridge.role === 'prepared') return;
-    if (!e.target.closest?.('.jw-icon-fullscreen,[data-plyr="fullscreen"],.vjs-fullscreen-control,#player-wrap #controls #fs-btn,.art-control-fullscreen')) return;
+    if (!e.target.closest?.('.jw-icon-fullscreen,[data-plyr="fullscreen"],.vjs-fullscreen-control,#player-wrap #controls #fs-btn,.art-control-fullscreen,#rp-player .item-max,#rp-player .item-min')) return;
     e.preventDefault(); e.stopImmediatePropagation(); bridge.requestFullscreen();
   }, true);
+  if(typeof createMotchillNextProviderNavigation==='function' && window.top===window)nativeNavigation=createMotchillNextProviderNavigation(sites,bridge,players,fullscreenManager,{poll:(value,key)=>learning.poll(value,key)});
   setInterval(poll, 250);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', poll, { once: true }); else poll();
-  return { poll, machine, bridge, players, transitionTo, switchTarget, goNext, getDocument,
-    get page() { return activePage(); }, get media() { return media; }, get shell() { return shell; } };
+  return { poll, machine,get activeMachine(){return nativeNavigation?.active?nativeNavigation.machine:machine;},bridge, players, transitionTo, switchTarget, goNext, getDocument,
+    get page() { return activePage(); }, get media() { return nativeNavigation?.active?nativeNavigation.media:media; }, get shell() { return nativeNavigation?.active?nativeNavigation.shell:shell; } };
 }

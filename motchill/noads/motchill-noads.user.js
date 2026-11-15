@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - chặn quảng cáo + tối ưu mạng
 // @namespace    motchill-noads
-// @version      6.0.6
+// @version      6.0.7
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
@@ -24,6 +24,7 @@
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @include      /^https?:\/\/[^\/?#]*motchill[^\/?#]*\//
+// @match        https://api.clubc.live/embed/*
 // @run-at       document-start
 // @inject-into  page
 // @grant        none
@@ -147,7 +148,7 @@ function createMotchillSites() {
   // with the same JW player/origin.js schema as the verified v8 player.
   // Tập 35 sv-1 do người dùng cung cấp (2026-11-14) khai báo embed11.
   // Quyền origin riêng; không coi hostname là bằng chứng về engine bên trong.
-  const embedHosts = new Set(['fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
   const ROLE_ATTR = 'data-mc-role';
   const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
   // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
@@ -156,7 +157,7 @@ function createMotchillSites() {
   const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const translationKey = (value) => {
-    const languages = [...new Set(normalize(value).match(/thuyet-minh|long-tieng|vietsub/g) || [])];
+    const languages = [...new Set((normalize(value).match(/thuyet-minh|long-tieng|vietsub|phu-de/g) || []).map(key=>key==='phu-de'?'vietsub':key))];
     return languages.length === 1 ? languages[0] : '';
   };
   const cleanOriginal = (value) => String(value || '').replace(/\s+/g, ' ').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').trim();
@@ -201,6 +202,7 @@ function createMotchillSites() {
       'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
       'embed11.streamc.xyz': /^\/embed\.php$/,
       'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
+      'api.clubc.live': /^\/embed\/[1-9]\d*\/?$/,
     };
     return !!paths[parsed.hostname]?.test(parsed.pathname);
   }
@@ -354,17 +356,45 @@ function createMotchillSites() {
     const cacheKey = path + ':' + scripts.length + ':' + (scripts.at(-1)?.textContent.length || 0);
     const cached = flightCache.get(doc);
     if (cached?.key === cacheKey) return cached.pages;
-    const pages = [];
+    const pages = [], rows=new Map();
+    let stream='';
     for (const script of scripts) {
       try {
         const arg = script.textContent.trim().slice('self.__next_f.push('.length).replace(/\);?\s*$/, '');
         const chunk = JSON.parse(arg)[1];
         if (typeof chunk !== 'string') continue;
-        for (const line of chunk.split('\n')) {
+        stream+=chunk;
+      } catch (e) { /* script khác */ }
+    }
+    for (const line of stream.split('\n')) {
           const index = line.indexOf(':');
           if (index < 0) continue;
+          const id=line.slice(0,index);
+          if(!/^[a-f\d]+$/i.test(id))continue;
+          try{rows.set(id,JSON.parse(line.slice(index+1)));}catch{/* non-JSON Flight record */}
+    }
+    // Flight references are data paths, never JavaScript. Resolve only existing
+    // own properties, with cycle/depth and work bounds for malformed streams.
+    let budget=100000;
+    const resolve=(value,depth=0,chain=new Set())=>{
+      if(depth>60 || --budget<0)return null;
+      if(typeof value==='string' && /^\$[a-f\d]+(?::[^:]+)*$/i.test(value)){
+        if(chain.has(value))return null;
+        const [id,...path]=value.slice(1).split(':');let target=rows.get(id);
+        for(const key of path){
+          if(key==='props' && Array.isArray(target) && target[0]==='$' && target.length===4){target=target[3];continue;}
+          if(['__proto__','prototype','constructor'].includes(key) || target==null || !Object.hasOwn(target,key))return null;target=target[key];
+        }
+        if(target===undefined)return value;
+        return resolve(target,depth+1,new Set([...chain,value]));
+      }
+      if(Array.isArray(value))return value.map(item=>resolve(item,depth+1,chain));
+      if(value && typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,resolve(item,depth+1,chain)]));
+      return value;
+    };
+    for(const raw of rows.values()){
           try {
-            const value = JSON.parse(line.slice(index + 1));
+            const value = resolve(raw);
             const visit = (v, depth = 0) => {
               if (!v || typeof v !== 'object' || depth > 40) return;
               if (v.movie && typeof v.movie === 'object' && v.movie.slug
@@ -374,11 +404,25 @@ function createMotchillSites() {
             };
             visit(value);
           } catch (e) { /* chunk text hoặc tham chiếu RSC */ }
-        }
-      } catch (e) { /* script khác */ }
     }
     flightCache.set(doc, { key: cacheKey, pages });
     return pages;
+  }
+  function nextProviderState(doc=document,pageUrl=doc.URL || location.href){
+    const parsed=route(pageUrl,families.NEXT),data=parsed && nextData(doc,pageUrl).find(entry=>entry.movie?.slug===parsed.slug);
+    if(!Array.isArray(data?.movie?.episodes) || !data.movie.episodes.length)return null;
+    const frames=[...doc.querySelectorAll('.player-frame-stable iframe.player-frame-content')].filter(frame=>!isPrepared(frame));
+    if(frames.length!==1)return null;
+    const frame=frames[0],source=url(frame.getAttribute('src'),pageUrl),id=source?.pathname.match(/^\/embed\/([1-9]\d*)\/?$/)?.[1];
+    if(!id || !knownEmbedPage(source.href))return null;
+    const matches=data.movie.episodes.filter(ep=>ep && String(ep.id)===id && ep.slug===parsed.episode && ep.type==='m3u8');
+    if(matches.length!==1 || !translationKey(matches[0].server))return null;
+    return {frame,data,episode:matches[0],source};
+  }
+  function nextProviderButtons(doc=document,pageUrl=doc.URL || location.href){
+    const state=nextProviderState(doc,pageUrl);if(!state)return [];
+    const labels=new Set(state.data.movie.episodes.filter(ep=>ep && ep.slug===state.episode.slug && ep.type==='m3u8').map(ep=>ep.server));
+    return [...doc.querySelectorAll('button')].filter(node=>!node.closest('.mc-translations,[data-rp-ui]') && labels.has(node.dataset.mcNativeLabel || text(node)));
   }
 
 
@@ -734,6 +778,14 @@ function createMotchillSites() {
     return candidates.map(translationKey).find(Boolean) || '';
   }
   function translationServers(doc, family) {
+    if(family===families.NEXT){
+      const state=nextProviderState(doc,doc.URL);
+      if(state)return nextProviderButtons(doc,doc.URL).map(node=>{
+        const label=node.dataset.mcNativeLabel || text(node),matches=state.data.movie.episodes.filter(ep=>ep && ep.slug===state.episode.slug && ep.server===label && ep.type==='m3u8');
+        return {node,label,language:translationKey(label),selected:label===state.episode.server,
+          source:matches.length===1?new URL('/embed/'+matches[0].id,state.source).href:''};
+      });
+    }
     if (family === families.NEXT_REVIVE) {
       const page = url(doc.URL, location.href);
       const data = reviveData(doc, page?.href || location.href);
@@ -768,7 +820,7 @@ function createMotchillSites() {
         const pageUrl = url(doc.location?.href)?.href || location.href;
         const parsed = route(pageUrl, family);
         const data = parsed && nextData(doc, pageUrl).find((entry) => entry.movie?.slug === parsed.slug);
-        const matches = [...(data?.episodeVariants || []), ...(data?.movie?.episodes || [])].filter((ep) => episodeKey(ep.slug) === episodeKey(parsed?.episode)
+        const matches = [...(data?.episodeVariants || []), ...(data?.movie?.episodes || [])].filter((ep) => ep && episodeKey(ep.slug) === episodeKey(parsed?.episode)
           && normalize(ep.server) === normalize(label.replace(/^server\s+/i, '')));
         const candidates = [...new Set(matches.filter((ep) => (ep.type || 'm3u8') === 'm3u8').map((ep) => url(ep.link, pageUrl)?.href).filter(Boolean))];
         if (candidates.length === 1) source = candidates[0];
@@ -802,22 +854,23 @@ function createMotchillSites() {
       const target = url(a.getAttribute('href'), page.href);
       return { node: a, target, parsed: target ? route(target.href, family, page.href) : null };
     }).filter((x) => x.parsed && x.target && Number(episodeKey(x.parsed.episode).replace('ep:', '')) === number + 1)[0];
-    const selectedLanguage = currentServerLanguage(doc, family);
-    const routeVariants = meta.rsc?.episodeVariants?.filter((v) => v.slug === currentRoute.episode) || [];
+    const provider=family===families.NEXT?nextProviderState(doc,page.href):null;
+    const selectedLanguage = provider?translationKey(provider.episode.server):currentServerLanguage(doc, family);
+    const routeVariants = meta.rsc?.episodeVariants?.filter((v) => v?.slug === currentRoute.episode) || [];
     const ambiguousLanguage = family === families.NEXT && !selectedLanguage
       && new Set(routeVariants.map((v) => translationKey(v.server)).filter(Boolean)).size > 1;
     // Several actual language variants share k-tap-01. The SSR server buttons
     // are all unselected until hydration; array order is not selection evidence.
-    const variant = !ambiguousLanguage && routeVariants.find((v) => v.slug === currentRoute.episode
+    const variant = provider?.episode || !ambiguousLanguage && routeVariants.find((v) => v.slug === currentRoute.episode
       && (!selectedLanguage || translationKey(v.server) === selectedLanguage));
-    const rscNext = meta.rsc?.serverEpisodes?.find((v) => v.server === variant?.server && Number(episodeKey(v.slug).replace('ep:', '')) === number + 1);
+    const rscNext = (provider?.data.movie.episodes || meta.rsc?.serverEpisodes)?.find((v) => v && v.server === variant?.server && Number(episodeKey(v.slug).replace('ep:', '')) === number + 1 && (!provider || v.type==='m3u8'));
     const label = variant?.name || (current ? text(current) : currentRoute.episode);
     const language = ambiguousLanguage ? '' : selectedLanguage || linkLanguage(current, doc, variant, meta.data, label);
     return { ...currentRoute, family, title: meta.title, originalTitle: meta.originalTitle,
-      year: meta.year, season: meta.season, language, externalIds: meta.externalIds,
+      year: meta.year, season: meta.season, language, server:variant?.server || '',externalIds: meta.externalIds,
       film: meta.film, episodeKey: episodeKey(currentRoute.episode), poster: meta.poster,
       episode: label, url: page.href, next: rscNext ? {
-        path: '/phim/' + currentRoute.slug + '/' + rscNext.slug, episode: rscNext.name, episodeKey: episodeKey(rscNext.slug),
+        path: '/phim/' + currentRoute.slug + '/' + rscNext.slug, episode: rscNext.name, episodeKey: episodeKey(rscNext.slug), server:rscNext.server,language,
         url: new URL('/phim/' + currentRoute.slug + '/' + rscNext.slug, page.origin).href,
       } : next ? { path: next.parsed.path, episode: text(next.node), episodeKey: episodeKey(next.parsed.episode), url: next.target.href } : null,
     };
@@ -858,7 +911,7 @@ function createMotchillSites() {
         language: linkLanguage(a, doc, null, meta.data, epText) });
     }
     if (resolvedFamily === families.NEXT && meta.rsc) {
-      for (const ep of [...(meta.rsc.episodeVariants || []), ...(meta.rsc.serverEpisodes || [])]) {
+      for (const ep of [...(meta.rsc.episodeVariants || []), ...(meta.rsc.serverEpisodes || []),...(meta.rsc.movie?.episodes || [])]) {
         if (!ep?.slug) continue;
         const epPath = '/phim/' + parsed.slug + '/' + ep.slug;
         pushEp({ url: new URL(epPath, page.origin).href, path: epPath, episode: ep.name || ep.slug,
@@ -946,7 +999,7 @@ function createMotchillSites() {
     return [...doc.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#dooplay_player_response iframe,main iframe,iframe[allowfullscreen]')]
       .filter((el) => {
         const target = url(el.getAttribute('src'), pageUrl);
-        return visible(el) && !isPrepared(el) && target && (isMotchill(target.hostname) || embedHosts.has(target.hostname)) && !el.closest('.ads-banner,.apx-trailer-player');
+        return visible(el) && !isPrepared(el) && target && (isMotchill(target.hostname) || embedHosts.has(target.hostname) && (target.hostname!=='api.clubc.live' || knownEmbedPage(target.href))) && !el.closest('.ads-banner,.apx-trailer-player');
       });
   }
   function homeMount(family, doc = document, pageUrl = location.href) {
@@ -969,7 +1022,7 @@ function createMotchillSites() {
     episodeKey, filmSlug, sameFilm, sameEpisode, read: (doc = document, pageUrl = location.href, family) => adapter(family, doc, pageUrl).read(),
     readDetail: (doc = document, pageUrl = location.href, family) => adapter(family, doc, pageUrl).detail(),
     readCatalog: (doc = document, pageUrl = location.href, family) => adapter(family, doc, pageUrl).catalog(),
-    normalize, translationKey, translationServers, reviveData, reviveServerNodes, url, visible, findVideo, playerFrames, homeMount, homeAnchor, structured, nextData, nextEpisodeLink };
+    normalize, translationKey, translationServers, reviveData, reviveServerNodes, url, visible, findVideo, playerFrames, homeMount, homeAnchor, structured, nextData, nextProviderState,nextProviderButtons,nextEpisodeLink };
 }
 
 
@@ -1025,13 +1078,24 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   let startGeneration = 0;
   let seekStartOff = () => {};
   let relayFrame = null;
+  let parentContext=null,parentFullscreen=false,parentPresented=window.top===window;
+  const nextRequests=new Map();
+  function readParentContext(value,origin){
+    const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
+    if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !sites.translationKey(value.language))return null;
+    const result=Object.fromEntries(['url','family','slug','film','episode','episodeKey','language','server'].map(key=>[key,String(value[key] || '').slice(0,2048)]));
+    if(Number.isFinite(value.introSeconds) && value.introSeconds>=0 && value.introSeconds<=300)result.introSeconds=value.introSeconds;
+    const next=sites.url(value.next?.url),nextRoute=next && sites.route(next.href,result.family);
+    if(next?.origin===origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
+    return result;
+  }
   const remotes = new Map();
   function frames() {
     const ordinary = sites.playerFrames();
     if (!options.includePrepared) return ordinary;
-    const prepared = [...document.querySelectorAll('iframe[data-mc-managed="episode"]')].filter((frame) => {
+    const prepared = [...document.querySelectorAll('iframe[data-mc-managed="episode"],iframe[data-mc-managed="provider"]')].filter((frame) => {
       const target = sites.url(frame.src);
-      return frame.isConnected && target && target.origin === location.origin;
+      return frame.isConnected && target && (frame.dataset.mcManaged==='provider'?sites.knownEmbedPage(target.href):target.origin === location.origin);
     });
     return [...new Set([...ordinary, ...prepared])];
   }
@@ -1048,13 +1112,14 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   function setRole(frame, value) {
     const session = sessions.get(frame);
     if (!session || !['prepared', 'current'].includes(value)) return;
+    session.assignedRole=value;
     frame.contentWindow?.postMessage({ tag: channel, type: 'role', token: session.token, role: value, managed: true }, session.origin);
   }
   function hello(frame, session) {
     const currentRole = documentRole();
     frame.contentWindow?.postMessage({ tag: channel, type: 'hello', token: session.token,
-      managed: frame.dataset.mcManaged === 'episode' || managed,
-      role: frame.dataset.mcRole || currentRole }, session.origin);
+      managed: ['episode','provider'].includes(frame.dataset.mcManaged) || managed,
+      role: session.assignedRole || frame.dataset.mcRole || currentRole,presented:!sites.isPrepared(frame),context:{...sites.adapter().read(),introSeconds:options.introSeconds?.()},fullscreen:!!document.fullscreenElement?.contains(frame) }, session.origin);
   }
   function openSession(frame,origin){
     const previous=sessions.get(frame);if(previous?.loaded)frame.removeEventListener('load',previous.loaded);
@@ -1143,12 +1208,32 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     if (upstream) window.parent.postMessage({ tag: channel, type: 'fullscreen-toggle', token: upstream.token }, upstream.origin);
     else document.dispatchEvent(new CustomEvent('mc-fullscreen-request'));
   }
+  function requestNext(){
+    if(documentRole()!=='current')return false;
+    if(upstream){
+      if(nextRequests.size)return false;
+      const id=nonce(),mediaId=state()?.mediaId;if(!mediaId)return false;
+      return new Promise(resolve=>{
+        const timer=setTimeout(()=>{nextRequests.delete(id);resolve('timeout');},45000);
+        nextRequests.set(id,{resolve,timer,mediaId,token:upstream.token});
+        window.parent.postMessage({tag:channel,type:'next-episode',token:upstream.token,id,mediaId},upstream.origin);
+      });
+    }
+    return options.onNext?.() || false;
+  }
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || data.tag !== channel || !trustedOrigin(event.origin)) return;
     if (event.source === window.parent && window.parent !== window && parentOrigin === event.origin) {
+      if(data.type==='next-result' && upstream?.token===data.token && typeof data.id==='string'){
+        const request=nextRequests.get(data.id);
+        if(request && request.token===data.token && request.mediaId===state()?.mediaId && ['navigating','missing','error'].includes(data.status)){
+          clearTimeout(request.timer);nextRequests.delete(data.id);request.resolve(data.status);
+        }return;
+      }
       if (data.type === 'hello' && typeof data.token === 'string' && data.token.length < 100) {
         upstream = { token: data.token, origin: event.origin };
+        parentContext=readParentContext(data.context,event.origin);parentFullscreen=data.fullscreen===true;parentPresented=data.presented!==false;
         if (data.managed && ['prepared', 'current'].includes(data.role)) {
           managed = true; role = data.role; roleFromParent = true;
           for (const frame of frames()) setRole(frame, role);
@@ -1219,6 +1304,17 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     const frame = frames().find((el) => el.contentWindow === event.source);
     if (!frame || sites.url(frame.src)?.origin !== event.origin) return;
     let session = sessions.get(frame);
+    if(data.type==='next-episode'){
+      const receiver=validRemote(frame);
+      if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state?.nativeEnhanced || !receiver.state.customCapable || receiver.state.ad || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || session.nextPending)return;
+      const currentSession=session;session.nextPending=true;
+      Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
+        if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId)return;
+        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
+      }).catch(()=>{
+        if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,status:'error'},session.origin);
+      }).finally(()=>{currentSession.nextPending=false;});return;
+    }
     if (data.type === 'fullscreen-toggle') {
       const receiver = validRemote(frame);
       if (!session || session.token !== data.token || session.origin !== event.origin || session.src !== frame.src
@@ -1245,7 +1341,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const items=value.tracks?.[group];
       if(Array.isArray(items) && items.length<=100 && items.every(item=>item && Number.isInteger(item.id) && item.id>=0 && item.id<100 && typeof item.label==='string' && item.label.length<=100 && typeof item.active==='boolean'))tracks[group]=items.map(({id,label,active})=>({id,label,active}));
     }
-    value = { ...value, mediaSource: mediaSource(value.mediaSource),customCapable:value.customCapable===true,played:value.played===true,tracks };
+    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,played:value.played===true,tracks };
     // Generic player chỉ có quyền báo video, không tự nhận là website gốc.
     if (sites.embedHosts.has(sites.url(frame.src).hostname)) value = { ...value, page: null, direct: false,
       sourceFrames: sourceFrames(value.sourceFrames).filter((value) => sites.knownEmbedPage(value)) };
@@ -1301,6 +1397,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         const session = openSession(frame,target.origin);
         hello(frame, session);
       }
+      else if(channel==='motchill-player-controls-v2')hello(frame,sessions.get(frame));
     }
     if (parentOrigin && window.parent !== window && trustedOrigin(parentOrigin) && !upstream) window.parent.postMessage({ tag: channel, type: 'ready' }, parentOrigin);
     const video = sites.findVideo();
@@ -1308,7 +1405,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     sendState();
     return video || (remote?.isConnected ? remote : null);
   }
-  return { poll, state, setRole, requestFullscreen, getFrame: validRemote,
+  return { poll, state, setRole, requestFullscreen,requestNext,get parentContext(){return parentContext;},get parentFullscreen(){return parentFullscreen;},get parentPresented(){return parentPresented;},getFrame: validRemote,
     setNativeGestures(value) { nativeGestures = value === true; },
     get role() { return documentRole(); }, get managed() { documentRole(); return managed; }, get remote() { return remote; } };
 }

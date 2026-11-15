@@ -1,6 +1,6 @@
 export function installGestures(win, player, notify = () => {}, options={}) {
   const {video}=player,root=options.surface || player.root;
-  const interactive = target => options.surface?.contains(target)?false:!!target?.closest?.('[data-rp-ui],a,button,input,select,textarea,[contenteditable="true"],[role="slider"],[role="button"],.jw-controlbar,.jw-settings-menu,.jw-rightclick,.art-controls,.art-settings,.art-contextmenus');
+  const interactive = target => options.surface?.contains(target)?false:options.isInteractive?.(target) || !!target?.closest?.('[data-rp-ui],a,button,input,select,textarea,[contenteditable="true"],[role="slider"],[role="button"],.jw-controlbar,.jw-settings-menu,.jw-rightclick,.art-controls,.art-settings,.art-contextmenus');
   let press=null, lastTap=null, holdTimer=0, tapTimer=0, suppressUntil=0;
   const source=()=>player.fingerprint?.() || video.currentSrc || video.src;
   const consume=e=>{if(options.exclusive){e.preventDefault();e.stopImmediatePropagation();}};
@@ -69,9 +69,9 @@ export function installGestures(win, player, notify = () => {}, options={}) {
       win.clearTimeout(tapTimer);if(player.command('seek',player.state().time+p.side*10)){options.onSeek?.(p.side);notify(p.side>0?'+10 giây':'−10 giây');}lastTap=null;suppressUntil=now+400;e.preventDefault();e.stopImmediatePropagation();
     } else {lastTap={...p,at:now};if(onTap){win.clearTimeout(tapTimer);tapTimer=win.setTimeout(()=>{lastTap=null;onTap();},320);}}
   };
-  const click = e => {if(options.exclusive || Date.now()<suppressUntil && !interactive(e.target)){e.preventDefault();e.stopImmediatePropagation();}};
-  const menu = e => {if(options.exclusive || press?.held){e.preventDefault();e.stopImmediatePropagation();}};
-  const touch=e=>consume(e);
+  const click = e => {if(!interactive(e.target) && (options.exclusive || Date.now()<suppressUntil)){e.preventDefault();e.stopImmediatePropagation();}};
+  const menu = e => {if(!interactive(e.target) && (options.exclusive || press?.held)){e.preventDefault();e.stopImmediatePropagation();}};
+  const touch=e=>{if(!interactive(e.target))consume(e);};
   const visibility = () => {if(win.document.hidden)cancel();};
   for(const [name,fn] of [['pointerdown',down],['pointermove',move],['pointerup',up],['pointercancel',pointerCancel],['lostpointercapture',lostCapture],['click',click],['dblclick',click],['contextmenu',menu]]) root.addEventListener(name,fn,true);
   if(options.exclusive)for(const name of ['touchstart','touchmove','touchend','touchcancel'])root.addEventListener(name,touch,{passive:false});

@@ -3,7 +3,7 @@ import {createBridge} from '../lib/bridge.js';
 import {customPlayerControls} from '../lib/custom-controls.js';
 import {watchNavigation} from '../lib/watch-navigation.js';
 import {playerStartupGuard} from '../lib/player-ui.js';
-import {FRAME_ORIGINS,isSiteOrigin,safeURL} from '../lib/core.js';
+import {FRAME_ORIGINS,isFrameURL,isSiteOrigin,safeURL} from '../lib/core.js';
 import {runFamily} from '../../shared/bridge/ownership.js';
 import {childLoading} from '../lib/player-loading.js';
 
@@ -65,4 +65,4 @@ function startGestures(win,page) {
   });
   win.addEventListener('pagehide',event=>{if(!event.persisted){bridge.dispose();navigation?.dispose();unbind();childGate?.dispose();releaseStartup();}});
 }
-runFamily(window,{family:'rophim',feature:'gestures',isSiteURL:isSiteOrigin,isFrameURL:value=>FRAME_ORIGINS.has(safeURL(value)?.origin),isFrameOrigin:value=>FRAME_ORIGINS.has(safeURL(value)?.origin)},()=>startGestures(window, typeof unsafeWindow==='undefined' ? window : unsafeWindow));
+runFamily(window,{family:'rophim',feature:'gestures',isSiteURL:isSiteOrigin,isFrameURL,isFrameOrigin:value=>FRAME_ORIGINS.has(safeURL(value)?.origin)},()=>startGestures(window, typeof unsafeWindow==='undefined' ? window : unsafeWindow));

@@ -1,4 +1,4 @@
-import {isSiteOrigin, FRAME_ORIGINS, safeURL, token, finite, diagnostic, watchDOM} from './core.js';
+import {isSiteOrigin, FRAME_ORIGINS,isFrameURL, safeURL, token, finite, diagnostic, watchDOM} from './core.js';
 import {detectSite, readContext, contextKey} from './sites.js';
 import {playerCandidate, attachPlayer, playerFingerprint} from './players.js';
 
@@ -21,7 +21,7 @@ export function bridgeContext(value) {
 export function createBridge(win, page, feature, callbacks = {}) {
   const channel = 'rophim.' + feature + '.v1';
   const top = win.parent === win;
-  if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return {dispose(){},state:()=>null,command:()=>false};
+  if (top ? !isSiteOrigin(win.location.origin) : !isFrameURL(win.location.href)) return {dispose(){},state:()=>null,command:()=>false};
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
   let boundFrame = null,frameFullscreen=false,controlsReady=false;
   let knownSource=false, snapshot=null, pending='', retryAfter=0;
@@ -99,7 +99,7 @@ export function createBridge(win, page, feature, callbacks = {}) {
         boundFrame = frame || null; resetRemote();
         boundFrame?.addEventListener('load',loaded);
       }
-      if (!nextContext || !frame || !url || !FRAME_ORIGINS.has(url.origin) || !frame.contentWindow || frame.hasAttribute('sandbox') && !frame.sandbox.contains('allow-same-origin')) {
+      if (!nextContext || !frame || !url || !isFrameURL(url.href) || !frame.contentWindow || frame.hasAttribute('sandbox') && !frame.sandbox.contains('allow-same-origin')) {
         diagnostic(win.document,feature, nextContext ? 'iframe chưa cấp quyền/không nhận diện' : 'chờ nguồn website');return;
       }
       if (!session) { session = {source:frame.contentWindow,origin:url.origin,src:frame.src,key:contextKey(context),token:token(win),generation,seq:-1,seen:0};sequence = 0; }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.4.6
+// @version      0.4.7
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -11,6 +11,7 @@
 // @include      /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]*rophim[a-z0-9-]*(?:\.[a-z0-9-]+)+(?::\d+)?\//
 // @match        https://player.phimapi.com/player/*
 // @match        https://api.clubc.org/embed/*
+// @match        https://api.rophim10.ink/embed/*
 // @match        https://dora.nobitayeuxuka.xyz/temp*
 // @run-at       document-start
 // @grant        unsafeWindow
@@ -31,7 +32,11 @@
   }
 
   // rophim/lib/core.js
-  var FRAME_ORIGINS = /* @__PURE__ */ new Set(["https://player.phimapi.com", "https://api.clubc.org", "https://dora.nobitayeuxuka.xyz"]);
+  var FRAME_ORIGINS = /* @__PURE__ */ new Set(["https://player.phimapi.com", "https://api.clubc.org", "https://dora.nobitayeuxuka.xyz", "https://api.rophim10.ink"]);
+  function isFrameURL(value) {
+    const url = safeURL(value);
+    return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
+  }
   function safeURL(value, base) {
     try {
       const u = new URL(value, base);
@@ -42,7 +47,7 @@
   }
   function isSiteOrigin(value) {
     const url = safeURL(value);
-    return !!url && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
+    return !!url && !FRAME_ORIGINS.has(url.origin) && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
   }
   var normalize = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
   var bounded = (value, max = 200) => String(value || "").slice(0, max);
@@ -83,13 +88,13 @@
   }
 
   // shared/bridge/ownership.js
-  function runFamily(win, { family, feature, isSiteURL, isFrameURL, isFrameOrigin = () => false }, start) {
+  function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin = () => false }, start) {
     const tag = "media-userscripts-owner-v1", doc = win.document;
     let active = false, disposed = false, timer = 0;
     const challenge = Array.from(win.crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
     const allowed = (value) => {
       try {
-        return !!(isSiteURL(value) || isFrameURL(value));
+        return !!(isSiteURL(value) || isFrameURL2(value));
       } catch {
         return false;
       }
@@ -137,7 +142,7 @@
     };
     win.addEventListener("message", receive);
     if (isSiteURL(win.location.href)) activate();
-    else if (win.parent !== win && isFrameURL(win.location.href)) {
+    else if (win.parent !== win && isFrameURL2(win.location.href)) {
       timer = win.setInterval(ask, 1e3);
       ask();
     }
@@ -634,7 +639,7 @@
   function createBridge(win, page, feature, callbacks = {}) {
     const channel = "rophim." + feature + ".v1";
     const top = win.parent === win;
-    if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return { dispose() {
+    if (top ? !isSiteOrigin(win.location.origin) : !isFrameURL(win.location.href)) return { dispose() {
     }, state: () => null, command: () => false };
     let session = null, site = null, context = null, local = null, media = "", lastSource = "", remote = null, generation = 0, sequence = 0, disposed = false;
     let boundFrame = null, frameFullscreen = false, controlsReady = false;
@@ -765,7 +770,7 @@
           resetRemote();
           boundFrame?.addEventListener("load", loaded);
         }
-        if (!nextContext2 || !frame || !url || !FRAME_ORIGINS.has(url.origin) || !frame.contentWindow || frame.hasAttribute("sandbox") && !frame.sandbox.contains("allow-same-origin")) {
+        if (!nextContext2 || !frame || !url || !isFrameURL(url.href) || !frame.contentWindow || frame.hasAttribute("sandbox") && !frame.sandbox.contains("allow-same-origin")) {
           diagnostic(win.document, feature, nextContext2 ? "iframe ch\u01B0a c\u1EA5p quy\u1EC1n/kh\xF4ng nh\u1EADn di\u1EC7n" : "ch\u1EDD ngu\u1ED3n website");
           return;
         }
@@ -1434,5 +1439,5 @@
       }
     });
   }
-  runFamily(window, { family: "rophim", feature: "history", isSiteURL: isSiteOrigin, isFrameURL: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin), isFrameOrigin: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin) }, () => startHistory(window, typeof unsafeWindow === "undefined" ? window : unsafeWindow));
+  runFamily(window, { family: "rophim", feature: "history", isSiteURL: isSiteOrigin, isFrameURL, isFrameOrigin: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin) }, () => startHistory(window, typeof unsafeWindow === "undefined" ? window : unsafeWindow));
 })();
