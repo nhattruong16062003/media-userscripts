@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - lịch sử xem
 // @namespace    motchill-history
-// @version      6.0.5
+// @version      6.0.6
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js
@@ -1318,6 +1318,16 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   MediaSiteOwner.runFamily(window,{family:'motchill',feature:'history',isSiteURL:value=>{const parsed=sites.url(value);return !!parsed && sites.isMotchill(parsed.hostname);},isFrameURL:value=>sites.knownEmbedPage(value),isFrameOrigin:value=>{const parsed=sites.url(value);return !!parsed && sites.embedHosts.has(parsed.hostname);}},()=>{
   sites.runWhenAllowed(() => {
   const bridge = createMotchillVideoBridge(sites, 'motchill-history-video-v1');
+  // Nguồn OPhim/classic đã khảo sát đọc key chỉ có số tập ngay trong ready
+  // của JW. Chặn trước handler của trang, không chờ GM hoặc video xuất hiện.
+  // Trang phim được nhúng/tải trước cũng cần chặn; chỉ top quản lý DB bên dưới.
+  document.addEventListener('DOMContentLoaded', clearLegacyPosition, { capture: true, once: true });
+  document.addEventListener('click', (event) => {
+    const choice = event.target.closest?.('.streaming-server[data-id]');
+    if (choice) clearLegacyPosition(choice);
+  }, true);
+  clearLegacyPosition();
+
   // Iframe chỉ báo trạng thái video. DB luôn do trang phim cha quản lý.
   if (window.top !== window) {
     setInterval(() => bridge.poll(), 1000);
@@ -1620,13 +1630,24 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     return () => { events.forEach((off) => off()); };
   }
 
-  // Không xóa OPCMS-PlayerPosition trên toàn bộ website: chỉ vô hiệu hóa key của
-  // trình phát đang dùng khi đã có tập hợp lệ và script đã sẵn sàng tiếp quản.
-  function clearLegacyPosition() {
-    if (!currentInfo) return;
-    const selected = document.querySelector('.streaming-server.btn-success,.streaming-server.active,.streaming-server.current');
-    const id = selected?.dataset.id;
-    if (id && /^\d+$/.test(id)) { try { localStorage.removeItem('OPCMS-PlayerPosition-' + id); } catch (e) {} }
+  // Chỉ vô hiệu hóa key thiếu định danh phim của đúng tập trên source đã biết.
+  // Không quét/xóa toàn bộ storage, không xóa key của tập khác hoặc ID toàn cục.
+  // Xóa sau ready là quá muộn: native đã giữ bản sao currentPosition trong closure.
+  function clearLegacyPosition(choice) {
+    const family = sites.detect();
+    switch (family) {
+      case sites.families.CLASSIC: case sites.families.OPHIM: break;
+      default: return;
+    }
+    const info = sites.adapter(family).read();
+    if (!info?.film || !/^ep:\d+$/.test(info.episodeKey)) return;
+    const choices = choice?.matches?.('.streaming-server[data-id]')
+      ? [choice] : document.querySelectorAll('.streaming-server[data-id]');
+    for (const node of choices) {
+      const id = node.dataset.id;
+      if (!node.isConnected || !/^\d+$/.test(id) || sites.episodeKey(id) !== info.episodeKey) continue;
+      try { localStorage.removeItem('OPCMS-PlayerPosition-' + id); } catch (_) { /* Storage may be denied. */ }
+    }
   }
   const PENDING_KEY = 'motchill-history-pending-v1';
   const FETCH_TIMEOUT = 10000;

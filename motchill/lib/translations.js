@@ -135,7 +135,11 @@ function startMotchillTranslations(sites, controller, options = {}) {
   }
   function render() {
     if (destroyed) return;
-    if (!style.isConnected) (document.head || document.documentElement).append(style);
+    // Tampermonkey document-start can run before <html> exists. Keep the
+    // controller alive; DOMContentLoaded/polling will mount after parsing.
+    const styleHost=document.head || document.documentElement;
+    if (!styleHost) return;
+    if (!style.isConnected) styleHost.append(style);
     const state = snapshot();
     const anchor = controller.players?.serverContainer(document);
     const key = state ? [state.page.url, state.page.language, state.currentProvider,
@@ -166,10 +170,12 @@ function startMotchillTranslations(sites, controller, options = {}) {
   document.addEventListener('mc-player-controls-updated', render);
   addEventListener('popstate', pageChanged);
   const interval = setInterval(render, 1000);
-  render();
+  if (document.documentElement) render();
+  else document.addEventListener('DOMContentLoaded', render, { once: true });
   return { render, select, snapshot, lookupProgress, destroy() {
     destroyed = true; generation++; busy = false;
     clearInterval(interval);
+    document.removeEventListener('DOMContentLoaded', render);
     document.removeEventListener('mc-episode-changed', pageChanged);
     document.removeEventListener('mc-player-controls-updated', render);
     removeEventListener('popstate', pageChanged);
