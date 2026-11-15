@@ -18,6 +18,7 @@ async function save(file,text){
 }
 const shared=await build({absWorkingDir:root,entryPoints:['shared/player/index.js'],bundle:true,write:false,format:'iife',globalName:'SharedPlayer',target:'es2020',legalComments:'inline'});
 const ownership=await build({absWorkingDir:root,entryPoints:['shared/bridge/ownership.js'],bundle:true,write:false,format:'iife',globalName:'MediaSiteOwner',target:'es2020',legalComments:'inline'});
+const navigationGuard=await build({absWorkingDir:root,entryPoints:['shared/navigation/guard.js'],bundle:true,write:false,format:'iife',globalName:'MediaNavigation',target:'es2020',legalComments:'inline'});
 // Adapter fragments are inserted within the existing site factory's scope.
 // Keep that lexical boundary: website data cannot choose executable imports.
 const adapterFragments=new Map();
@@ -55,5 +56,5 @@ for(const kind of ['noads','gestures','history','source']){
   tail=tail.replace(entryMarker,`  MediaSiteOwner.runFamily(window,{family:'motchill',feature:'${kind}',isSiteURL:value=>{const parsed=sites.url(value);return !!parsed && sites.isMotchill(parsed.hostname);},isFrameURL:value=>sites.knownEmbedPage(value),isFrameOrigin:value=>{const parsed=sites.url(value);return !!parsed && sites.embedHosts.has(parsed.hostname);}},()=>{\n${entryMarker}`);
   tail=tail.replace(/\}\)\(\);\s*$/, '});\n})();');
   const prefix=entry.slice(entry.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length,start);
-  await save(`motchill/${kind}/motchill-${kind}.user.js`,headerMotchill+prefix+ownership.outputFiles[0].text+'// BEGIN MOTCHILL SITES (generated)\n'+(kind==='gestures'?license+shared.outputFiles[0].text:'')+body.join('\n\n')+'\n// END MOTCHILL SITES'+tail);
+  await save(`motchill/${kind}/motchill-${kind}.user.js`,headerMotchill+prefix+ownership.outputFiles[0].text+(kind==='noads'?navigationGuard.outputFiles[0].text:'')+'// BEGIN MOTCHILL SITES (generated)\n'+(kind==='gestures'?license+shared.outputFiles[0].text:'')+body.join('\n\n')+'\n// END MOTCHILL SITES'+tail);
 }

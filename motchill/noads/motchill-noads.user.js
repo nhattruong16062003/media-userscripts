@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - chặn quảng cáo + tối ưu mạng
 // @namespace    motchill-noads
-// @version      6.0.11
+// @version      6.0.12
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
@@ -130,6 +130,184 @@
     }, dispose };
   }
   return __toCommonJS(ownership_exports);
+})();
+var MediaNavigation = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // shared/navigation/guard.js
+  var guard_exports = {};
+  __export(guard_exports, {
+    confirmExternal: () => confirmExternal,
+    installNavigationGuard: () => installNavigationGuard,
+    navigationKind: () => navigationKind,
+    protectMediaFrame: () => protectMediaFrame
+  });
+  function navigationKind(value, base) {
+    try {
+      const url = new URL(value, base);
+      if (["http:", "https:"].includes(url.protocol)) return url.origin === new URL(base).origin ? "internal" : "external";
+      if (["mailto:", "tel:"].includes(url.protocol)) return "external";
+    } catch {
+    }
+    return "blocked";
+  }
+  function confirmExternal(win, url, trusted, confirm = (message) => win.confirm(message)) {
+    if (!trusted || win.parent !== win || navigationKind(url, win.location.href) !== "external") return false;
+    try {
+      return confirm("M\u1EDF li\xEAn k\u1EBFt b\xEAn ngo\xE0i?\n" + String(url).slice(0, 300)) === true;
+    } catch {
+      return false;
+    }
+  }
+  function protectMediaFrame(frame) {
+    const doc = frame?.ownerDocument, base = doc?.location?.href;
+    if (!base || frame.tagName !== "IFRAME") return false;
+    let url;
+    try {
+      url = new URL(frame.getAttribute("src"), base);
+    } catch {
+      return false;
+    }
+    if (!["http:", "https:"].includes(url.protocol) || url.origin === doc.location.origin) return false;
+    const had = frame.hasAttribute("sandbox");
+    const tokens = had ? (frame.getAttribute("sandbox") || "").split(/\s+/).filter(Boolean) : ["allow-scripts", "allow-same-origin", "allow-forms", "allow-presentation", "allow-orientation-lock"];
+    const forbidden = /* @__PURE__ */ new Set(["allow-popups", "allow-popups-to-escape-sandbox", "allow-top-navigation", "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols"]);
+    const sandbox = tokens.filter((t) => !forbidden.has(t)).join(" ");
+    if (frame.getAttribute("sandbox") !== sandbox) frame.setAttribute("sandbox", sandbox);
+    return true;
+  }
+  function installNavigationGuard(win, page = win, { isMediaFrame = () => false } = {}) {
+    const doc = win.document;
+    const originalOpen = page.open, originalConfirm = page.confirm;
+    let disposed = false, approved = null;
+    const expose = (fn) => {
+      try {
+        return typeof exportFunction === "function" ? exportFunction(fn, page) : fn;
+      } catch {
+        return fn;
+      }
+    };
+    const open = () => null;
+    const exposedOpen = expose(open);
+    let openDescriptor;
+    try {
+      openDescriptor = Object.getOwnPropertyDescriptor(page, "open");
+      Object.defineProperty(page, "open", { configurable: true, enumerable: openDescriptor?.enumerable ?? true, get: expose(() => exposedOpen), set: expose(() => {
+      }) });
+    } catch {
+    }
+    const stop = (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const allowed = (url, trusted) => confirmExternal(win, url, trusted, (message) => Reflect.apply(originalConfirm, page, [message]));
+    function click(event) {
+      if (event.type === "auxclick" && event.button !== 1) return;
+      const anchor = event.composedPath?.().find((node) => node?.matches?.("a[href],area[href]")) || event.target?.closest?.("a[href],area[href]");
+      if (!anchor) return;
+      const raw = anchor.getAttribute("href") || "";
+      if (/^\s*javascript:/i.test(raw)) {
+        event.preventDefault();
+        return;
+      }
+      let url;
+      try {
+        url = new URL(raw, anchor.baseURI || win.location.href);
+      } catch {
+        stop(event);
+        return;
+      }
+      if (navigationKind(url.href, win.location.href) === "internal") {
+        if (!event.isTrusted && anchor.target && !["_self", "_parent", "_top"].includes(anchor.target.toLowerCase())) stop(event);
+        return;
+      }
+      stop(event);
+      if (!allowed(url.href, event.isTrusted)) return;
+      approved = url.href;
+      try {
+        if (anchor.target && anchor.target !== "_self") Reflect.apply(originalOpen, page, [url.href, "_blank", "noopener,noreferrer"]);
+        else page.location.assign(url.href);
+      } finally {
+        approved = null;
+      }
+    }
+    const submit = (event) => {
+      if (navigationKind(event.target?.action || win.location.href, win.location.href) !== "internal") stop(event);
+    };
+    win.addEventListener("click", click, true);
+    win.addEventListener("auxclick", click, true);
+    win.addEventListener("submit", submit, true);
+    const proto = page.HTMLFormElement?.prototype, originalSubmit = proto?.submit;
+    const guardedSubmit = expose(function(...args) {
+      if (navigationKind(this.action || win.location.href, win.location.href) !== "internal") return;
+      return Reflect.apply(originalSubmit, this, args);
+    });
+    try {
+      if (originalSubmit) proto.submit = guardedSubmit;
+    } catch {
+    }
+    const navigate = (event) => {
+      if (event.navigationType === "traverse" || !event.cancelable || !event.destination?.url) return;
+      const url = event.destination.url;
+      if (url === approved || navigationKind(url, win.location.href) === "internal") return;
+      event.preventDefault();
+    };
+    page.navigation?.addEventListener?.("navigate", navigate);
+    const scan = () => {
+      if (disposed) return;
+      for (const frame of doc.querySelectorAll("iframe[src]")) try {
+        if (isMediaFrame(frame)) protectMediaFrame(frame);
+      } catch {
+      }
+    };
+    const observer = new win.MutationObserver(scan);
+    observer.observe(doc, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "sandbox"] });
+    scan();
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      observer.disconnect();
+      win.removeEventListener("click", click, true);
+      win.removeEventListener("auxclick", click, true);
+      win.removeEventListener("submit", submit, true);
+      page.navigation?.removeEventListener?.("navigate", navigate);
+      try {
+        if (page.open === exposedOpen) {
+          if (openDescriptor) Object.defineProperty(page, "open", openDescriptor);
+          else {
+            delete page.open;
+            page.open = originalOpen;
+          }
+        }
+      } catch {
+      }
+      try {
+        if (proto?.submit === guardedSubmit) proto.submit = originalSubmit;
+      } catch {
+      }
+    };
+    win.addEventListener("pagehide", (event) => {
+      if (!event.persisted) dispose();
+    });
+    return { dispose };
+  }
+  return __toCommonJS(guard_exports);
 })();
 // BEGIN MOTCHILL SITES (generated)
 // ---- lib/sites.js ----
@@ -1415,6 +1593,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   const sites = createMotchillSites();
   MediaSiteOwner.runFamily(window,{family:'motchill',feature:'noads',isSiteURL:value=>{const parsed=sites.url(value);return !!parsed && sites.isMotchill(parsed.hostname);},isFrameURL:value=>sites.knownEmbedPage(value),isFrameOrigin:value=>{const parsed=sites.url(value);return !!parsed && sites.embedHosts.has(parsed.hostname);}},()=>{
   sites.runWhenAllowed(() => {
+  MediaNavigation.installNavigationGuard(window,window,{isMediaFrame:frame=>sites.knownEmbedPage(frame.src)});
 
   // ============================================================
   //  CÀI ĐẶT
