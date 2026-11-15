@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - chặn quảng cáo + tối ưu mạng
 // @namespace    motchill-noads
-// @version      6.0.10
+// @version      6.0.11
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/noads/motchill-noads.user.js
@@ -97,7 +97,12 @@
 
   function primeAdState() {
     function set(area, key, value) { try { window[area].setItem(key, value); } catch (e) {} }
-    for (const key of ['mobile_pageVisitedTime', 'desktop_pageVisitedTime', 'vast_ad_last_shown', 'popup-ads-last-shown-ts', 'click_last_ad']) set('sessionStorage', key, FUTURE);
+    // Captured Next config exports a shared ad gate: now - last < 1000.
+    // Prime it before page JS installs capture listeners; stopping propagation
+    // at a custom button is too late to stop a document capture popunder.
+    for (const key of ['mobile_pageVisitedTime', 'desktop_pageVisitedTime', 'vast_ad_last_shown', 'popup-ads-last-shown-ts', 'click_last_ad', 'ad-per-click-lock']) set('sessionStorage', key, FUTURE);
+    // Captured lazy PopupAd reads these before its 1500ms banner timer.
+    for (const key of ['motchill-hide-all-ads', 'motchill-popup-ads-hidden']) set('sessionStorage', key, '1');
     for (const key of ['popup-ads-init-count']) set('sessionStorage', key, '999');
     set('localStorage', 'plp_day', new Date().toISOString().slice(0, 10));
     for (const key of ['plp_windowStart', 'lastPopupTime', 'shopeeLastShown']) set('localStorage', key, FUTURE);
@@ -243,6 +248,7 @@
     // 3) Ẩn banner, nút "AD Blocker" giả, popup, nút quảng cáo nhấp nháy.
     addStyle(`
       .ads-banner,
+      .popup-ads-banner,
       div:has(> button[aria-label="Button handle hide all ads"]),
       .fixed.inset-0:has(.no-ads-under),
       div:has(> a.promo-btn) {
