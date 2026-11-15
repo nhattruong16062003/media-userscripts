@@ -54,7 +54,6 @@ export function installGestures(win, player, notify = () => {}, options={}) {
     if(Math.hypot(e.clientX-press.x,e.clientY-press.y)>30)press.moved=true;
   };
   const up = e => {
-    if(options.exclusive && !root.contains(e.target) && !press)return;
     if(!press || e.pointerId!==press.id)return;
     const p=press, now=Date.now();restore();
     consume(e);

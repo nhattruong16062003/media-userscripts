@@ -22,6 +22,10 @@ export function fullscreenController(win,{onChange=()=>{}}={}){
   }
   function scheduleRecovery(){
     if(!active())return;
+    // A reported portrait direction is already actionable. Waiting for viewport
+    // settling here creates a visible portrait interval on Pause/Play or Next.
+    // verify serializes requests and applies the same bounded recovery budget.
+    if(portrait())verify();
     win.clearTimeout(recoveryTimer);recoveryTimer=win.setTimeout(verify,120);
   }
   function unlock(){if(owned){owned=false;try{orientation?.unlock?.();}catch{/* browser already released it */}}}

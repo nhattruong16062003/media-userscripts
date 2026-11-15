@@ -10,10 +10,10 @@ Chọn bộ dành cho website bạn sử dụng. RoPhim có ba script: chặn qu
 
 | Website | Chặn quảng cáo | Điều khiển trình phát | Lịch sử xem |
 | --- | --- | --- | --- |
-| **RoPhim 0.4.8** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.8/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.8/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.8/rophim/history/rophim-history.user.js) |
-| **Motchill 6.0.8** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.8/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.8/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.8/motchill/history/motchill-history.user.js) |
+| **RoPhim 0.4.9** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/rophim/history/rophim-history.user.js) |
+| **Motchill 6.0.9** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/history/motchill-history.user.js) |
 
-Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.8](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.8/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
+Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.9](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
 
 Đã cài bản cũ thì mở link mới để **cập nhật tại chỗ**, giữ nguyên script Lịch sử để giữ tiến độ. Không cần gỡ Tampermonkey hoặc chép mã thủ công. Kiểm tra đúng tên script và phiên bản trước khi xác nhận. Nếu có hai bản cùng chức năng cho cùng website, chỉ bật một bản.
 
@@ -21,7 +21,7 @@ Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.8](https://raw.gi
 
 Tùy nguồn phim, script dùng bộ nút custom hoặc bổ sung thao tác vào giao diện player gốc. Với nguồn Next tương thích như trang tập trên motchilll.vip, player giữ các nút phát/dừng, thanh tua, âm lượng, chất lượng và phụ đề vốn có; script bổ sung cử chỉ, khóa, bỏ giới thiệu và chuyển tập, đồng thời ẩn nút trùng. Khi chuyển tập hoặc server bằng các nút được hỗ trợ, khung phát và fullscreen được giữ; tập tiếp theo giữ đúng server và bản dịch đang chọn.
 
-Bản này sửa nút điều khiển biến mất sau khi phim tải xong trên nguồn này, và thao tác chạm hiện lại nút sau khi tự ẩn. Chọn tập, server và bản dịch bằng các nút trên trang xem; các nút đổi nguồn trùng bên trong player được ẩn.
+Bản này xử lý ngay khi trình duyệt báo màn hình xoay dọc trong fullscreen khi Phát/Tạm dừng hoặc chuyển tập, giữ nguyên khung fullscreen và trạng thái phát. Nếu trình duyệt từ chối khóa hướng, script không ép thoát/vào fullscreen. Chọn tập, server và bản dịch bằng các nút trên trang xem; các nút đổi nguồn trùng bên trong player được ẩn.
 
 - Chạm vùng trống trên phim để ẩn/hiện điều khiển. Chạm đôi hai bên để tua 10 giây; giữ khi đang phát để xem 2×, thả để trở về tốc độ cũ.
 - Nút phát/dừng nằm ở giữa và thanh dưới. Bấm Phát sẽ bật tiếng cùng lúc; nếu âm lượng đang bằng 0, script đưa về mức nghe được. Trong toàn màn hình có nút khóa; khi khóa vẫn chạm đôi tua ±10 giây và giữ 2×, hai nút Bỏ qua giới thiệu/Tập tiếp theo vẫn hiện và bấm được đúng thời điểm; chạm một lần để ẩn/hiện ổ khóa.

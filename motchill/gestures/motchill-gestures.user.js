@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.8
+// @version      6.0.9
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -378,7 +378,6 @@ var SharedPlayer = (() => {
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 30) press.moved = true;
     };
     const up = (e) => {
-      if (options.exclusive && !root.contains(e.target) && !press) return;
       if (!press || e.pointerId !== press.id) return;
       const p = press, now = Date.now();
       restore();
@@ -1177,6 +1176,7 @@ var SharedPlayer = (() => {
     }
     function scheduleRecovery() {
       if (!active()) return;
+      if (portrait()) verify();
       win.clearTimeout(recoveryTimer);
       recoveryTimer = win.setTimeout(verify, 120);
     }

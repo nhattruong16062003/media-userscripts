@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.8
+// @version      0.4.9
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -988,7 +988,6 @@ SOFTWARE.
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 30) press.moved = true;
     };
     const up = (e) => {
-      if (options.exclusive && !root.contains(e.target) && !press) return;
       if (!press || e.pointerId !== press.id) return;
       const p = press, now = Date.now();
       restore();
@@ -1953,6 +1952,7 @@ SOFTWARE.
     }
     function scheduleRecovery() {
       if (!active()) return;
+      if (portrait()) verify();
       win.clearTimeout(recoveryTimer);
       recoveryTimer = win.setTimeout(verify, 120);
     }
