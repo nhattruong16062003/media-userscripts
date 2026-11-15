@@ -76,7 +76,8 @@ export function customPlayerControls(win,player,options={}) {
   function beginNext(node){
     if(nextPending)return;nextError=null;settings.hidden=true;chromeVisible=true;win.clearTimeout(hideTimer);cancelGestures();
     nextPending={node,source:player.fingerprint?.(),key:context?.episodeID};update();
-    nextTimer=win.setTimeout(()=>finishNext('timeout'),nativeMode?45000:15000);
+    const nextTimeout=Number.isFinite(options.nextTimeoutMs) && options.nextTimeoutMs>=15000 && options.nextTimeoutMs<=60000?options.nextTimeoutMs:nativeMode?45000:15000;
+    nextTimer=win.setTimeout(()=>finishNext('timeout'),nextTimeout);
     const active=nextPending;
     try{const result=options.onNext?.();if(result===false || !options.onNext)finishNext('unavailable');else if(result?.then)result.then(status=>{if(disposed || nextPending!==active)return;if(status==='navigating')win.clearTimeout(nextTimer);else if(status)finishNext(status);},()=>{if(!disposed && nextPending===active)finishNext('error');});}catch{finishNext('error');}
   }

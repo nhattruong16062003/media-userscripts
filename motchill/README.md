@@ -1,13 +1,13 @@
 # Motchill — hướng dẫn sử dụng
 
-Bốn script phiên bản **6.0.9**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
+Bốn script phiên bản **6.0.10**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
 
 | Script | Link cài |
 | --- | --- |
-| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/noads/motchill-noads.user.js) |
-| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/gestures/motchill-gestures.user.js) |
-| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/history/motchill-history.user.js) |
-| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.9/motchill/source/motchill-source.user.js) |
+| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.10/motchill/noads/motchill-noads.user.js) |
+| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.10/motchill/gestures/motchill-gestures.user.js) |
+| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.10/motchill/history/motchill-history.user.js) |
+| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.10/motchill/source/motchill-source.user.js) |
 
 Nếu đang dùng bộ Motchill cũ, mở link mới rồi chọn **Cập nhật/Cài lại** trên chính script hiện có. Giữ script Lịch sử để giữ dữ liệu; không cần gỡ trước. Sau khi cập nhật, tải lại trang phim và chỉ bật một bản cho mỗi chức năng.
 
@@ -15,7 +15,7 @@ Nếu Tampermonkey báo **bị loại trừ/không chạy** trên một trang, m
 
 ## Điều khiển phim
 
-Ở nguồn Next tương thích (như trang tập trên motchilll.vip), tiện ích giữ giao diện player gốc và thêm các thao tác dưới đây, không dựng thêm một thanh nút đầy đủ. Chất lượng, âm lượng và phụ đề vẫn chọn trong giao diện gốc. Dùng nút server hoặc tập trên trang để chuyển trong cùng khung; đổi server giữ tiến độ khi thời lượng phù hợp, chuyển tập giữ đúng server/bản dịch. Nếu server đó chưa có tập tương ứng, tiện ích giữ tập hiện tại.
+Ở nguồn Next tương thích (như trang tập trên motchilll.vip), tiện ích dùng bộ điều khiển custom trên khung phát của trang xem. Player gốc bên trong chỉ nạp phim và luôn ẩn bộ nút gốc. Chất lượng, âm lượng và phụ đề được điều khiển qua giao diện custom khi nguồn cung cấp các lựa chọn này. Dùng nút server hoặc tập trên trang để chuyển trong cùng khung; đổi server giữ tiến độ khi thời lượng phù hợp, chuyển tập giữ đúng server/bản dịch. Nếu server đó chưa có tập tương ứng, tiện ích giữ tập hiện tại.
 
 - Chạm một lần lên vùng trống để ẩn/hiện điều khiển; chạm đôi bên trái/phải tua 10 giây.
 - Giữ khi đang phát để tăng lên 2×, thả để trở về tốc độ trước đó.

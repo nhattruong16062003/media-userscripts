@@ -1,5 +1,5 @@
-// Native enhancement mode: keep the observed Next episode contract and the
-// provider's UI. Only this controller owns navigation; the engine stays native.
+// Keep the observed Next episode contract and engine behind the shared custom
+// UI. This controller owns navigation and the stable parent fullscreen host.
 function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,hooks={}){
   let active=false,shell=null,currentMedia=null,identity='',override=null,disposed=false,lastURL='';
   let buttonClasses=null;
@@ -72,6 +72,7 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       rollback=null;override=null;identity=key();lastURL=location.href;
       // Publish the new visible frame and episode context immediately.
       bridge.poll();
+      hooks.poll?.(currentMedia,identity);
     },
     rollback(){if(rollback?.media){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
     discard(candidate){if(!candidate.activated)candidate.frame.remove();},

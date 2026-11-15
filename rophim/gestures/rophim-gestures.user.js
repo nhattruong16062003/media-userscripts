@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.9
+// @version      0.4.10
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -1448,7 +1448,8 @@ SOFTWARE.
       cancelGestures();
       nextPending = { node, source: player.fingerprint?.(), key: context?.episodeID };
       update();
-      nextTimer = win.setTimeout(() => finishNext("timeout"), nativeMode ? 45e3 : 15e3);
+      const nextTimeout = Number.isFinite(options.nextTimeoutMs) && options.nextTimeoutMs >= 15e3 && options.nextTimeoutMs <= 6e4 ? options.nextTimeoutMs : nativeMode ? 45e3 : 15e3;
+      nextTimer = win.setTimeout(() => finishNext("timeout"), nextTimeout);
       const active = nextPending;
       try {
         const result = options.onNext?.();

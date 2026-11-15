@@ -143,8 +143,8 @@ function startMotchillPlayerController(sites) {
   learning = createMotchillPlayerLearning(sites, getPage, { isCurrent: () => bridge.role !== 'prepared' });
   customUI=typeof createMotchillCustomPlayer==='function'?createMotchillCustomPlayer(sites,bridge,{
     onNativeIntro:video=>learning.skipIntro(video,contextKey()),introSeconds:()=>learning.introEnd(),onIntro:()=>learning.skipIntro(media,contextKey()),
-    onNext:()=>goNext('manual'),serverKey:()=>selectedServerKey,
-    isFullscreen:()=>!!shell && document.fullscreenElement===shell,onFullscreen:()=>toggleFullscreen(),
+    onNext:()=>goNext('manual'),serverKey:()=>nativeNavigation?.active?activePage()?.server:selectedServerKey,
+    isFullscreen:()=>document.fullscreenElement===(nativeNavigation?.active?nativeNavigation.shell:shell) && !!document.fullscreenElement,onFullscreen:()=>toggleFullscreen(),
   }):null;
   customUI?.guard();
   const fullscreenManager=typeof SharedPlayer!=='undefined'?SharedPlayer.fullscreenController(window,{onChange:()=>customUI?.refresh()}):null;
@@ -359,7 +359,7 @@ function startMotchillPlayerController(sites) {
     const local = sites.findVideo();
     if(customUI?.nativeRoot){
       if(local && bridge.role==='prepared')players.prepareMedia(local);
-      if(local)customUI.enhanceLocal(local);bridge.setNativeGestures?.(bridge.role!=='prepared');return;
+      if(local)customUI.enhanceLocal(local);bridge.setNativeGestures?.(false);return;
     }
     const frame = bridge.remote?.frame || sites.playerFrames()[0];
     if (bridge.managed) {
@@ -844,7 +844,7 @@ function startMotchillPlayerController(sites) {
     if (!e.target.closest?.('.jw-icon-fullscreen,[data-plyr="fullscreen"],.vjs-fullscreen-control,#player-wrap #controls #fs-btn,.art-control-fullscreen,#rp-player .item-max,#rp-player .item-min')) return;
     e.preventDefault(); e.stopImmediatePropagation(); bridge.requestFullscreen();
   }, true);
-  if(typeof createMotchillNextProviderNavigation==='function' && window.top===window)nativeNavigation=createMotchillNextProviderNavigation(sites,bridge,players,fullscreenManager,{poll:(value,key)=>learning.poll(value,key)});
+  if(typeof createMotchillNextProviderNavigation==='function' && window.top===window)nativeNavigation=createMotchillNextProviderNavigation(sites,bridge,players,fullscreenManager,{poll:(value,key)=>{media=value;learning.poll(value,key);customUI?.update(value,nativeNavigation.shell,activePage());}});
   setInterval(poll, 250);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', poll, { once: true }); else poll();
   return { poll, machine,get activeMachine(){return nativeNavigation?.active?nativeNavigation.machine:machine;},bridge, players, transitionTo, switchTarget, goNext, getDocument,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.9
+// @version      6.0.10
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -847,7 +847,8 @@ var SharedPlayer = (() => {
       cancelGestures();
       nextPending = { node, source: player.fingerprint?.(), key: context?.episodeID };
       update();
-      nextTimer = win.setTimeout(() => finishNext("timeout"), nativeMode ? 45e3 : 15e3);
+      const nextTimeout = Number.isFinite(options.nextTimeoutMs) && options.nextTimeoutMs >= 15e3 && options.nextTimeoutMs <= 6e4 ? options.nextTimeoutMs : nativeMode ? 45e3 : 15e3;
+      nextTimer = win.setTimeout(() => finishNext("timeout"), nextTimeout);
       const active = nextPending;
       try {
         const result = options.onNext?.();
@@ -3355,8 +3356,8 @@ function startMotchillPlayerController(sites) {
   learning = createMotchillPlayerLearning(sites, getPage, { isCurrent: () => bridge.role !== 'prepared' });
   customUI=typeof createMotchillCustomPlayer==='function'?createMotchillCustomPlayer(sites,bridge,{
     onNativeIntro:video=>learning.skipIntro(video,contextKey()),introSeconds:()=>learning.introEnd(),onIntro:()=>learning.skipIntro(media,contextKey()),
-    onNext:()=>goNext('manual'),serverKey:()=>selectedServerKey,
-    isFullscreen:()=>!!shell && document.fullscreenElement===shell,onFullscreen:()=>toggleFullscreen(),
+    onNext:()=>goNext('manual'),serverKey:()=>nativeNavigation?.active?activePage()?.server:selectedServerKey,
+    isFullscreen:()=>document.fullscreenElement===(nativeNavigation?.active?nativeNavigation.shell:shell) && !!document.fullscreenElement,onFullscreen:()=>toggleFullscreen(),
   }):null;
   customUI?.guard();
   const fullscreenManager=typeof SharedPlayer!=='undefined'?SharedPlayer.fullscreenController(window,{onChange:()=>customUI?.refresh()}):null;
@@ -3571,7 +3572,7 @@ function startMotchillPlayerController(sites) {
     const local = sites.findVideo();
     if(customUI?.nativeRoot){
       if(local && bridge.role==='prepared')players.prepareMedia(local);
-      if(local)customUI.enhanceLocal(local);bridge.setNativeGestures?.(bridge.role!=='prepared');return;
+      if(local)customUI.enhanceLocal(local);bridge.setNativeGestures?.(false);return;
     }
     const frame = bridge.remote?.frame || sites.playerFrames()[0];
     if (bridge.managed) {
@@ -4056,7 +4057,7 @@ function startMotchillPlayerController(sites) {
     if (!e.target.closest?.('.jw-icon-fullscreen,[data-plyr="fullscreen"],.vjs-fullscreen-control,#player-wrap #controls #fs-btn,.art-control-fullscreen,#rp-player .item-max,#rp-player .item-min')) return;
     e.preventDefault(); e.stopImmediatePropagation(); bridge.requestFullscreen();
   }, true);
-  if(typeof createMotchillNextProviderNavigation==='function' && window.top===window)nativeNavigation=createMotchillNextProviderNavigation(sites,bridge,players,fullscreenManager,{poll:(value,key)=>learning.poll(value,key)});
+  if(typeof createMotchillNextProviderNavigation==='function' && window.top===window)nativeNavigation=createMotchillNextProviderNavigation(sites,bridge,players,fullscreenManager,{poll:(value,key)=>{media=value;learning.poll(value,key);customUI?.update(value,nativeNavigation.shell,activePage());}});
   setInterval(poll, 250);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', poll, { once: true }); else poll();
   return { poll, machine,get activeMachine(){return nativeNavigation?.active?nativeNavigation.machine:machine;},bridge, players, transitionTo, switchTarget, goNext, getDocument,
@@ -4065,8 +4066,8 @@ function startMotchillPlayerController(sites) {
 
 
 // ---- lib/next-provider-navigation.js ----
-// Native enhancement mode: keep the observed Next episode contract and the
-// provider's UI. Only this controller owns navigation; the engine stays native.
+// Keep the observed Next episode contract and engine behind the shared custom
+// UI. This controller owns navigation and the stable parent fullscreen host.
 function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,hooks={}){
   let active=false,shell=null,currentMedia=null,identity='',override=null,disposed=false,lastURL='';
   let buttonClasses=null;
@@ -4139,6 +4140,7 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       rollback=null;override=null;identity=key();lastURL=location.href;
       // Publish the new visible frame and episode context immediately.
       bridge.poll();
+      hooks.poll?.(currentMedia,identity);
     },
     rollback(){if(rollback?.media){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
     discard(candidate){if(!candidate.activated)candidate.frame.remove();},
@@ -4401,8 +4403,8 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     // origin, open a bridge session or infer an engine from the server label.
     const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,.mc-player-stage>iframe')]
       .filter(frame=>frame.tagName==='IFRAME' && sites.visible(frame) && !sites.isPrepared(frame) && sites.url(frame.getAttribute('src')));
-    const nativeFrame=sites.nextProviderState?.()?.frame;
-    return [...new Set([...sites.playerFrames(),...slots])].filter(frame=>frame!==nativeFrame);
+    const providerFrame=sites.nextProviderState?.()?.frame;
+    return [...new Set([...sites.playerFrames(),...slots,...(providerFrame?[providerFrame]:[])])];
   }
   function prepareFrames(){
     if(disposed || window.top!==window)return;
@@ -4428,13 +4430,11 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   }
   function guard(){
     if(disposed || !document.documentElement)return;
-    const native=enhancementRoot();
-    if(native){native.dataset.rpNativeEnhancement='1';guardOff?.();guardOff=null;return;}
     if(guardOff)return;
     // Only known engine contracts are hidden. Ad/challenge UI is independent.
     guardOff=SharedPlayer.playerStartupGuard(window);
     const style=document.createElement('style');style.dataset.mcCustomGuard='1';
-    style.textContent='iframe[data-mc-display="loading"],html[data-mc-custom-owner] #player iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #videoFrame:not([data-mc-display="custom"]),html[data-mc-custom-owner] #player-wrapper iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .mc-player-stage>iframe:not([data-mc-display="custom"]){opacity:0!important;pointer-events:none!important}html[data-rp-controls-boot] #player-wrap>#controls{display:none!important;pointer-events:none!important}';
+    style.textContent='iframe[data-mc-display="loading"],html[data-mc-custom-owner] #player iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #videoFrame:not([data-mc-display="custom"]),html[data-mc-custom-owner] #player-wrapper iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .mc-player-stage>iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .player-frame-stable>iframe:not([data-mc-display="custom"]){opacity:0!important;pointer-events:none!important}html[data-rp-controls-boot] #player-wrap>#controls,html[data-rp-controls-boot] #rp-player .custom-control,html[data-rp-controls-boot] #rp-player #player_top,html[data-rp-controls-boot] #rp-player #video_eps,html[data-rp-controls-boot] #rp-player #video_pop,html[data-rp-controls-boot] #rp-player #video_mask{display:none!important;pointer-events:none!important}';
     (document.head || document.documentElement).append(style);
     if(window.top===window){document.documentElement.dataset.mcCustomOwner='1';observer=new MutationObserver(prepareFrames);observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['src','data-mc-role']});prepareFrames();}
   }
@@ -4452,21 +4452,10 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   function playAudible(video){const state=localState(video);return state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
   function restoreAudio(video,value){const state=localState(video);return state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function enhanceLocal(video){
-    guard();const root=enhancementRoot(),found=candidate();
-    if(!root || !found || found.video!==video || bridge.role==='prepared' || bridge.parentPresented===false){if(mounted?.native)detach();return false;}
-    const signature=SharedPlayer.playerFingerprint(found);
-    if(mounted && (!mounted.native || mounted.media!==video || mounted.signature!==signature || !mounted.ui.shell.isConnected))detach();
-    if(!mounted){
-      const player=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>bridge.role!=='prepared'});player.nativeRoot=root;player.root=root;
-      const ui=SharedPlayer.customPlayerControls(window,player,{nativeUI:true,audioPreferences,
-        canRestoreAudio:()=>bridge.role!=='prepared',introSeconds:()=>bridge.parentContext?.introSeconds ?? hooks.introSeconds(),onIntro:()=>{const end=bridge.parentContext?.introSeconds ?? hooks.introSeconds();player.command('seek',Math.min(end,video.duration));},
-        onNext:()=>bridge.requestNext(),isFullscreen:()=>bridge.parentFullscreen,onFullscreen:()=>bridge.requestFullscreen()});
-      mounted={native:true,media:video,root,signature,player,ui};
-    }
-    for(const node of root.querySelectorAll('.item-max,.item-min'))node.classList.toggle('d-none',node.classList.contains('item-max')?bridge.parentFullscreen:!bridge.parentFullscreen);
-    const page=bridge.parentContext;
-    mounted.ui.setContext(page?{url:page.url,episodeID:page.episodeKey,lane:page.language,server:page.server,next:page.next}:null);
-    return true;
+    // The stable parent owns the full UI and fullscreen. The provider document
+    // only loads media and accepts authenticated commands; no native click,
+    // gesture or fullscreen handler is used by the overlay.
+    guard();return !!enhancementRoot() && candidate()?.video===video;
   }
   function update(media,root,page){
     if(disposed)return false;
@@ -4498,7 +4487,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
       }else{
         player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
       }
-      const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,
+      const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:remote && media.state.nativeEnhanced?45000:undefined,
         audioPreferences,canRestoreAudio:()=>bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
         introSeconds:hooks.introSeconds,onIntro:hooks.onIntro,onNext:()=>Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
         isFullscreen:hooks.isFullscreen,onFullscreen:hooks.onFullscreen});
