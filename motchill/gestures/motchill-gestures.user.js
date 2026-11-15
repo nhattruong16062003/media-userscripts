@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.7
+// @version      6.0.8
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -246,7 +246,9 @@ var SharedPlayer = (() => {
   .rp-watch-loading{position:absolute;inset:0;z-index:2147483645;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000;color:#fff;font:14px/1.4 Arial,sans-serif;pointer-events:auto}.rp-watch-loading.rp-loading-fixed{position:fixed}.rp-watch-loading [hidden]{display:none!important}.rp-loading-retry{font:inherit;padding:8px 18px;border:1px solid #ffffff55;border-radius:6px;background:#ffffff18;color:#fff;cursor:pointer;min-height:42px}.rp-watch-spinner{width:28px;height:28px;border:2px solid #ffffff38;border-top-color:#fff;border-radius:50%;animation:rp-watch-spin .8s linear infinite}@keyframes rp-watch-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.rp-watch-spinner{animation:none}}
   [data-rp-custom-controls="1"] .art-bottom,[data-rp-custom-controls="1"] .art-mask,[data-rp-custom-controls="1"] .art-vtitle-bar,[data-rp-custom-controls="1"] .art-settings,[data-rp-custom-controls="1"] .art-contextmenus,[data-rp-custom-controls="1"] .art-layer-lock,[data-rp-custom-controls="1"] .art-layer-fastForward,[data-rp-custom-controls="1"] .jw-controls,[data-rp-custom-controls="1"] .jw-settings-menu,[data-rp-custom-controls="1"] .jw-rightclick,[data-rp-custom-controls="1"] .guildline{display:none!important;pointer-events:none!important}
   [data-rp-custom-controls="1"] .loading-screen{pointer-events:none!important}
-  [data-rp-native-enhancement="1"] #skip-intro,[data-rp-native-enhancement="1"] #skip-outro,[data-rp-native-enhancement="1"] .item-next,[data-rp-native-enhancement="1"] #toggle-eps,[data-rp-native-enhancement="1"] #video_eps{display:none!important;pointer-events:none!important}
+  [data-rp-native-enhancement="1"] #skip-intro,[data-rp-native-enhancement="1"] #skip-outro,[data-rp-native-enhancement="1"] .item-next,[data-rp-native-enhancement="1"] #toggle-eps,[data-rp-native-enhancement="1"] #video_eps,[data-rp-native-enhancement="1"] .jw-audio-button,[data-rp-native-enhancement="1"] .jw-audio-menu{display:none!important;pointer-events:none!important}
+  [data-rp-native-enhancement="1"][data-rp-native-chrome="true"][data-rp-native-locked="false"] .jw-controls{visibility:visible!important;opacity:1!important}
+  [data-rp-native-enhancement="1"][data-rp-native-chrome="true"][data-rp-native-locked="false"] .jw-controlbar,[data-rp-native-enhancement="1"][data-rp-native-chrome="true"][data-rp-native-locked="false"] .custom-control,[data-rp-native-enhancement="1"][data-rp-native-chrome="true"][data-rp-native-locked="false"] #player_top{visibility:visible!important;opacity:1!important;pointer-events:auto!important;transform:none!important}
   [data-rp-native-chrome="false"] .custom-control,[data-rp-native-chrome="false"] .jw-controls,[data-rp-native-chrome="false"] #player_top,[data-rp-native-chrome="false"] .jw-display,[data-rp-native-locked="true"] .custom-control,[data-rp-native-locked="true"] .jw-controls,[data-rp-native-locked="true"] #player_top,[data-rp-native-locked="true"] .jw-display,[data-rp-native-locked="true"] .player-dm,[data-rp-native-locked="true"] #video_pop{visibility:hidden!important;pointer-events:none!important}
   [data-rp-ui="player"].rp-player-shell{position:absolute;inset:0;z-index:2147483642;pointer-events:none;font:14px/1.4 Arial,sans-serif;color:#fff;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .rp-player-shell *{box-sizing:border-box}.rp-player-shell[hidden],.rp-player-shell [hidden]{display:none!important}
@@ -4386,7 +4388,9 @@ function startMotchillTranslations(sites, controller, options = {}) {
 function createMotchillCustomPlayer(sites,bridge,hooks){
   if(typeof SharedPlayer==='undefined')return null;
   const nativeContract=video=>video.matches('#video') && video.closest('#player-wrap')?.querySelector('#controls #fs-btn') ? video.closest('#player-wrap'):false;
-  const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_mask):has(#video_eps):has(#player_top)');
+  // #video_mask is a loading poster: the provider removes it on JW ready.
+  // Only persistent layout nodes identify this native controls contract.
+  const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
   const waiting=new Map();

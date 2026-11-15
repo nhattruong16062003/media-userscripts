@@ -3,7 +3,9 @@
 function createMotchillCustomPlayer(sites,bridge,hooks){
   if(typeof SharedPlayer==='undefined')return null;
   const nativeContract=video=>video.matches('#video') && video.closest('#player-wrap')?.querySelector('#controls #fs-btn') ? video.closest('#player-wrap'):false;
-  const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_mask):has(#video_eps):has(#player_top)');
+  // #video_mask is a loading poster: the provider removes it on JW ready.
+  // Only persistent layout nodes identify this native controls contract.
+  const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
   const waiting=new Map();
