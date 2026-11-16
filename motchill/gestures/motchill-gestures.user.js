@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.17
+// @version      6.0.18
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -1764,7 +1764,7 @@ var SharedPlayer = (() => {
         else icon(node, "next");
       }
       applyChrome();
-      if (options.autoPlay && context && !autoPlayAttempted && state.ready && video.readyState >= 3 && !doc.hidden) {
+      if (options.autoPlay && options.canAutoPlay?.() !== false && context && !autoPlayAttempted && state.ready && video.readyState >= 3 && !doc.hidden) {
         autoPlayAttempted = true;
         if (state.paused && !state.played && !state.ended) command("play");
       }
@@ -3856,6 +3856,8 @@ function lookupMotchillHistoryProgress(target, options = {}) {
 // ---- lib/episode-machine.js ----
 // Pipeline dùng chung cho bấm tay, mốc 90 giây và ended. Hook player chỉ được
 // resolve activate sau khi đã xác nhận đúng tập, seek 0 và phát thực tế.
+// Riêng engine giữ nguyên document có thể xác nhận trong commit: khung chuẩn
+// bị chỉ cung cấp playlist, không cần khởi động một video thứ hai rồi bỏ nó.
 function createMotchillEpisodeMachine(hooks, options = {}) {
   const timeoutMs = options.timeoutMs ?? 20000;
   const noticeMs = options.noticeMs ?? 8000;
@@ -3863,6 +3865,7 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
   let generation = 0;
   let context = '';
   let next = null;
+  let nextKey = '';
   let prepared = null;
   let warming = null;
   let switching = null;
@@ -3914,14 +3917,21 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
     }
   }
   function reset(key, target) {
-    const targetKey = target?.url || '';
-    if (context === key && (next?.url || '') === targetKey) return;
+    // Server/language variants can share a viewing URL. Compare the actual
+    // selection; never reuse a prepared resource for another target variant.
+    const explicitResume = ['server', 'translation'].includes(target?.intent);
+    const targetKey = target ? JSON.stringify([target.url || '', target.server || '', target.serverKey || '',
+      target.language || '', target.episodeKey || '', explicitResume,
+      explicitResume ? target.resume?.position : null, explicitResume ? target.resume?.duration : null,
+      !!target.historySelection]) : '';
+    if (context === key && nextKey === targetKey) return;
     generation++;
     controller.abort();
     controller = new AbortController();
     discard(prepared);
     context = key;
     next = target || null;
+    nextKey = targetKey;
     prepared = null;
     warming = null;
     switching = null;
@@ -3982,11 +3992,13 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
             }
             const result = await limited((s) => hooks.activate(candidate, target, { signal: s }), signal);
             if (signal.aborted || epoch !== generation) throw abortError();
-            if (!result?.playing || result?.startedAt !== 0) throw new Error('Tập mới chưa xác nhận phát từ đầu');
+            const deferred = options.activateInCommit===true && result?.deferred==='persistent';
+            if (!deferred && (!result?.playing || result?.startedAt !== 0)) throw new Error('Tập mới chưa xác nhận phát từ đầu');
             committing = true;
-            await limited((s) => hooks.commit?.(candidate, target, result, {
+            const committed = await limited((s) => hooks.commit?.(candidate, target, result, {
               signal: s, isCurrent: () => epoch === generation && !s.aborted,
             }), signal, undefined, options.commitTimeoutMs ?? timeoutMs);
+            if(deferred && committed?.confirmed!==true)throw new Error('Chưa xác nhận nguồn trong phiên phát');
             if (signal.aborted || epoch !== generation) throw abortError();
             prepared = null; // quyền sở hữu được bàn giao cho player hiện tại
             report('playing', 'Đã chuyển tập', reason);
@@ -5069,9 +5081,14 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
   let rollback=null,clicked=null,transferring=false,recovering=null;
   const state=()=>sites.nextProviderState();
   const page=()=>sites.read();
-  const key=()=>[location.href,state()?.frame.src].join('|');
+  const key=()=>{const source=state();return [location.href,source?.frame.src,source?.episode.id,source && bridge.getFrame(source.frame)?.state.mediaId].join('|');};
   const ready=remote=>remote?.state?.customCapable===true && remote.state.nativeEnhanced===true && remote.readyState>=2 && remote.duration>0 && !remote.state.ad && !remote.state.error;
-  const current=candidate=>candidate.frame.isConnected && candidate.frame.src===candidate.src && bridge.getFrame(candidate.frame)===candidate.remote && ready(candidate.remote);
+  // HAVE_METADATA during seek/buffering is not a different media resource.
+  // Keep readiness as the prepare gate; identity/ad/fatal checks own validity
+  // while start-zero and resume wait for their actual acknowledgements.
+  const current=candidate=>candidate.frame.isConnected && candidate.frame.src===candidate.src && bridge.getFrame(candidate.frame)===candidate.remote
+    && candidate.remote.state.customCapable===true && candidate.remote.state.nativeEnhanced===true && !candidate.remote.state.ad && !candidate.remote.state.error
+    && !!candidate.mediaId && candidate.remote.state.mediaId===candidate.mediaId;
   const wait=(check,signal)=>new Promise((resolve,reject)=>{
     let timer;const finish=(fn,value)=>{clearInterval(timer);signal.removeEventListener('abort',abort);fn(value);};
     const abort=()=>finish(reject,Object.assign(new Error('Đã hủy chuyển nguồn'),{name:'AbortError'}));
@@ -5114,12 +5131,17 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
         if(key()!==candidate.sourceKey)throw new Error('Trang đã đổi nguồn');
         const remote=bridge.getFrame(frame);if(remote?.state?.error)throw new Error('Nguồn tập bị lỗi');
         if(!ready(remote) || remote.state.role!=='prepared')return false;
-        candidate.remote=remote;remote.muted=true;remote.pause();return true;
+        candidate.remote=remote;candidate.mediaId=remote.state.mediaId;remote.muted=true;remote.pause();return true;
       },signal);return candidate;}catch(error){frame.remove();throw error;}finally{signal.removeEventListener('abort',abort);}
     },
     async activate(candidate,_target,{signal}){
       if(!current(candidate) || key()!==candidate.sourceKey)throw new Error('Nguồn chuẩn bị đã đổi');
       rollback={media:currentMedia,muted:!!currentMedia?.muted,paused:!!currentMedia && currentMedia.paused!==false};
+      // The visible mobile engine loads/seeks/confirms this playlist during
+      // commit. Starting the disposable iframe first triggers the provider's
+      // captured native resume handler and can undo seek-zero. Keep this
+      // descriptor paused/silent; never claim that it has started at zero.
+      if(currentMedia?.state.localPresentation)return {deferred:'persistent'};
       bridge.setRole(candidate.frame,'current');candidate.remote.command('start-zero');
       // The child verifies seek-zero and its first actual Play before setting
       // startedAtZero. A delayed parent poll may observe >3s; requiring that
@@ -5144,16 +5166,18 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
         transferring=true;old.dataset.mcManaged='provider';bridge.setRole(old,'current');old.dataset.mcRole='prepared';
         const resume=target.resume,compatible=resume && ['server','translation'].includes(target.intent) && Number.isFinite(resume.position) && Number.isFinite(resume.duration) && Math.abs(resume.duration-candidate.remote.duration)<=Math.max(30,candidate.remote.duration*.03);
         try{
-          await original.replaceMedia({playlist,provider,position:compatible?resume.position:0,paused:target.intent==='server' && !!rollback?.paused,muted:rollback?.muted ?? false,volume:Number.isFinite(original.volume)?original.volume:1},operation.signal);
+          await original.replaceMedia({playlist,provider,position:compatible?resume.position:0,paused:['server','translation'].includes(target.intent) && !!rollback?.paused,muted:rollback?.muted ?? false,volume:Number.isFinite(original.volume)?original.volume:1},operation.signal);
           if(operation.signal.aborted || !operation.isCurrent() || old.src!==original.session.src)throw Object.assign(new Error('Đã hủy chuyển tập'),{name:'AbortError'});
           const route=sites.route(target.url,sites.families.NEXT);
-          old.dataset.mcProviderSource=old.src;old.dataset.mcProviderPath=route.path;old.dataset.mcProviderId=String(candidate.episode.id);
+          old.dataset.mcProviderSource=old.src;old.dataset.mcProviderPath=route.path;old.dataset.mcProviderId=String(candidate.episode.id);old.dataset.mcProviderFile=playlist.file;
           History.prototype[target.pop?'replaceState':'pushState'].call(history,{...history.state,mcNativeEpisode:true},'',target.url);
-          old.dataset.mcRole='current';old.dataset.mcStartZero=compatible?'0':'1';currentMedia=original;
+          // This controller has already confirmed its seek (zero or resume).
+          // Only an explicit history-card selection hands that seek to history.
+          old.dataset.mcRole='current';old.dataset.mcStartZero=target.historySelection?'0':'1';currentMedia=original;
           candidate.remote.pause();candidate.remote.muted=true;candidate.frame.remove();candidate.activated=true;
           try{sessionStorage.setItem('active-server-'+state().data.movie.slug,candidate.episode.server);sessionStorage.setItem('active-server-type','m3u8');}catch{/* storage disabled */}
           const info=page();document.title=info.title+' · '+info.episode;document.dispatchEvent(new CustomEvent('mc-episode-changed',{detail:info}));
-          syncButtons();rollback=null;override=null;identity=key();lastURL=location.href;bridge.poll();hooks.poll?.(currentMedia,identity);return;
+          syncButtons();rollback=null;override=null;identity=key();lastURL=location.href;bridge.poll();hooks.poll?.(currentMedia,identity);return {confirmed:true};
         }catch(error){
           // Reveal a rolled-back resource only after its actual playlist is
           // confirmed. An unknown/late result stays isolated from history.
@@ -5164,10 +5188,10 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       }
       document.dispatchEvent(new Event('mc-before-server-change'));rollback?.media?.pause();
       bridge.setRole(old,'prepared');old.dataset.mcRole='prepared';old.hidden=true;old.style.display='none';
-      candidate.frame.classList.remove('mc-native-prepared');candidate.frame.dataset.mcRole='current';candidate.frame.title='Trình phát phim';candidate.activated=true;
+      candidate.frame.classList.remove('mc-native-prepared');candidate.frame.dataset.mcRole='current';candidate.frame.dataset.mcStartZero=target.historySelection?'0':'1';candidate.frame.title='Trình phát phim';candidate.activated=true;
       currentMedia=candidate.remote;currentMedia.muted=rollback?.muted ?? false;
       // Keep Pause for an explicit server change; Next starts the new episode.
-      if(target.intent==='server' && rollback?.paused)currentMedia.pause();
+      if(['server','translation'].includes(target.intent) && rollback?.paused)currentMedia.pause();
       History.prototype[target.pop?'replaceState':'pushState'].call(history,{...history.state,mcNativeEpisode:true},'',target.url);if(old.dataset.mcManaged==='provider')old.remove();else{old.dataset.mcManaged='provider';old.dataset.mcNativeRetired='1';}
       try{sessionStorage.setItem('active-server-'+state().data.movie.slug,candidate.episode.server);sessionStorage.setItem('active-server-type','m3u8');}catch{/* storage disabled */}
       const info=page();document.title=info.title+' · '+info.episode;document.dispatchEvent(new CustomEvent('mc-episode-changed',{detail:info}));
@@ -5181,7 +5205,7 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     // commands here could unmute or resume an unconfirmed intermediate source.
     rollback(){if(rollback?.media && !rollback.media.state.localPresentation){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
     discard(candidate){if(!candidate.activated)candidate.frame.remove();},
-  },{commitTimeoutMs:45000});
+  },{commitTimeoutMs:45000,activateInCommit:true});
   const style=document.createElement('style');style.dataset.mcNativeNavigation='1';style.textContent='.mc-native-prepared{position:fixed!important;left:-10000px!important;top:0!important;width:640px!important;height:360px!important;opacity:0!important;pointer-events:none!important}.player-frame-stable:fullscreen{width:100vw!important;height:100vh!important;padding:0!important;background:#000}';
   function syncButtons(){
     const current=state(),nodes=sites.nextProviderButtons();if(!current || !nodes.length)return;
@@ -5407,7 +5431,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
-  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null;
+  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null,preservePause=false;
   const mobile=()=>window.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const localPresentation=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
   const waiting=new Map();
@@ -5507,6 +5531,10 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         const getter=()=>proxy;Object.defineProperty(window,'localStorage',{...descriptor,get:getter});resumeAlias={descriptor,getter};
       }catch(error){return Promise.reject(error);}
     }
+    // A fresh source can have empty played ranges after its muted warmup.
+    // Keep the caller's Pause across UI remounts instead of treating that as
+    // permission for the new controls to autoplay. Explicit Play still works.
+    preservePause=value.paused===true;
     if(!persistent)persistent=SharedPlayer.persistentMediaSession(window,{candidate,onPending:value=>{changing=value;},onIdentity:identity=>{providerIdentity=identity;}});
     const root=enhancementRoot(),panel=SharedPlayer.loadingPanel(window,root,{});
     return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).finally(()=>panel.dispose());
@@ -5551,6 +5579,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         player.state=()=>{const value={...mediaState(),load:probe?.video===local.video && probe.api===local.api?probe.state().load:null};return changing?{...value,ready:false,initializable:false}:value;};
       }
       const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
+        canAutoPlay:()=>!changing && !preservePause,
         audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
         introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
         isFullscreen:()=>localPresentation()?document.fullscreenElement===root:hooks.isFullscreen(),onFullscreen:()=>localPresentation()?localFullscreen.toggle(root):hooks.onFullscreen()});

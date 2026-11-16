@@ -1,13 +1,13 @@
 # Motchill — hướng dẫn sử dụng
 
-Bốn script phiên bản **6.0.17**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
+Bốn script phiên bản **6.0.18**. Mở link bằng Firefox đã cài [Tampermonkey](https://addons.mozilla.org/firefox/addon/tampermonkey/):
 
 | Script | Link cài |
 | --- | --- |
-| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/noads/motchill-noads.user.js) |
-| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/gestures/motchill-gestures.user.js) |
-| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/history/motchill-history.user.js) |
-| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/source/motchill-source.user.js) |
+| Chặn quảng cáo | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/noads/motchill-noads.user.js) |
+| Thao tác trình phát | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/gestures/motchill-gestures.user.js) |
+| Lịch sử xem | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/history/motchill-history.user.js) |
+| Mở bản trực tiếp | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/source/motchill-source.user.js) |
 
 Nếu đang dùng bộ Motchill cũ, mở link mới rồi chọn **Cập nhật/Cài lại** trên chính script hiện có. Giữ script Lịch sử để giữ dữ liệu; không cần gỡ trước. Sau khi cập nhật, tải lại trang phim và chỉ bật một bản cho mỗi chức năng.
 
@@ -32,6 +32,8 @@ Nếu trang đang nhúng một trang Motchill gốc tương thích, script xác 
 ## Lịch sử và tự phát
 
 Mục **Đang xem dở/Lịch sử xem** giúp mở lại phim và tiến độ đã lưu. Dữ liệu cũ của bộ Motchill được giữ khi cập nhật đúng script, trong cùng Tampermonkey/profile. Chưa đồng bộ giữa thiết bị hoặc tự gộp kho lịch sử Motchill với RoPhim.
+
+Cập nhật đồng thời Player và Lịch sử: mở từ lịch sử sẽ chờ đúng nguồn rồi khôi phục mốc đã lưu. Đổi server trong cùng bản dịch giữ tiến độ đang xem; đổi bản dịch giữ trạng thái tạm dừng nếu bạn đã bấm Pause.
 
 Nếu Firefox chặn tự phát, bấm Phát hoặc cho phép tự động phát trong quyền website. Nếu máy không tự xoay khi toàn màn hình, xoay ngang bằng tay.
 

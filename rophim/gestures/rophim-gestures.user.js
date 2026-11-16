@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.17
+// @version      0.4.18
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -2381,7 +2381,7 @@ SOFTWARE.
         else icon(node, "next");
       }
       applyChrome();
-      if (options.autoPlay && context && !autoPlayAttempted && state.ready && video.readyState >= 3 && !doc.hidden) {
+      if (options.autoPlay && options.canAutoPlay?.() !== false && context && !autoPlayAttempted && state.ready && video.readyState >= 3 && !doc.hidden) {
         autoPlayAttempted = true;
         if (state.paused && !state.played && !state.ended) command("play");
       }

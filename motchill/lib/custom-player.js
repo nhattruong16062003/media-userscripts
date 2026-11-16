@@ -8,7 +8,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
-  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null;
+  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null,preservePause=false;
   const mobile=()=>window.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const localPresentation=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
   const waiting=new Map();
@@ -108,6 +108,10 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         const getter=()=>proxy;Object.defineProperty(window,'localStorage',{...descriptor,get:getter});resumeAlias={descriptor,getter};
       }catch(error){return Promise.reject(error);}
     }
+    // A fresh source can have empty played ranges after its muted warmup.
+    // Keep the caller's Pause across UI remounts instead of treating that as
+    // permission for the new controls to autoplay. Explicit Play still works.
+    preservePause=value.paused===true;
     if(!persistent)persistent=SharedPlayer.persistentMediaSession(window,{candidate,onPending:value=>{changing=value;},onIdentity:identity=>{providerIdentity=identity;}});
     const root=enhancementRoot(),panel=SharedPlayer.loadingPanel(window,root,{});
     return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).finally(()=>panel.dispose());
@@ -152,6 +156,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         player.state=()=>{const value={...mediaState(),load:probe?.video===local.video && probe.api===local.api?probe.state().load:null};return changing?{...value,ready:false,initializable:false}:value;};
       }
       const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
+        canAutoPlay:()=>!changing && !preservePause,
         audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
         introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
         isFullscreen:()=>localPresentation()?document.fullscreenElement===root:hooks.isFullscreen(),onFullscreen:()=>localPresentation()?localFullscreen.toggle(root):hooks.onFullscreen()});

@@ -10,18 +10,20 @@ Chọn bộ dành cho website bạn sử dụng. RoPhim có ba script: chặn qu
 
 | Website | Chặn quảng cáo | Điều khiển trình phát | Lịch sử xem |
 | --- | --- | --- | --- |
-| **RoPhim 0.4.17** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/rophim/history/rophim-history.user.js) |
-| **Motchill 6.0.17** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/history/motchill-history.user.js) |
+| **RoPhim 0.4.18** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/rophim/noads/rophim-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/rophim/gestures/rophim-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/rophim/history/rophim-history.user.js) |
+| **Motchill 6.0.18** | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/noads/motchill-noads.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/gestures/motchill-gestures.user.js) | [Cài đặt](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/history/motchill-history.user.js) |
 
-Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.17](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.17/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
+Script thứ tư của Motchill: [Mở bản trực tiếp 6.0.18](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/motchill/source/motchill-source.user.js). Nút chỉ hiện khi xác minh được trang phim gốc đang nhúng.
 
 Đã cài bản cũ thì mở link mới để **cập nhật tại chỗ**, giữ nguyên script Lịch sử để giữ tiến độ. Không cần gỡ Tampermonkey hoặc chép mã thủ công. Kiểm tra đúng tên script và phiên bản trước khi xác nhận. Nếu có hai bản cùng chức năng cho cùng website, chỉ bật một bản.
 
-Với bản Motchill **6.0.17**, cập nhật cả bốn script Motchill để player, lịch sử và các chức năng đi kèm cùng nhận đúng tập sau khi chuyển tập.
+Với bản Motchill **6.0.18**, cập nhật cả bốn script Motchill để player, lịch sử và các chức năng đi kèm cùng nhận đúng tập sau khi chuyển tập.
 
 ## Sử dụng
 
 Đổi Vietsub/Thuyết minh/Lồng tiếng sẽ lấy mốc đã lưu của đúng bản dịch trên tập đó nếu có và thời lượng tương thích. Nếu chưa có mốc, tiện ích giữ thời gian đang xem khi nguồn mới có thời lượng tương thích. Đổi server trong cùng bản dịch giữ tiến độ hiện tại. Cập nhật cả Điều khiển trình phát và Lịch sử xem để dùng cùng cơ chế; không cần xóa lịch sử cũ.
+
+Đang tạm dừng thì đổi bản dịch bằng nút trên trang hoặc mục chuyển bản dịch vẫn giữ tạm dừng. Mở phim từ lịch sử sẽ khôi phục tiến độ sau khi đúng nguồn đã tải xong.
 
 Đang khóa trong fullscreen thì chuyển tập hoặc đổi nguồn vẫn giữ khóa. Thoát fullscreen sẽ mở khóa; vào fullscreen lần sau bắt đầu ở trạng thái mở khóa.
 

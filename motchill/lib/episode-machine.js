@@ -1,5 +1,7 @@
 // Pipeline dùng chung cho bấm tay, mốc 90 giây và ended. Hook player chỉ được
 // resolve activate sau khi đã xác nhận đúng tập, seek 0 và phát thực tế.
+// Riêng engine giữ nguyên document có thể xác nhận trong commit: khung chuẩn
+// bị chỉ cung cấp playlist, không cần khởi động một video thứ hai rồi bỏ nó.
 function createMotchillEpisodeMachine(hooks, options = {}) {
   const timeoutMs = options.timeoutMs ?? 20000;
   const noticeMs = options.noticeMs ?? 8000;
@@ -7,6 +9,7 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
   let generation = 0;
   let context = '';
   let next = null;
+  let nextKey = '';
   let prepared = null;
   let warming = null;
   let switching = null;
@@ -58,14 +61,21 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
     }
   }
   function reset(key, target) {
-    const targetKey = target?.url || '';
-    if (context === key && (next?.url || '') === targetKey) return;
+    // Server/language variants can share a viewing URL. Compare the actual
+    // selection; never reuse a prepared resource for another target variant.
+    const explicitResume = ['server', 'translation'].includes(target?.intent);
+    const targetKey = target ? JSON.stringify([target.url || '', target.server || '', target.serverKey || '',
+      target.language || '', target.episodeKey || '', explicitResume,
+      explicitResume ? target.resume?.position : null, explicitResume ? target.resume?.duration : null,
+      !!target.historySelection]) : '';
+    if (context === key && nextKey === targetKey) return;
     generation++;
     controller.abort();
     controller = new AbortController();
     discard(prepared);
     context = key;
     next = target || null;
+    nextKey = targetKey;
     prepared = null;
     warming = null;
     switching = null;
@@ -126,11 +136,13 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
             }
             const result = await limited((s) => hooks.activate(candidate, target, { signal: s }), signal);
             if (signal.aborted || epoch !== generation) throw abortError();
-            if (!result?.playing || result?.startedAt !== 0) throw new Error('Tập mới chưa xác nhận phát từ đầu');
+            const deferred = options.activateInCommit===true && result?.deferred==='persistent';
+            if (!deferred && (!result?.playing || result?.startedAt !== 0)) throw new Error('Tập mới chưa xác nhận phát từ đầu');
             committing = true;
-            await limited((s) => hooks.commit?.(candidate, target, result, {
+            const committed = await limited((s) => hooks.commit?.(candidate, target, result, {
               signal: s, isCurrent: () => epoch === generation && !s.aborted,
             }), signal, undefined, options.commitTimeoutMs ?? timeoutMs);
+            if(deferred && committed?.confirmed!==true)throw new Error('Chưa xác nhận nguồn trong phiên phát');
             if (signal.aborted || epoch !== generation) throw abortError();
             prepared = null; // quyền sở hữu được bàn giao cho player hiện tại
             report('playing', 'Đã chuyển tập', reason);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - lịch sử xem
 // @namespace    motchill-history
-// @version      6.0.17
+// @version      6.0.18
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js
@@ -1836,6 +1836,17 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     // its exact player root; a server button's data-link is never actual proof.
     const proof = video?.state || (video?.tagName === 'VIDEO' && sites.findVideo() === video ? bridge.state() : null);
     const source = proof?.mediaId === mediaIdentity(video) ? proof.mediaSource : '';
+    // A persistent engine keeps its iframe URL while loading a verified new
+    // playlist. The provider assignment alone is insufficient: require the
+    // history bridge's actual current playlist to match the committed file.
+    const provider = sites.nextProviderState();
+    if (provider && provider.frame === video?.frame && provider.frame.dataset.mcProviderFile
+      && sites.mediaSourceMatches(source, provider.frame.dataset.mcProviderFile)
+      && sites.mediaSourceMatches(new URL('/embed/' + provider.episode.id, provider.source).href, target)) return true;
+    // A newly navigated embed is different from a persistent playlist change.
+    // Its authenticated session URL proves the selected provider, even when
+    // the reported mediaId/mediaSource is the provider's direct CDN playlist.
+    if (video?.frame && video.frame.src === video.session?.src && sites.mediaSourceMatches(video.frame.src, target)) return true;
     return [source, mediaIdentity(video), ...lineage].some((value) => sites.mediaSourceMatches(value, target));
   }
   document.addEventListener('click', (event) => {
