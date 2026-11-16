@@ -7,10 +7,18 @@ import {validLoadMetrics,loadMetricsText} from './buffering.js';
 export function customPlayerControls(win,player,options={}) {
   const {video,root}=player,doc=win.document,nativeRoot=player.nativeRoot || root,element=video.nodeType===1?video:null;playerUIStyle(doc);
   const nativeMode=options.nativeUI===true;
+  const contents=new WeakMap();
+  const text=(node,value)=>{if(node.textContent!==value)node.textContent=value;};
+  const prop=(node,key,value)=>{if(node[key]!==value)node[key]=value;};
+  const attr=(node,key,value)=>{value=String(value);if(node.getAttribute(key)!==value)node.setAttribute(key,value);};
+  const data=(node,key,value)=>{value=String(value);if(node.dataset[key]!==value)node.dataset[key]=value;};
+  const content=(node,key,render)=>{if(contents.get(node)!==key){render();contents.set(node,key);}};
+  const icon=(node,kind)=>content(node,'icon:'+kind,()=>{node.innerHTML=playerIcon(kind);node.dataset.rpIcon=kind;});
+  const buttonText=(node,value)=>content(node,'text:'+value,()=>{node.textContent=value;delete node.dataset.rpIcon;});
   const shell=doc.createElement('div');shell.dataset.rpUi='player';shell.className='rp-player-shell';shell.dataset.rpLocked='false';shell.dataset.rpChrome='true';if(nativeMode)shell.dataset.rpMode='native-enhancement';
   const surface=doc.createElement('div');surface.className='rp-gesture-surface';surface.dataset.rpGestureSurface='1';surface.setAttribute('aria-label','Chạm để hiện điều khiển; chạm đôi hai bên tua 10 giây; giữ để phát 2 lần');shell.append(surface);
   function button(action,label,icon,host,className='rp-icon'){
-    const node=doc.createElement('button');node.type='button';node.dataset.rpAction=action;node.className=className;node.setAttribute('aria-label',label);node.innerHTML=playerIcon(icon);
+    const node=doc.createElement('button');node.type='button';node.dataset.rpAction=action;node.className=className;node.setAttribute('aria-label',label);node.innerHTML=playerIcon(icon);contents.set(node,'icon:'+icon);node.dataset.rpIcon=icon;
     node.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(disposed)return;if(!locked || action==='context')actionClick(action,node);else if(action==='lock')setLocked(false);});host.append(node);return node;
   }
   let disposed=false,locked=false,chromeVisible=true,lockVisible=true,scrubbing=false,nativeOwned=false,lastReady=false,lastPaused=null,context=null,autoPlayAttempted=false;
@@ -60,7 +68,7 @@ export function customPlayerControls(win,player,options={}) {
   function command(action,value){try{return !!player.command(action,value);}catch{report('Không điều khiển được video này.');return false;}}
   function inFullscreen(){return options.isFullscreen?.()===true || !!doc.fullscreenElement && (doc.fullscreenElement===root || doc.fullscreenElement.contains(root));}
   function restoreNative(){if(!nativeOwned)return;nativeOwned=false;delete nativeRoot.dataset.rpCustomControls;delete nativeRoot.dataset.rpNativeChrome;delete nativeRoot.dataset.rpNativeLocked;if(element)for(const [name,value] of savedAttributes){if(value===null)element.removeAttribute(name);else element.setAttribute(name,value);}}
-  function applyChrome(){shell.dataset.rpChrome=String(chromeVisible);shell.dataset.rpLocked=String(locked);lock.hidden=!lastReady || !inFullscreen() || locked&&!lockVisible;if(nativeMode){const changed=nativeRoot.dataset.rpNativeChrome!==String(chromeVisible);nativeRoot.dataset.rpNativeChrome=String(chromeVisible);nativeRoot.dataset.rpNativeLocked=String(locked);if(changed && chromeVisible && !locked){const engine=root.querySelector('.jwplayer');engine?.classList.remove('jw-flag-user-inactive');engine?.dispatchEvent(new win.MouseEvent('mousemove',{bubbles:true}));}}}
+  function applyChrome(){data(shell,'rpChrome',chromeVisible);data(shell,'rpLocked',locked);prop(lock,'hidden',!lastReady || !inFullscreen() || locked&&!lockVisible);if(nativeMode){const changed=nativeRoot.dataset.rpNativeChrome!==String(chromeVisible);data(nativeRoot,'rpNativeChrome',chromeVisible);data(nativeRoot,'rpNativeLocked',locked);if(changed && chromeVisible && !locked){const engine=root.querySelector('.jwplayer');engine?.classList.remove('jw-flag-user-inactive');engine?.dispatchEvent(new win.MouseEvent('mousemove',{bubbles:true}));}}}
   function show(){chromeVisible=true;win.clearTimeout(hideTimer);if(!locked && !player.state().paused && settings.hidden)hideTimer=win.setTimeout(()=>{if(!scrubbing && settings.hidden){chromeVisible=false;applyChrome();}},3000);applyChrome();}
   function revealLock(){lockVisible=true;win.clearTimeout(lockTimer);lockTimer=win.setTimeout(()=>{lockVisible=false;applyChrome();},2500);applyChrome();}
   function setLocked(value){if(value && !inFullscreen())return;cancelGestures();locked=value;settings.hidden=true;win.clearTimeout(lockTimer);if(value)revealLock();else show();update();}
@@ -91,7 +99,7 @@ export function customPlayerControls(win,player,options={}) {
   const offGestures=installGestures(win,player,()=>{},{surface:nativeMode?undefined:surface,exclusive:true,isLocked:()=>locked,allowLockedMediaGestures:true,
     isInteractive:nativeMode?target=>!!target?.closest?.('.custom-control,.player-control,.item-btn,.player-dm,#player_top,#video_pop,#video_eps'):undefined,
     onLockedTap:()=>{if(lockVisible){lockVisible=false;win.clearTimeout(lockTimer);applyChrome();}else revealLock();},
-    onTap:()=>{if(chromeVisible){chromeVisible=false;settings.hidden=true;win.clearTimeout(hideTimer);applyChrome();}else show();},
+    onTap:()=>{if(chromeVisible){chromeVisible=false;settings.hidden=true;win.clearTimeout(hideTimer);applyChrome();}else{show();update();}},
     onHoldChange:active=>{holdTip.hidden=!active;if(active){chromeVisible=false;applyChrome();}},
     onSeek:side=>{seekTip.style.left=side>0?'78%':'22%';seekTip.dataset.side=side>0?'right':'left';seekTip.innerHTML=side>0?'10s '+playerIcon('forward'):playerIcon('back')+' 10s';seekTip.hidden=false;win.clearTimeout(tipTimer);tipTimer=win.setTimeout(()=>seekTip.hidden=true,700);},
   });
@@ -116,37 +124,37 @@ export function customPlayerControls(win,player,options={}) {
   const nativeObserver=new win.MutationObserver(()=>{if(nativeOwned && element?.controls)element.controls=false;});if(element)nativeObserver.observe(element,{attributes:true,attributeFilter:['controls']});
   const introEnd=()=>{const value=options.introSeconds?.() ?? 90;return Number.isFinite(value) && value>=0 && value<=300?value:90;};
   function format(value){const seconds=Math.max(0,Math.floor(Number(value)||0));return Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');}
-  function paintTime(position,duration){time.textContent=format(position)+' / '+format(duration);seek.style.setProperty('--rp-played',(duration>0?100*position/duration:0)+'%');}
+  function paintTime(position,duration){text(time,format(position)+' / '+format(duration));const value=(duration>0?100*position/duration:0)+'%';if(seek.style.getPropertyValue('--rp-played')!==value)seek.style.setProperty('--rp-played',value);}
   function update(){
-    if(disposed)return;const state=player.state(),becameReady=state.ready&&!lastReady;lastReady=state.ready;shell.hidden=!state.ready&&!state.initializable;
+    if(disposed)return;const state=player.state(),becameReady=state.ready&&!lastReady;lastReady=state.ready;prop(shell,'hidden',!state.ready&&!state.initializable);
     const metrics=validLoadMetrics(state.load)?state.load:null,loading=!!metrics && state.ready && !state.ad && ['loading','buffering'].includes(metrics.status) && !state.paused && !state.ended;
-    const loadText=loadMetricsText(metrics);loadReadout.textContent=loadText;loadReadout.hidden=!metrics || loading;
-    buffering.hidden=!loading;loadingStats.textContent=loadText;shell.dataset.rpBuffering=String(loading);
+    const loadText=loadMetricsText(metrics);text(loadReadout,loadText);prop(loadReadout,'hidden',!metrics || loading);
+    prop(buffering,'hidden',!loading);text(loadingStats,loadText);data(shell,'rpBuffering',loading);
     const hint=!metrics?'Nguồn chưa cung cấp thông số tải.':!metrics.online?'Thiết bị đang ngoại tuyến.':metrics.status==='error'?'Nguồn phát hoặc giải mã gặp lỗi.':metrics.status==='buffering'?'Đang chờ dữ liệu; chưa đủ bằng chứng kết luận do mạng hay máy chủ.':metrics.bytesPerSecond===null?'Không đo được tốc độ tải của nguồn này; — không có nghĩa là mạng ngừng.':'Tốc độ nhận dữ liệu phim trong các lượt tải gần đây. Engine có thể tạm nghỉ khi đã đủ bộ đệm.';
-    loadDetail.textContent=hint+(metrics?' '+(metrics.bufferPolicy==='expanded'?'Đã mở rộng tải trước có giới hạn.':metrics.bufferPolicy==='limited'?'Giữ giới hạn tải để bảo vệ phát phim.':'Bộ đệm do engine quản lý.'):'');
-    updateTracks();for(const node of tracks.querySelectorAll('button'))node.disabled=!state.ready || locked;
+    text(loadDetail,hint+(metrics?' '+(metrics.bufferPolicy==='expanded'?'Đã mở rộng tải trước có giới hạn.':metrics.bufferPolicy==='limited'?'Giữ giới hạn tải để bảo vệ phát phim.':'Bộ đệm do engine quản lý.'):''));
+    if(!trackSignature || !settings.hidden)updateTracks();for(const node of tracks.querySelectorAll('button'))prop(node,'disabled',!state.ready || locked);
     if(locked && !inFullscreen()){cancelGestures();locked=false;settings.hidden=true;win.clearTimeout(lockTimer);show();}
     if(!state.ready){cancelGestures();scrubbing=false;locked=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);}
     // Readiness controls OUR UI, never whether the original controls return.
-    nativeOwned=true;if(!nativeMode)nativeRoot.dataset.rpCustomControls='1';if(element){if(element.controls)element.controls=false;element.setAttribute('playsinline','');element.setAttribute('webkit-playsinline','');}
+    nativeOwned=true;if(!nativeMode)data(nativeRoot,'rpCustomControls','1');if(element){if(element.controls)element.controls=false;attr(element,'playsinline','');attr(element,'webkit-playsinline','');}
     if(becameReady || lastPaused!==null && state.paused!==lastPaused)show();lastPaused=state.paused;
-    for(const node of [center,play,mute,fullscreen,settingsButton,seek,...rates.children])node.disabled=!state.ready||locked;
+    for(const node of [center,play,mute,fullscreen,settingsButton,seek,...rates.children])prop(node,'disabled',!state.ready||locked);
     if(state.initializable&&!locked){center.disabled=false;play.disabled=false;}
-    for(const node of [center,play]){const kind=state.paused?'play':'pause';if(node.dataset.rpIcon!==kind){node.innerHTML=playerIcon(kind);node.dataset.rpIcon=kind;}node.setAttribute('aria-label',state.paused?'Phát':'Tạm dừng');}
-    const muted=player.audio?.().muted ?? video.muted;mute.innerHTML=playerIcon(muted?'muted':'volume');mute.setAttribute('aria-label',muted?'Bật tiếng':'Tắt tiếng');if(nativeMode)for(const node of root.querySelectorAll('.btn-muted')){node.classList.toggle('fa-volume-mute',muted);node.classList.toggle('fa-volume-high',!muted);node.setAttribute('aria-label',muted?'Bật tiếng':'Tắt tiếng');}
-    fullscreen.innerHTML=playerIcon(inFullscreen()?'shrink':'fullscreen');fullscreen.setAttribute('aria-label',inFullscreen()?'Thu nhỏ':'Toàn màn hình');
-    lock.innerHTML=playerIcon(locked?'lock':'unlock');lock.setAttribute('aria-label',locked?'Mở khóa màn hình':'Khóa màn hình');
-    if(!scrubbing){seek.max=String(Math.max(1,state.duration));seek.value=String(state.time);paintTime(state.time,state.duration);}
-    for(const node of rates.children)node.setAttribute('aria-pressed',String(Number(node.dataset.rpRate)===state.rate));
+    for(const node of [center,play]){icon(node,state.paused?'play':'pause');attr(node,'aria-label',state.paused?'Phát':'Tạm dừng');}
+    const muted=player.audio?.().muted ?? video.muted;icon(mute,muted?'muted':'volume');attr(mute,'aria-label',muted?'Bật tiếng':'Tắt tiếng');if(nativeMode)for(const node of root.querySelectorAll('.btn-muted')){node.classList.toggle('fa-volume-mute',muted);node.classList.toggle('fa-volume-high',!muted);attr(node,'aria-label',muted?'Bật tiếng':'Tắt tiếng');}
+    const full=inFullscreen();icon(fullscreen,full?'shrink':'fullscreen');attr(fullscreen,'aria-label',full?'Thu nhỏ':'Toàn màn hình');
+    icon(lock,locked?'lock':'unlock');attr(lock,'aria-label',locked?'Mở khóa màn hình':'Khóa màn hình');
+    if(!scrubbing && (chromeVisible&&!locked || state.paused)){prop(seek,'max',String(Math.max(1,state.duration)));prop(seek,'value',String(state.time));paintTime(state.time,state.duration);}
+    for(const node of rates.children)attr(node,'aria-pressed',Number(node.dataset.rpRate)===state.rate);
     const intro=state.ready && state.time<introEnd()-5 && state.duration>=600,nearEnd=state.ready && state.duration-state.time<=180;
-    contextAction.dataset.rpMode=(nextPending?.node===contextAction || nextError?.node===contextAction)?'next':intro?'intro':'next';
-    contextAction.hidden=(!intro && !context) || !(intro || nearEnd || nextPending?.node===contextAction || nextError?.node===contextAction);
-    line.dataset.rpNextStatus=String(nextPending?.node===next || nextError?.node===next);
+    data(contextAction,'rpMode',(nextPending?.node===contextAction || nextError?.node===contextAction)?'next':intro?'intro':'next');
+    prop(contextAction,'hidden',(!intro && !context) || !(intro || nearEnd || nextPending?.node===contextAction || nextError?.node===contextAction));
+    data(line,'rpNextStatus',nextPending?.node===next || nextError?.node===next);
     for(const node of [contextAction,next]){
-      node.dataset.rpStatus=String(nextPending?.node===node || nextError?.node===node);
-      node.disabled=!state.ready||locked&&node!==contextAction||(!context && !(node===contextAction && intro))||!!nextPending;node.setAttribute('aria-busy',String(nextPending?.node===node));
-      if(nextPending?.node===node)node.textContent='Đang chuyển tập…';else if(nextError?.node===node)node.textContent=nextError.text;
-      else if(node===contextAction)node.innerHTML=(intro?'Bỏ qua giới thiệu':'Tập tiếp theo')+' '+playerIcon(intro?'forward':'next');else node.innerHTML=playerIcon('next');
+      data(node,'rpStatus',nextPending?.node===node || nextError?.node===node);
+      prop(node,'disabled',!state.ready||locked&&node!==contextAction||(!context && !(node===contextAction && intro))||!!nextPending);attr(node,'aria-busy',nextPending?.node===node);
+      if(nextPending?.node===node)buttonText(node,'Đang chuyển tập…');else if(nextError?.node===node)buttonText(node,nextError.text);
+      else if(node===contextAction)content(node,'context:'+intro,()=>{node.innerHTML=(intro?'Bỏ qua giới thiệu':'Tập tiếp theo')+' '+playerIcon(intro?'forward':'next');});else icon(node,'next');
     }
     applyChrome();
     // Start only the parent's validated selected episode, once it can play.

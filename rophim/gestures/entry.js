@@ -6,6 +6,9 @@ import {playerStartupGuard} from '../lib/player-ui.js';
 import {FRAME_ORIGINS,isFrameURL,isSiteOrigin,safeURL} from '../lib/core.js';
 import {runFamily} from '../../shared/bridge/ownership.js';
 import {childLoading} from '../lib/player-loading.js';
+import {observeHlsOwners} from '../../shared/engines/hls-access.js';
+
+if(window.parent!==window)observeHlsOwners(typeof unsafeWindow==='undefined'?window:unsafeWindow);
 
 function startGestures(win,page) {
   // document-start may run before <html> exists, especially in a new iframe.

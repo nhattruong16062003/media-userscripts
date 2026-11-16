@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.14
+// @version      6.0.15
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -209,6 +209,7 @@ var SharedPlayer = (() => {
     loadingPanel: () => loadingPanel,
     mediaPlaylist: () => mediaPlaylist,
     mediaPresentationRoot: () => mediaPresentationRoot,
+    observeHlsOwners: () => observeHlsOwners,
     persistentMediaSession: () => persistentMediaSession,
     playerCandidate: () => playerCandidate,
     playerFingerprint: () => playerFingerprint,
@@ -769,6 +770,93 @@ var SharedPlayer = (() => {
     };
   }
 
+  // shared/engines/hls-access.js
+  var registries = /* @__PURE__ */ new WeakMap();
+  var registryKey = Symbol.for("media-userscripts.hls-owners.v1");
+  function observeHlsOwners(win) {
+    if (registries.has(win)) return registries.get(win);
+    const existing = win[registryKey];
+    if (existing?.version === 1 && typeof existing.get === "function" && typeof existing.stop === "function") {
+      registries.set(win, existing);
+      return existing;
+    }
+    const owners = /* @__PURE__ */ new WeakMap(), ObjectAPI = win.Object, original = ObjectAPI.defineProperty;
+    let observing = true, timer;
+    function releaseGlobal() {
+      try {
+        if (ObjectAPI.defineProperty === observe) ObjectAPI.defineProperty = original;
+      } catch {
+      }
+    }
+    function stop(event) {
+      releaseGlobal();
+      win.clearTimeout(timer);
+      if (event?.persisted) return;
+      observing = false;
+      win.removeEventListener("pagehide", stop);
+      try {
+        if (win[registryKey] === registry) delete win[registryKey];
+      } catch {
+      }
+    }
+    function observe(target, key, descriptor) {
+      const result = Reflect.apply(original, this, arguments);
+      if (observing && key === "url") {
+        try {
+          if (typeof ObjectAPI.getOwnPropertyDescriptor(descriptor, "get")?.value !== "function" || typeof ObjectAPI.getOwnPropertyDescriptor(descriptor, "set")?.value !== "function") return result;
+          const template = ObjectAPI.getOwnPropertyDescriptor(target, "template")?.value;
+          if (!template || ObjectAPI.getOwnPropertyDescriptor(template, "art")?.value !== target) return result;
+          const video = ObjectAPI.getOwnPropertyDescriptor(template, "$video")?.value, root = ObjectAPI.getOwnPropertyDescriptor(template, "$player")?.value;
+          if (video?.ownerDocument === win.document && video.matches("video.art-video") && root?.classList.contains("art-video-player") && root.contains(video) && typeof target.on === "function") {
+            owners.set(video, target);
+            releaseGlobal();
+            win.clearTimeout(timer);
+          }
+        } catch {
+        }
+      }
+      return result;
+    }
+    const registry = { version: 1, get(video) {
+      const owner = owners.get(video);
+      return owner?.template?.$video === video && !owner.isDestroy ? owner.hls : null;
+    }, stop };
+    registries.set(win, registry);
+    try {
+      Reflect.apply(original, ObjectAPI, [win, registryKey, { value: registry, configurable: true }]);
+      ObjectAPI.defineProperty = observe;
+      timer = win.setTimeout(releaseGlobal, 9e4);
+      win.addEventListener("pagehide", stop);
+    } catch {
+      observing = false;
+    }
+    return registry;
+  }
+  function accessibleHls(candidate) {
+    const { video, kind, api } = candidate, win = video.ownerDocument.defaultView;
+    const provider = kind === "jw" ? api?.getProvider?.() : null;
+    const registry = registries.get(win) || win[registryKey];
+    const captured = registry?.version === 1 ? registry.get(video) : null;
+    for (const h of [captured, provider?.hlsjs, provider?.hls, win.hls, win.art?.hls])
+      if (h?.media === video && h.config && typeof h.on === "function" && typeof h.off === "function") return h;
+    return null;
+  }
+
+  // shared/player/buffer-policy.js
+  function hlsBufferTarget(config, bitrate) {
+    if (!(bitrate > 0) || !Number.isFinite(config.maxBufferSize) || config.maxBufferSize <= 0 || !Number.isFinite(config.maxBufferLength) || config.maxBufferLength <= 0 || !Number.isFinite(config.maxMaxBufferLength) || config.maxMaxBufferLength < config.maxBufferLength) return null;
+    return Math.min(Math.max(config.maxBufferLength, 8 * config.maxBufferSize / bitrate), config.maxMaxBufferLength);
+  }
+  function bufferExpansionPlan(config, bitrate, otherBufferedSeconds = 0) {
+    const native = hlsBufferTarget(config, bitrate);
+    if (native === null) return null;
+    if (!Number.isFinite(otherBufferedSeconds) || otherBufferedSeconds < 0) return null;
+    const bytesPerSecond = bitrate * 1.15 / 8;
+    const target = Math.floor(Math.min(240, native + 60, native + 16 * 1024 * 1024 / bytesPerSecond, 96 * 1024 * 1024 / bytesPerSecond - otherBufferedSeconds));
+    if (target < native + 10) return null;
+    return { before: { maxBufferLength: config.maxBufferLength, maxMaxBufferLength: config.maxMaxBufferLength }, after: { maxBufferLength: Math.max(config.maxBufferLength, target), maxMaxBufferLength: Math.max(config.maxMaxBufferLength, target) } };
+  }
+
   // shared/player/buffering.js
   function bufferedAhead(video, time = video.currentTime) {
     if (!Number.isFinite(time) || time < 0) return 0;
@@ -789,11 +877,12 @@ var SharedPlayer = (() => {
     return "\u2193 " + rate + " \xB7 T\u1EA3i tr\u01B0\u1EDBc " + Math.floor(value.ahead) + " gi\xE2y";
   }
   function mediaLoadMonitor(candidate, { active = () => true, allowExpansion = false } = {}) {
-    const { video, kind, api } = candidate, win = video.ownerDocument.defaultView, clock = () => win.performance.now();
+    const { video, kind, api } = candidate, doc = video.ownerDocument, win = doc.defaultView, clock = () => win.performance.now();
     const network = mediaNetworkProbe(win);
     let source = "", since = clock(), waiting = false, disposed = false;
     let stableSince = null, lastTime = null, lastAdvance = clock(), engine = null, engineOff = null, fragments = [], policy = "native", tuning = null, limited = false;
-    const events = ["waiting", "stalled", "playing", "canplay", "pause", "ended", "error", "emptied", "loadstart", "seeking", "seeked"];
+    let levelIndex = null, qualityBaseline = null, lastPolicyCheck = -Infinity, stableTime = null, cooldownUntil = 0, healthyFrames = false;
+    const events = ["waiting", "stalled", "playing", "canplay", "pause", "ended", "error", "emptied", "loadstart", "seeking", "seeked", "ratechange"];
     const onEvent = (event) => {
       if (["emptied", "loadstart"].includes(event.type)) {
         reset();
@@ -801,15 +890,40 @@ var SharedPlayer = (() => {
       } else if (["waiting", "stalled", "seeking"].includes(event.type)) {
         waiting = true;
         stableSince = null;
-      } else if (["playing", "canplay", "seeked", "pause", "ended"].includes(event.type)) waiting = false;
+        restore();
+        qualityBaseline = null;
+        healthyFrames = false;
+      } else if (event.type === "ratechange") {
+        restore();
+        stableSince = null;
+        qualityBaseline = null;
+        healthyFrames = false;
+      } else if (["playing", "canplay", "seeked", "pause", "ended"].includes(event.type)) {
+        waiting = false;
+        if (["pause", "ended"].includes(event.type)) {
+          restore();
+          stableSince = null;
+          qualityBaseline = null;
+          healthyFrames = false;
+        }
+      }
     };
     for (const type of events) video.addEventListener(type, onEvent);
+    const onHidden = () => {
+      if (doc.hidden) {
+        restore();
+        stableSince = null;
+        qualityBaseline = null;
+        healthyFrames = false;
+      }
+    };
+    doc.addEventListener("visibilitychange", onHidden);
     function restore() {
       if (tuning) {
         for (const [key, value] of Object.entries(tuning.before)) if (tuning.engine.config[key] === tuning.after[key]) tuning.engine.config[key] = value;
         tuning = null;
       }
-      policy = limited ? "limited" : "native";
+      policy = limited || clock() < cooldownUntil ? "limited" : engine ? "observed" : "native";
     }
     function reset() {
       restore();
@@ -820,15 +934,15 @@ var SharedPlayer = (() => {
       lastTime = null;
       lastAdvance = clock();
       limited = false;
+      cooldownUntil = 0;
+      qualityBaseline = null;
+      healthyFrames = false;
+      levelIndex = null;
     }
     function bindEngine() {
       let next = null;
       try {
-        const provider = kind === "jw" ? api?.getProvider?.() : null;
-        for (const h of [provider?.hlsjs, provider?.hls, win.hls, win.art?.hls]) if (h?.media === video && h.config && typeof h.on === "function" && typeof h.off === "function") {
-          next = h;
-          break;
-        }
+        next = accessibleHls(candidate);
       } catch {
       }
       if (next === engine) return;
@@ -837,6 +951,15 @@ var SharedPlayer = (() => {
       engine = next;
       engineOff = null;
       fragments = [];
+      stableSince = null;
+      qualityBaseline = null;
+      healthyFrames = false;
+      levelIndex = null;
+      limited = false;
+      cooldownUntil = 0;
+      since = clock();
+      lastPolicyCheck = -Infinity;
+      policy = engine ? "observed" : "native";
       if (engine) {
         const fragment = (_event, data) => {
           const stats = data?.stats || data?.frag?.stats, s = stats?.loading;
@@ -845,7 +968,7 @@ var SharedPlayer = (() => {
           if (fragments.length > 32) fragments.shift();
         };
         const error = (_event, data) => {
-          if (data?.details === "bufferFullError" || data?.error?.name === "QuotaExceededError") {
+          if (data?.fatal || data?.details === "bufferFullError" || data?.error?.name === "QuotaExceededError") {
             limited = true;
             restore();
           }
@@ -875,24 +998,81 @@ var SharedPlayer = (() => {
       }
       const stalled = !video.paused && !video.ended && (video.readyState < 3 && (waiting || now - lastAdvance > 900) || now - lastAdvance > 1500 && ahead < 0.25);
       const status = state.failed ? "error" : video.ended ? "ended" : video.paused ? "paused" : stalled ? "buffering" : video.readyState < 2 ? "loading" : state.ready ? "playing" : "ready";
-      if (!enabled || status !== "playing" || video.seeking || ahead < 15) {
+      if (engine?.currentLevel !== levelIndex) {
+        restore();
+        levelIndex = engine?.currentLevel;
         stableSince = null;
-        if (tuning && stalled) {
+        qualityBaseline = null;
+        healthyFrames = false;
+      }
+      if (!enabled || status !== "playing" || video.seeking || ahead < 15 || video.playbackRate !== 1 || doc.hidden || now < cooldownUntil || tuning && engine.levels?.[engine.currentLevel]?.details?.live !== false) {
+        stableSince = null;
+        qualityBaseline = null;
+        healthyFrames = false;
+        if (tuning && stalled) limited = true;
+        restore();
+      } else if (stableSince === null) {
+        stableSince = now;
+        stableTime = time;
+        qualityBaseline = null;
+        healthyFrames = false;
+      }
+      if (!tuning && !limited && now >= cooldownUntil && policy === "limited") policy = engine ? "observed" : "native";
+      if (now - lastPolicyCheck >= 1e3) {
+        const delayed = now - lastPolicyCheck > 2500 && lastPolicyCheck !== -Infinity;
+        lastPolicyCheck = now;
+        let quality = null;
+        try {
+          quality = video.getVideoPlaybackQuality?.();
+        } catch {
+        }
+        if (stableSince !== null && quality && Number.isFinite(quality.totalVideoFrames) && Number.isFinite(quality.droppedVideoFrames)) {
+          if (!qualityBaseline) qualityBaseline = { total: quality.totalVideoFrames, dropped: quality.droppedVideoFrames, at: now };
+          const total = quality.totalVideoFrames - qualityBaseline.total, dropped = quality.droppedVideoFrames - qualityBaseline.dropped;
+          if (total < 0 || dropped < 0 || total >= 100 && dropped / total > 0.01 || dropped >= 3 && total < 30 || tuning && delayed) {
+            if (tuning) limited = true;
+            cooldownUntil = now + 15e3;
+            stableSince = null;
+            qualityBaseline = null;
+            healthyFrames = false;
+            restore();
+          } else if (now - qualityBaseline.at >= 5e3) {
+            healthyFrames = total >= 100 && dropped / total <= 0.01;
+            qualityBaseline = { total: quality.totalVideoFrames, dropped: quality.droppedVideoFrames, at: now };
+          }
+        } else {
+          qualityBaseline = null;
+          healthyFrames = false;
+        }
+      }
+      if (allowExpansion && enabled && engine?.constructor?.version === "1.7.3" && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && !tuning && healthyFrames && qualityBaseline && stableSince !== null && now - stableSince >= 15e3 && time - stableTime >= 12 && Number.isFinite(video.duration) && video.duration > 0) {
+        const level = engine.levels?.[engine.currentLevel], bitrate = level?.maxBitrate || level?.bitrate;
+        let cachedSeconds = 0;
+        try {
+          for (let i = 0; i < video.buffered.length; i++) cachedSeconds += video.buffered.end(i) - video.buffered.start(i);
+        } catch {
+          cachedSeconds = Infinity;
+        }
+        const plan = bufferExpansionPlan(engine.config, bitrate, Math.max(0, cachedSeconds - ahead));
+        const measured = fragments.filter((s) => s.end >= now - 3e4), seconds = measured.reduce((n, s) => n + (s.end - s.start) / 1e3, 0), bytes = measured.reduce((n, s) => n + s.bytes, 0);
+        const native = hlsBufferTarget(engine.config, bitrate), actual = engine.streamController?.getMaxBufferLength?.(bitrate);
+        if (plan && measured.length >= 3 && seconds > 0 && bytes * 8 / seconds > bitrate * 2 && Number.isFinite(actual) && Math.abs(actual - native) < 0.01) {
+          Object.assign(engine.config, plan.after);
+          tuning = { engine, ...plan };
+          policy = "expanded";
+        }
+      }
+      if (tuning) {
+        let cached = 0;
+        try {
+          for (let i = 0; i < video.buffered.length; i++) cached += video.buffered.end(i) - video.buffered.start(i);
+        } catch {
+          cached = Infinity;
+        }
+        const level = engine.levels?.[engine.currentLevel], bitrate = level?.maxBitrate || level?.bitrate;
+        if (!(bitrate > 0) || cached * bitrate * 1.15 / 8 > 96 * 1024 * 1024) {
           limited = true;
           restore();
-        }
-      } else if (stableSince === null) stableSince = now;
-      if (allowExpansion && enabled && engine && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && !tuning && stableSince !== null && now - stableSince >= 15e3 && Number.isFinite(video.duration) && video.duration > 0) {
-        const level = engine.levels?.[engine.currentLevel], bitrate = level?.maxBitrate || level?.bitrate;
-        const config = engine.config, old = config.maxBufferLength, cap = config.maxMaxBufferLength;
-        if (bitrate > 0 && Number.isFinite(old) && Number.isFinite(cap) && cap >= old) {
-          const target = Math.min(120, Math.floor(24 * 1024 * 1024 * 8 / bitrate));
-          if (target > old) {
-            const before = { maxBufferLength: old, maxMaxBufferLength: cap }, after = { maxBufferLength: target, maxMaxBufferLength: Math.max(cap, target) };
-            Object.assign(config, after);
-            tuning = { engine, before, after };
-            policy = "expanded";
-          }
         }
       }
       const diagnosticSource = /^https?:\/\//.test(source) ? source : network.source(candidate.declaredSource);
@@ -914,6 +1094,7 @@ var SharedPlayer = (() => {
       try {
         return snapshot(state);
       } catch {
+        restore();
         return { ahead: 0, status: "ready", bytesPerSecond: null, online: win.navigator.onLine !== false, bufferPolicy: "native" };
       }
     }, dispose() {
@@ -921,6 +1102,7 @@ var SharedPlayer = (() => {
       restore();
       engineOff?.();
       network.dispose();
+      doc.removeEventListener("visibilitychange", onHidden);
       for (const type of events) video.removeEventListener(type, onEvent);
     } };
   }
@@ -930,6 +1112,35 @@ var SharedPlayer = (() => {
     const { video, root } = player, doc = win.document, nativeRoot = player.nativeRoot || root, element = video.nodeType === 1 ? video : null;
     playerUIStyle(doc);
     const nativeMode = options.nativeUI === true;
+    const contents = /* @__PURE__ */ new WeakMap();
+    const text = (node, value) => {
+      if (node.textContent !== value) node.textContent = value;
+    };
+    const prop = (node, key, value) => {
+      if (node[key] !== value) node[key] = value;
+    };
+    const attr = (node, key, value) => {
+      value = String(value);
+      if (node.getAttribute(key) !== value) node.setAttribute(key, value);
+    };
+    const data = (node, key, value) => {
+      value = String(value);
+      if (node.dataset[key] !== value) node.dataset[key] = value;
+    };
+    const content = (node, key, render) => {
+      if (contents.get(node) !== key) {
+        render();
+        contents.set(node, key);
+      }
+    };
+    const icon = (node, kind) => content(node, "icon:" + kind, () => {
+      node.innerHTML = playerIcon(kind);
+      node.dataset.rpIcon = kind;
+    });
+    const buttonText = (node, value) => content(node, "text:" + value, () => {
+      node.textContent = value;
+      delete node.dataset.rpIcon;
+    });
     const shell = doc.createElement("div");
     shell.dataset.rpUi = "player";
     shell.className = "rp-player-shell";
@@ -941,13 +1152,15 @@ var SharedPlayer = (() => {
     surface.dataset.rpGestureSurface = "1";
     surface.setAttribute("aria-label", "Ch\u1EA1m \u0111\u1EC3 hi\u1EC7n \u0111i\u1EC1u khi\u1EC3n; ch\u1EA1m \u0111\xF4i hai b\xEAn tua 10 gi\xE2y; gi\u1EEF \u0111\u1EC3 ph\xE1t 2 l\u1EA7n");
     shell.append(surface);
-    function button(action, label, icon, host, className = "rp-icon") {
+    function button(action, label, icon2, host, className = "rp-icon") {
       const node = doc.createElement("button");
       node.type = "button";
       node.dataset.rpAction = action;
       node.className = className;
       node.setAttribute("aria-label", label);
-      node.innerHTML = playerIcon(icon);
+      node.innerHTML = playerIcon(icon2);
+      contents.set(node, "icon:" + icon2);
+      node.dataset.rpIcon = icon2;
       node.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1096,8 +1309,8 @@ var SharedPlayer = (() => {
     error.setAttribute("role", "status");
     error.hidden = true;
     shell.append(error);
-    function report(text) {
-      error.textContent = text;
+    function report(text2) {
+      error.textContent = text2;
       error.hidden = false;
       win.clearTimeout(errorTimer);
       errorTimer = win.setTimeout(() => error.hidden = true, 5e3);
@@ -1125,13 +1338,13 @@ var SharedPlayer = (() => {
       }
     }
     function applyChrome() {
-      shell.dataset.rpChrome = String(chromeVisible);
-      shell.dataset.rpLocked = String(locked);
-      lock.hidden = !lastReady || !inFullscreen() || locked && !lockVisible;
+      data(shell, "rpChrome", chromeVisible);
+      data(shell, "rpLocked", locked);
+      prop(lock, "hidden", !lastReady || !inFullscreen() || locked && !lockVisible);
       if (nativeMode) {
         const changed2 = nativeRoot.dataset.rpNativeChrome !== String(chromeVisible);
-        nativeRoot.dataset.rpNativeChrome = String(chromeVisible);
-        nativeRoot.dataset.rpNativeLocked = String(locked);
+        data(nativeRoot, "rpNativeChrome", chromeVisible);
+        data(nativeRoot, "rpNativeLocked", locked);
         if (changed2 && chromeVisible && !locked) {
           const engine = root.querySelector(".jwplayer");
           engine?.classList.remove("jw-flag-user-inactive");
@@ -1291,7 +1504,10 @@ var SharedPlayer = (() => {
           settings.hidden = true;
           win.clearTimeout(hideTimer);
           applyChrome();
-        } else show();
+        } else {
+          show();
+          update();
+        }
       },
       onHoldChange: (active) => {
         holdTip.hidden = !active;
@@ -1387,25 +1603,26 @@ var SharedPlayer = (() => {
       return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
     }
     function paintTime(position, duration) {
-      time.textContent = format(position) + " / " + format(duration);
-      seek.style.setProperty("--rp-played", (duration > 0 ? 100 * position / duration : 0) + "%");
+      text(time, format(position) + " / " + format(duration));
+      const value = (duration > 0 ? 100 * position / duration : 0) + "%";
+      if (seek.style.getPropertyValue("--rp-played") !== value) seek.style.setProperty("--rp-played", value);
     }
     function update() {
       if (disposed) return;
       const state = player.state(), becameReady = state.ready && !lastReady;
       lastReady = state.ready;
-      shell.hidden = !state.ready && !state.initializable;
+      prop(shell, "hidden", !state.ready && !state.initializable);
       const metrics = validLoadMetrics(state.load) ? state.load : null, loading = !!metrics && state.ready && !state.ad && ["loading", "buffering"].includes(metrics.status) && !state.paused && !state.ended;
       const loadText = loadMetricsText(metrics);
-      loadReadout.textContent = loadText;
-      loadReadout.hidden = !metrics || loading;
-      buffering.hidden = !loading;
-      loadingStats.textContent = loadText;
-      shell.dataset.rpBuffering = String(loading);
+      text(loadReadout, loadText);
+      prop(loadReadout, "hidden", !metrics || loading);
+      prop(buffering, "hidden", !loading);
+      text(loadingStats, loadText);
+      data(shell, "rpBuffering", loading);
       const hint = !metrics ? "Ngu\u1ED3n ch\u01B0a cung c\u1EA5p th\xF4ng s\u1ED1 t\u1EA3i." : !metrics.online ? "Thi\u1EBFt b\u1ECB \u0111ang ngo\u1EA1i tuy\u1EBFn." : metrics.status === "error" ? "Ngu\u1ED3n ph\xE1t ho\u1EB7c gi\u1EA3i m\xE3 g\u1EB7p l\u1ED7i." : metrics.status === "buffering" ? "\u0110ang ch\u1EDD d\u1EEF li\u1EC7u; ch\u01B0a \u0111\u1EE7 b\u1EB1ng ch\u1EE9ng k\u1EBFt lu\u1EADn do m\u1EA1ng hay m\xE1y ch\u1EE7." : metrics.bytesPerSecond === null ? "Kh\xF4ng \u0111o \u0111\u01B0\u1EE3c t\u1ED1c \u0111\u1ED9 t\u1EA3i c\u1EE7a ngu\u1ED3n n\xE0y; \u2014 kh\xF4ng c\xF3 ngh\u0129a l\xE0 m\u1EA1ng ng\u1EEBng." : "T\u1ED1c \u0111\u1ED9 nh\u1EADn d\u1EEF li\u1EC7u phim trong c\xE1c l\u01B0\u1EE3t t\u1EA3i g\u1EA7n \u0111\xE2y. Engine c\xF3 th\u1EC3 t\u1EA1m ngh\u1EC9 khi \u0111\xE3 \u0111\u1EE7 b\u1ED9 \u0111\u1EC7m.";
-      loadDetail.textContent = hint + (metrics ? " " + (metrics.bufferPolicy === "expanded" ? "\u0110\xE3 m\u1EDF r\u1ED9ng t\u1EA3i tr\u01B0\u1EDBc c\xF3 gi\u1EDBi h\u1EA1n." : metrics.bufferPolicy === "limited" ? "Gi\u1EEF gi\u1EDBi h\u1EA1n t\u1EA3i \u0111\u1EC3 b\u1EA3o v\u1EC7 ph\xE1t phim." : "B\u1ED9 \u0111\u1EC7m do engine qu\u1EA3n l\xFD.") : "");
-      updateTracks();
-      for (const node of tracks.querySelectorAll("button")) node.disabled = !state.ready || locked;
+      text(loadDetail, hint + (metrics ? " " + (metrics.bufferPolicy === "expanded" ? "\u0110\xE3 m\u1EDF r\u1ED9ng t\u1EA3i tr\u01B0\u1EDBc c\xF3 gi\u1EDBi h\u1EA1n." : metrics.bufferPolicy === "limited" ? "Gi\u1EEF gi\u1EDBi h\u1EA1n t\u1EA3i \u0111\u1EC3 b\u1EA3o v\u1EC7 ph\xE1t phim." : "B\u1ED9 \u0111\u1EC7m do engine qu\u1EA3n l\xFD.") : ""));
+      if (!trackSignature || !settings.hidden) updateTracks();
+      for (const node of tracks.querySelectorAll("button")) prop(node, "disabled", !state.ready || locked);
       if (locked && !inFullscreen()) {
         cancelGestures();
         locked = false;
@@ -1423,57 +1640,56 @@ var SharedPlayer = (() => {
         win.clearTimeout(nextTimer);
       }
       nativeOwned = true;
-      if (!nativeMode) nativeRoot.dataset.rpCustomControls = "1";
+      if (!nativeMode) data(nativeRoot, "rpCustomControls", "1");
       if (element) {
         if (element.controls) element.controls = false;
-        element.setAttribute("playsinline", "");
-        element.setAttribute("webkit-playsinline", "");
+        attr(element, "playsinline", "");
+        attr(element, "webkit-playsinline", "");
       }
       if (becameReady || lastPaused !== null && state.paused !== lastPaused) show();
       lastPaused = state.paused;
-      for (const node of [center, play, mute, fullscreen, settingsButton, seek, ...rates.children]) node.disabled = !state.ready || locked;
+      for (const node of [center, play, mute, fullscreen, settingsButton, seek, ...rates.children]) prop(node, "disabled", !state.ready || locked);
       if (state.initializable && !locked) {
         center.disabled = false;
         play.disabled = false;
       }
       for (const node of [center, play]) {
-        const kind = state.paused ? "play" : "pause";
-        if (node.dataset.rpIcon !== kind) {
-          node.innerHTML = playerIcon(kind);
-          node.dataset.rpIcon = kind;
-        }
-        node.setAttribute("aria-label", state.paused ? "Ph\xE1t" : "T\u1EA1m d\u1EEBng");
+        icon(node, state.paused ? "play" : "pause");
+        attr(node, "aria-label", state.paused ? "Ph\xE1t" : "T\u1EA1m d\u1EEBng");
       }
       const muted = player.audio?.().muted ?? video.muted;
-      mute.innerHTML = playerIcon(muted ? "muted" : "volume");
-      mute.setAttribute("aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
+      icon(mute, muted ? "muted" : "volume");
+      attr(mute, "aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
       if (nativeMode) for (const node of root.querySelectorAll(".btn-muted")) {
         node.classList.toggle("fa-volume-mute", muted);
         node.classList.toggle("fa-volume-high", !muted);
-        node.setAttribute("aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
+        attr(node, "aria-label", muted ? "B\u1EADt ti\u1EBFng" : "T\u1EAFt ti\u1EBFng");
       }
-      fullscreen.innerHTML = playerIcon(inFullscreen() ? "shrink" : "fullscreen");
-      fullscreen.setAttribute("aria-label", inFullscreen() ? "Thu nh\u1ECF" : "To\xE0n m\xE0n h\xECnh");
-      lock.innerHTML = playerIcon(locked ? "lock" : "unlock");
-      lock.setAttribute("aria-label", locked ? "M\u1EDF kh\xF3a m\xE0n h\xECnh" : "Kh\xF3a m\xE0n h\xECnh");
-      if (!scrubbing) {
-        seek.max = String(Math.max(1, state.duration));
-        seek.value = String(state.time);
+      const full = inFullscreen();
+      icon(fullscreen, full ? "shrink" : "fullscreen");
+      attr(fullscreen, "aria-label", full ? "Thu nh\u1ECF" : "To\xE0n m\xE0n h\xECnh");
+      icon(lock, locked ? "lock" : "unlock");
+      attr(lock, "aria-label", locked ? "M\u1EDF kh\xF3a m\xE0n h\xECnh" : "Kh\xF3a m\xE0n h\xECnh");
+      if (!scrubbing && (chromeVisible && !locked || state.paused)) {
+        prop(seek, "max", String(Math.max(1, state.duration)));
+        prop(seek, "value", String(state.time));
         paintTime(state.time, state.duration);
       }
-      for (const node of rates.children) node.setAttribute("aria-pressed", String(Number(node.dataset.rpRate) === state.rate));
+      for (const node of rates.children) attr(node, "aria-pressed", Number(node.dataset.rpRate) === state.rate);
       const intro = state.ready && state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.ready && state.duration - state.time <= 180;
-      contextAction.dataset.rpMode = nextPending?.node === contextAction || nextError?.node === contextAction ? "next" : intro ? "intro" : "next";
-      contextAction.hidden = !intro && !context || !(intro || nearEnd || nextPending?.node === contextAction || nextError?.node === contextAction);
-      line.dataset.rpNextStatus = String(nextPending?.node === next || nextError?.node === next);
+      data(contextAction, "rpMode", nextPending?.node === contextAction || nextError?.node === contextAction ? "next" : intro ? "intro" : "next");
+      prop(contextAction, "hidden", !intro && !context || !(intro || nearEnd || nextPending?.node === contextAction || nextError?.node === contextAction));
+      data(line, "rpNextStatus", nextPending?.node === next || nextError?.node === next);
       for (const node of [contextAction, next]) {
-        node.dataset.rpStatus = String(nextPending?.node === node || nextError?.node === node);
-        node.disabled = !state.ready || locked && node !== contextAction || !context && !(node === contextAction && intro) || !!nextPending;
-        node.setAttribute("aria-busy", String(nextPending?.node === node));
-        if (nextPending?.node === node) node.textContent = "\u0110ang chuy\u1EC3n t\u1EADp\u2026";
-        else if (nextError?.node === node) node.textContent = nextError.text;
-        else if (node === contextAction) node.innerHTML = (intro ? "B\u1ECF qua gi\u1EDBi thi\u1EC7u" : "T\u1EADp ti\u1EBFp theo") + " " + playerIcon(intro ? "forward" : "next");
-        else node.innerHTML = playerIcon("next");
+        data(node, "rpStatus", nextPending?.node === node || nextError?.node === node);
+        prop(node, "disabled", !state.ready || locked && node !== contextAction || !context && !(node === contextAction && intro) || !!nextPending);
+        attr(node, "aria-busy", nextPending?.node === node);
+        if (nextPending?.node === node) buttonText(node, "\u0110ang chuy\u1EC3n t\u1EADp\u2026");
+        else if (nextError?.node === node) buttonText(node, nextError.text);
+        else if (node === contextAction) content(node, "context:" + intro, () => {
+          node.innerHTML = (intro ? "B\u1ECF qua gi\u1EDBi thi\u1EC7u" : "T\u1EADp ti\u1EBFp theo") + " " + playerIcon(intro ? "forward" : "next");
+        });
+        else icon(node, "next");
       }
       applyChrome();
       if (options.autoPlay && context && !autoPlayAttempted && state.ready && video.readyState >= 3 && !doc.hidden) {
@@ -2042,11 +2258,11 @@ var SharedPlayer = (() => {
       return false;
     }
   }
-  function attachPlayer(candidate, { canRestoreAudio = () => true, monitorLoad = true } = {}) {
+  function attachPlayer(candidate, { canRestoreAudio = () => true, monitorLoad = true, allowExpansion = true } = {}) {
     const { kind, video, root, api } = candidate;
     const initialSource = playerFingerprint(candidate);
     let audioGeneration = 0;
-    const loadMonitor = monitorLoad ? mediaLoadMonitor(candidate, { active: canRestoreAudio }) : null;
+    const loadMonitor = monitorLoad ? mediaLoadMonitor(candidate, { active: canRestoreAudio, allowExpansion }) : null;
     const audio = () => {
       try {
         const muted = kind === "jw" && typeof api.getMute === "function" ? api.getMute() : video.muted, volume = kind === "jw" && typeof api.getVolume === "function" ? api.getVolume() / 100 : video.volume;
@@ -5255,6 +5471,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
 // END MOTCHILL SITES
 
   const sites = createMotchillSites();
+  if(window.parent!==window)SharedPlayer.observeHlsOwners(window);
   MediaSiteOwner.runFamily(window,{family:'motchill',feature:'gestures',isSiteURL:value=>{const parsed=sites.url(value);return !!parsed && sites.isMotchill(parsed.hostname);},isFrameURL:value=>sites.knownEmbedPage(value),isFrameOrigin:value=>{const parsed=sites.url(value);return !!parsed && sites.embedHosts.has(parsed.hostname);}},()=>{
   sites.runWhenAllowed(() => {
   const controller = startMotchillPlayerController(sites);

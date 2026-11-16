@@ -51,11 +51,11 @@ export function selectPlayerTrack(candidate,kind,id){
   if(candidate?.kind!=='jw' || !Object.hasOwn(names,kind) || !Number.isInteger(id) || !playerTracks(candidate)[kind]?.some(item=>item.id===id))return false;
   try{candidate.api[names[kind]](id);return true;}catch{return false;}
 }
-export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=true}={}) {
+export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=true,allowExpansion=true}={}) {
   const {kind,video,root,api} = candidate;
   const initialSource=playerFingerprint(candidate);
   let audioGeneration=0;
-  const loadMonitor=monitorLoad?mediaLoadMonitor(candidate,{active:canRestoreAudio}):null;
+  const loadMonitor=monitorLoad?mediaLoadMonitor(candidate,{active:canRestoreAudio,allowExpansion}):null;
   const audio=()=>{
     try{const muted=kind==='jw' && typeof api.getMute==='function'?api.getMute():video.muted,volume=kind==='jw' && typeof api.getVolume==='function'?api.getVolume()/100:video.volume;return {muted:!!muted,volume:finite(volume) && volume>=0 && volume<=1?volume:1};}
     catch{return {muted:!!video.muted,volume:finite(video.volume)?video.volume:1};}

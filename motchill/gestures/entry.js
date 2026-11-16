@@ -35,6 +35,7 @@
 // END MOTCHILL SITES
 
   const sites = createMotchillSites();
+  if(window.parent!==window)SharedPlayer.observeHlsOwners(window);
   sites.runWhenAllowed(() => {
   const controller = startMotchillPlayerController(sites);
   startMotchillTranslations(sites, controller);
