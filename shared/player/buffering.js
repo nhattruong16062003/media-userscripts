@@ -1,6 +1,6 @@
 import {mediaNetworkProbe} from './media-network.js';
 import {accessibleHls} from '../engines/hls-access.js';
-import {bufferExpansionPlan,hlsBufferTarget} from './buffer-policy.js';
+import {bufferExpansionStep,hlsBufferTarget,observedMediaBitrate} from './buffer-policy.js';
 
 export function bufferedAhead(video,time=video.currentTime){
   if(!Number.isFinite(time) || time<0)return 0;
@@ -45,11 +45,12 @@ export function mediaLoadMonitor(candidate,{active=()=>true,allowExpansion=false
     if(next===engine)return;
     restore();engineOff?.();engine=next;engineOff=null;fragments=[];stableSince=null;qualityBaseline=null;healthyFrames=false;levelIndex=null;limited=false;cooldownUntil=0;since=clock();lastPolicyCheck=-Infinity;policy=engine?'observed':'native';
     if(engine){
-      const fragment=(_event,data)=>{const stats=data?.stats || data?.frag?.stats,s=stats?.loading;if(!active() || data?.frag?.type && data.frag.type!=='main' || !s || !nonnegative(stats.loaded) || !(s.end>s.start) || s.start<since)return;fragments.push({bytes:stats.loaded,start:s.start,end:s.end});if(fragments.length>32)fragments.shift();};
+      const fragment=(_event,data)=>{const stats=data?.stats || data?.frag?.stats,s=stats?.loading;if(!active() || data?.frag?.type && data.frag.type!=='main' || !s || !nonnegative(stats.loaded) || !(s.end>s.start) || s.start<since)return;fragments.push({bytes:stats.loaded,start:s.start,end:s.end,duration:data.part?null:data.frag?.duration});if(fragments.length>32)fragments.shift();};
       const error=(_event,data)=>{if(data?.fatal || data?.details==='bufferFullError' || data?.error?.name==='QuotaExceededError'){limited=true;restore();}};
       const bound=engine;bound.on('hlsFragLoaded',fragment);bound.on('hlsError',error);engineOff=()=>{bound.off('hlsFragLoaded',fragment);bound.off('hlsError',error);};
     }
   }
+  function bitrates(){const level=engine?.levels?.[engine.currentLevel],loading=level?.maxBitrate || level?.bitrate;return {loading,budget:loading>0?loading:loading===0?observedMediaBitrate(fragments):null};}
   function snapshot(state){
     const now=clock(),time=state.time;
     const current=kind==='jw'?api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file:video.currentSrc || video.src;
@@ -80,18 +81,26 @@ export function mediaLoadMonitor(candidate,{active=()=>true,allowExpansion=false
     }
     // Native quotas remain in charge. Unknown/live engines and startup/seek/
     // prepared frames must never receive a larger target or preload/play call.
-    if(allowExpansion && enabled && engine?.constructor?.version==='1.7.3' && engine.levels?.[engine.currentLevel]?.details?.live===false && !limited && !tuning && healthyFrames && qualityBaseline && stableSince!==null && now-stableSince>=15000 && time-stableTime>=12 && Number.isFinite(video.duration) && video.duration>0){
-      const level=engine.levels?.[engine.currentLevel],bitrate=level?.maxBitrate || level?.bitrate;
+    if(allowExpansion && enabled && ['1.6.5','1.6.8','1.7.3'].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live===false && !limited && (!tuning || now-tuning.lastStep>=15000) && healthyFrames && qualityBaseline && stableSince!==null && now-stableSince>=15000 && time-stableTime>=12 && Number.isFinite(video.duration) && video.duration>0){
+      const {loading:loadingBitrate,budget:bitrate}=bitrates();
       let cachedSeconds=0;try{for(let i=0;i<video.buffered.length;i++)cachedSeconds+=video.buffered.end(i)-video.buffered.start(i);}catch{/* discarded source: no expansion */cachedSeconds=Infinity;}
-      const plan=bufferExpansionPlan(engine.config,bitrate,Math.max(0,cachedSeconds-ahead));
+      const original=tuning?{...engine.config,...tuning.before}:engine.config;
+      const plan=bufferExpansionStep(original,engine.config,bitrate,Math.max(0,cachedSeconds-ahead),loadingBitrate);
       const measured=fragments.filter(s=>s.end>=now-30000),seconds=measured.reduce((n,s)=>n+(s.end-s.start)/1000,0),bytes=measured.reduce((n,s)=>n+s.bytes,0);
-      const native=hlsBufferTarget(engine.config,bitrate),actual=engine.streamController?.getMaxBufferLength?.(bitrate);
-      if(plan && measured.length>=3 && seconds>0 && bytes*8/seconds>bitrate*2 && Number.isFinite(actual) && Math.abs(actual-native)<.01){Object.assign(engine.config,plan.after);tuning={engine,...plan};policy='expanded';}
+      const native=hlsBufferTarget(engine.config,loadingBitrate),actual=engine.streamController?.getMaxBufferLength?.(loadingBitrate);
+      const owned=!tuning || Object.entries(tuning.after).every(([key,value])=>engine.config[key]===value);
+      if(!owned){limited=true;restore();}
+      else if(plan && measured.length>=3 && seconds>0 && bytes*8/seconds>bitrate*2 && Number.isFinite(actual) && Math.abs(actual-native)<.01){Object.assign(engine.config,plan.after);tuning={engine,...plan,since:tuning?.since ?? now,lastStep:now};policy='expanded';}
     }
     if(tuning){
       let cached=0;try{for(let i=0;i<video.buffered.length;i++)cached+=video.buffered.end(i)-video.buffered.start(i);}catch{cached=Infinity;}
-      const level=engine.levels?.[engine.currentLevel],bitrate=level?.maxBitrate || level?.bitrate;
-      if(!(bitrate>0) || cached*bitrate*1.15/8>96*1024*1024){limited=true;restore();}
+      const {budget:bitrate}=bitrates();
+      // A buffer that is already full naturally has no requests. Only completed
+      // MAIN fragments begun after tuning can prove a sustained slowdown.
+      const recent=fragments.filter(s=>s.start>=tuning.since && s.end>=now-30000).slice(-3);
+      const loadingSeconds=recent.reduce((n,s)=>n+(s.end-s.start)/1000,0),loadedBytes=recent.reduce((n,s)=>n+s.bytes,0);
+      const slow=recent.length===3 && loadingSeconds>=3 && loadedBytes*8/loadingSeconds<bitrate*1.25;
+      if(!(bitrate>0) || cached*bitrate*1.15/8>96*1024*1024 || slow){limited=true;restore();}
     }
     const diagnosticSource=/^https?:\/\//.test(source)?source:network.source(candidate.declaredSource);
     let speed=enabled?network.speed(diagnosticSource,since):null;

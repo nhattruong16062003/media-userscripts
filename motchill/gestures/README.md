@@ -1,6 +1,6 @@
 # Motchill — Điều khiển trình phát
 
-Phiên bản **6.0.15**. Mở [link cài](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.15/motchill/gestures/motchill-gestures.user.js) bằng Firefox đã cài Tampermonkey, rồi chọn Cài đặt/Cập nhật.
+Phiên bản **6.0.16**. Mở [link cài](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.16/motchill/gestures/motchill-gestures.user.js) bằng Firefox đã cài Tampermonkey, rồi chọn Cài đặt/Cập nhật.
 
 Xem [hướng dẫn sử dụng](../README.md). Giữ script hiện có khi cập nhật để giữ dữ liệu.
 

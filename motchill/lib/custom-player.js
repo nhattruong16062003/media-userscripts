@@ -143,9 +143,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         };
         player={root,video:media,state,command,audio:()=>({muted:media.muted,volume:media.volume}),bounds:()=>root.getBoundingClientRect(),fingerprint:()=>[media.session?.token,media.frame.src,media.state.mediaId].join('|'),tracks:()=>media.state?.tracks || {},selectTrack(group,id){if(!state().ready || !['quality','audio','captions'].includes(group) || !Number.isInteger(id) || !media.state?.tracks?.[group]?.some(item=>item.id===id))return false;media.command('track-'+group,id);return true;}};
       }else{
-        player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
+        // The bridge probe owns loading telemetry/tuning for this media. A
+        // second monitor on the presentation would capture an already-tuned
+        // value as its "native" config and undo the other monitor's rollback.
+        localState(local.video);
+        player=SharedPlayer.attachPlayer(local,{monitorLoad:false,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
         const mediaState=player.state;
-        player.state=()=>{const value=mediaState();return changing?{...value,ready:false,initializable:false}:value;};
+        player.state=()=>{const value={...mediaState(),load:probe?.video===local.video && probe.api===local.api?probe.state().load:null};return changing?{...value,ready:false,initializable:false}:value;};
       }
       const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
         audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',

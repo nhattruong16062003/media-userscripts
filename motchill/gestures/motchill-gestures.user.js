@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.15
+// @version      6.0.16
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -780,11 +780,15 @@ var SharedPlayer = (() => {
       registries.set(win, existing);
       return existing;
     }
-    const owners = /* @__PURE__ */ new WeakMap(), ObjectAPI = win.Object, original = ObjectAPI.defineProperty;
+    const owners = /* @__PURE__ */ new WeakMap(), jwOwners = /* @__PURE__ */ new Set(), doc = win.document, ObjectAPI = win.Object, original = ObjectAPI.defineProperty, originalAssign = ObjectAPI.assign;
     let observing = true, timer;
     function releaseGlobal() {
       try {
         if (ObjectAPI.defineProperty === observe) ObjectAPI.defineProperty = original;
+      } catch {
+      }
+      try {
+        if (ObjectAPI.assign === observeAssign) ObjectAPI.assign = originalAssign;
       } catch {
       }
     }
@@ -807,7 +811,7 @@ var SharedPlayer = (() => {
           const template = ObjectAPI.getOwnPropertyDescriptor(target, "template")?.value;
           if (!template || ObjectAPI.getOwnPropertyDescriptor(template, "art")?.value !== target) return result;
           const video = ObjectAPI.getOwnPropertyDescriptor(template, "$video")?.value, root = ObjectAPI.getOwnPropertyDescriptor(template, "$player")?.value;
-          if (video?.ownerDocument === win.document && video.matches("video.art-video") && root?.classList.contains("art-video-player") && root.contains(video) && typeof target.on === "function") {
+          if (video?.ownerDocument === doc && video.matches("video.art-video") && root?.classList.contains("art-video-player") && root.contains(video) && typeof target.on === "function") {
             owners.set(video, target);
             releaseGlobal();
             win.clearTimeout(timer);
@@ -817,17 +821,41 @@ var SharedPlayer = (() => {
       }
       return result;
     }
+    function observeAssign(target, ...sources) {
+      const result = Reflect.apply(originalAssign, this, [target, ...sources]);
+      if (observing && target && jwOwners.size < 8) try {
+        for (const value of sources) {
+          if (!value || ObjectAPI.getOwnPropertyDescriptor(value, "isSetup")?.value !== false) continue;
+          const model = ObjectAPI.getOwnPropertyDescriptor(value, "model")?.value, api = ObjectAPI.getOwnPropertyDescriptor(value, "api")?.value;
+          if (!model || !api || ObjectAPI.getOwnPropertyDescriptor(target, "model")?.value !== model || ObjectAPI.getOwnPropertyDescriptor(target, "api")?.value !== api) continue;
+          if (typeof model.getVideo !== "function" || typeof model.get !== "function" || typeof api.getContainer !== "function" || api.getContainer()?.ownerDocument !== doc || model.get("id") !== api.id) continue;
+          jwOwners.add({ model, api });
+          releaseGlobal();
+          win.clearTimeout(timer);
+          break;
+        }
+      } catch {
+      }
+      return result;
+    }
     const registry = { version: 1, get(video) {
       const owner = owners.get(video);
-      return owner?.template?.$video === video && !owner.isDestroy ? owner.hls : null;
+      if (owner?.template?.$video === video && !owner.isDestroy) return owner.hls;
+      for (const { model, api } of jwOwners) {
+        const provider = model.getVideo(), root = api.getContainer();
+        if (provider?.video === video && video.ownerDocument === doc && video.closest(".jwplayer") === root && root.contains(video)) return provider.hlsjs;
+      }
+      return null;
     }, stop };
     registries.set(win, registry);
     try {
       Reflect.apply(original, ObjectAPI, [win, registryKey, { value: registry, configurable: true }]);
       ObjectAPI.defineProperty = observe;
+      ObjectAPI.assign = observeAssign;
       timer = win.setTimeout(releaseGlobal, 9e4);
       win.addEventListener("pagehide", stop);
     } catch {
+      releaseGlobal();
       observing = false;
     }
     return registry;
@@ -844,17 +872,30 @@ var SharedPlayer = (() => {
 
   // shared/player/buffer-policy.js
   function hlsBufferTarget(config, bitrate) {
-    if (!(bitrate > 0) || !Number.isFinite(config.maxBufferSize) || config.maxBufferSize <= 0 || !Number.isFinite(config.maxBufferLength) || config.maxBufferLength <= 0 || !Number.isFinite(config.maxMaxBufferLength) || config.maxMaxBufferLength < config.maxBufferLength) return null;
-    return Math.min(Math.max(config.maxBufferLength, 8 * config.maxBufferSize / bitrate), config.maxMaxBufferLength);
+    if (!Number.isFinite(bitrate) || bitrate < 0 || !Number.isFinite(config.maxBufferSize) || config.maxBufferSize <= 0 || !Number.isFinite(config.maxBufferLength) || config.maxBufferLength <= 0 || !Number.isFinite(config.maxMaxBufferLength) || config.maxMaxBufferLength <= 0) return null;
+    return Math.min(bitrate ? Math.max(config.maxBufferLength, 8 * config.maxBufferSize / bitrate) : config.maxBufferLength, config.maxMaxBufferLength);
   }
-  function bufferExpansionPlan(config, bitrate, otherBufferedSeconds = 0) {
-    const native = hlsBufferTarget(config, bitrate);
+  function bufferExpansionPlan(config, bitrate, otherBufferedSeconds = 0, loadingBitrate = bitrate) {
+    if (!Number.isFinite(bitrate) || bitrate <= 0) return null;
+    const native = hlsBufferTarget(config, loadingBitrate);
     if (native === null) return null;
     if (!Number.isFinite(otherBufferedSeconds) || otherBufferedSeconds < 0) return null;
     const bytesPerSecond = bitrate * 1.15 / 8;
-    const target = Math.floor(Math.min(240, native + 60, native + 16 * 1024 * 1024 / bytesPerSecond, 96 * 1024 * 1024 / bytesPerSecond - otherBufferedSeconds));
+    const target = Math.floor(Math.min(240, native * 4, native + 16 * 1024 * 1024 / bytesPerSecond, 96 * 1024 * 1024 / bytesPerSecond - otherBufferedSeconds));
     if (target < native + 10) return null;
     return { before: { maxBufferLength: config.maxBufferLength, maxMaxBufferLength: config.maxMaxBufferLength }, after: { maxBufferLength: Math.max(config.maxBufferLength, target), maxMaxBufferLength: Math.max(config.maxMaxBufferLength, target) } };
+  }
+  function bufferExpansionStep(original, current, bitrate, otherBufferedSeconds = 0, loadingBitrate = bitrate) {
+    const plan = bufferExpansionPlan(original, bitrate, otherBufferedSeconds, loadingBitrate), now = hlsBufferTarget(current, loadingBitrate);
+    if (!plan || now === null) return null;
+    const maximum = hlsBufferTarget({ ...original, ...plan.after }, loadingBitrate), target = Math.min(maximum, Math.floor(now + 10));
+    if (target <= now) return null;
+    return { ...plan, after: { maxBufferLength: Math.max(original.maxBufferLength, target), maxMaxBufferLength: Math.max(original.maxMaxBufferLength, target) } };
+  }
+  function observedMediaBitrate(fragments) {
+    const samples = fragments.filter((s) => Number.isFinite(s.duration) && s.duration >= 0.1 && s.duration <= 60 && Number.isFinite(s.bytes) && s.bytes > 0);
+    if (samples.length < 5 || samples.reduce((n, s) => n + s.duration, 0) < 10) return null;
+    return Math.max(...samples.map((s) => s.bytes * 8 / s.duration));
   }
 
   // shared/player/buffering.js
@@ -964,7 +1005,7 @@ var SharedPlayer = (() => {
         const fragment = (_event, data) => {
           const stats = data?.stats || data?.frag?.stats, s = stats?.loading;
           if (!active() || data?.frag?.type && data.frag.type !== "main" || !s || !nonnegative(stats.loaded) || !(s.end > s.start) || s.start < since) return;
-          fragments.push({ bytes: stats.loaded, start: s.start, end: s.end });
+          fragments.push({ bytes: stats.loaded, start: s.start, end: s.end, duration: data.part ? null : data.frag?.duration });
           if (fragments.length > 32) fragments.shift();
         };
         const error = (_event, data) => {
@@ -981,6 +1022,10 @@ var SharedPlayer = (() => {
           bound.off("hlsError", error);
         };
       }
+    }
+    function bitrates() {
+      const level = engine?.levels?.[engine.currentLevel], loading = level?.maxBitrate || level?.bitrate;
+      return { loading, budget: loading > 0 ? loading : loading === 0 ? observedMediaBitrate(fragments) : null };
     }
     function snapshot(state) {
       const now = clock(), time = state.time;
@@ -1045,20 +1090,25 @@ var SharedPlayer = (() => {
           healthyFrames = false;
         }
       }
-      if (allowExpansion && enabled && engine?.constructor?.version === "1.7.3" && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && !tuning && healthyFrames && qualityBaseline && stableSince !== null && now - stableSince >= 15e3 && time - stableTime >= 12 && Number.isFinite(video.duration) && video.duration > 0) {
-        const level = engine.levels?.[engine.currentLevel], bitrate = level?.maxBitrate || level?.bitrate;
+      if (allowExpansion && enabled && ["1.6.5", "1.6.8", "1.7.3"].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && (!tuning || now - tuning.lastStep >= 15e3) && healthyFrames && qualityBaseline && stableSince !== null && now - stableSince >= 15e3 && time - stableTime >= 12 && Number.isFinite(video.duration) && video.duration > 0) {
+        const { loading: loadingBitrate, budget: bitrate } = bitrates();
         let cachedSeconds = 0;
         try {
           for (let i = 0; i < video.buffered.length; i++) cachedSeconds += video.buffered.end(i) - video.buffered.start(i);
         } catch {
           cachedSeconds = Infinity;
         }
-        const plan = bufferExpansionPlan(engine.config, bitrate, Math.max(0, cachedSeconds - ahead));
+        const original = tuning ? { ...engine.config, ...tuning.before } : engine.config;
+        const plan = bufferExpansionStep(original, engine.config, bitrate, Math.max(0, cachedSeconds - ahead), loadingBitrate);
         const measured = fragments.filter((s) => s.end >= now - 3e4), seconds = measured.reduce((n, s) => n + (s.end - s.start) / 1e3, 0), bytes = measured.reduce((n, s) => n + s.bytes, 0);
-        const native = hlsBufferTarget(engine.config, bitrate), actual = engine.streamController?.getMaxBufferLength?.(bitrate);
-        if (plan && measured.length >= 3 && seconds > 0 && bytes * 8 / seconds > bitrate * 2 && Number.isFinite(actual) && Math.abs(actual - native) < 0.01) {
+        const native = hlsBufferTarget(engine.config, loadingBitrate), actual = engine.streamController?.getMaxBufferLength?.(loadingBitrate);
+        const owned = !tuning || Object.entries(tuning.after).every(([key, value]) => engine.config[key] === value);
+        if (!owned) {
+          limited = true;
+          restore();
+        } else if (plan && measured.length >= 3 && seconds > 0 && bytes * 8 / seconds > bitrate * 2 && Number.isFinite(actual) && Math.abs(actual - native) < 0.01) {
           Object.assign(engine.config, plan.after);
-          tuning = { engine, ...plan };
+          tuning = { engine, ...plan, since: tuning?.since ?? now, lastStep: now };
           policy = "expanded";
         }
       }
@@ -1069,8 +1119,11 @@ var SharedPlayer = (() => {
         } catch {
           cached = Infinity;
         }
-        const level = engine.levels?.[engine.currentLevel], bitrate = level?.maxBitrate || level?.bitrate;
-        if (!(bitrate > 0) || cached * bitrate * 1.15 / 8 > 96 * 1024 * 1024) {
+        const { budget: bitrate } = bitrates();
+        const recent2 = fragments.filter((s) => s.start >= tuning.since && s.end >= now - 3e4).slice(-3);
+        const loadingSeconds = recent2.reduce((n, s) => n + (s.end - s.start) / 1e3, 0), loadedBytes = recent2.reduce((n, s) => n + s.bytes, 0);
+        const slow = recent2.length === 3 && loadingSeconds >= 3 && loadedBytes * 8 / loadingSeconds < bitrate * 1.25;
+        if (!(bitrate > 0) || cached * bitrate * 1.15 / 8 > 96 * 1024 * 1024 || slow) {
           limited = true;
           restore();
         }
@@ -5447,9 +5500,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
         };
         player={root,video:media,state,command,audio:()=>({muted:media.muted,volume:media.volume}),bounds:()=>root.getBoundingClientRect(),fingerprint:()=>[media.session?.token,media.frame.src,media.state.mediaId].join('|'),tracks:()=>media.state?.tracks || {},selectTrack(group,id){if(!state().ready || !['quality','audio','captions'].includes(group) || !Number.isInteger(id) || !media.state?.tracks?.[group]?.some(item=>item.id===id))return false;media.command('track-'+group,id);return true;}};
       }else{
-        player=SharedPlayer.attachPlayer(local,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
+        // The bridge probe owns loading telemetry/tuning for this media. A
+        // second monitor on the presentation would capture an already-tuned
+        // value as its "native" config and undo the other monitor's rollback.
+        localState(local.video);
+        player=SharedPlayer.attachPlayer(local,{monitorLoad:false,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(local.video)});player.nativeRoot=local.root;player.root=root;
         const mediaState=player.state;
-        player.state=()=>{const value=mediaState();return changing?{...value,ready:false,initializable:false}:value;};
+        player.state=()=>{const value={...mediaState(),load:probe?.video===local.video && probe.api===local.api?probe.state().load:null};return changing?{...value,ready:false,initializable:false}:value;};
       }
       const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
         audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
