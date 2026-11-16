@@ -3,6 +3,21 @@ import {installGestures} from './gestures.js';
 import {audioPreferenceSession} from './audio-preferences.js';
 import {validLoadMetrics,loadMetricsText} from './buffering.js';
 
+// Lock belongs to the fullscreen presentation, not to an episode's engine/UI.
+// Keep it across a source/UI rebind; a real fullscreen exit always clears it,
+// even if that exit occurs in the interval between disposing and remounting UI.
+const fullscreenLocks = new WeakMap();
+function fullscreenLockRecord(doc) {
+  let record = fullscreenLocks.get(doc);
+  if (!record) {
+    record = { scope: null, locked: false }; fullscreenLocks.set(doc, record);
+    doc.addEventListener('fullscreenchange', () => {
+      if (record.scope !== doc.fullscreenElement) { record.scope = null; record.locked = false; }
+    });
+  }
+  return record;
+}
+
 // The same approved UI talks only to the attached player's command/state API.
 export function customPlayerControls(win,player,options={}) {
   const {video,root}=player,doc=win.document,nativeRoot=player.nativeRoot || root,element=video.nodeType===1?video:null;playerUIStyle(doc);
@@ -22,6 +37,9 @@ export function customPlayerControls(win,player,options={}) {
     node.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(disposed)return;if(!locked || action==='context')actionClick(action,node);else if(action==='lock')setLocked(false);});host.append(node);return node;
   }
   let disposed=false,locked=false,chromeVisible=true,lockVisible=true,scrubbing=false,nativeOwned=false,lastReady=false,lastPaused=null,context=null,autoPlayAttempted=false;
+  const lockRecord=fullscreenLockRecord(doc);
+  const fullscreenScope=()=>inFullscreen() ? doc.fullscreenElement || root : null;
+  locked=!!fullscreenScope() && lockRecord.scope===fullscreenScope() && lockRecord.locked;
   let hideTimer=0,lockTimer=0,tipTimer=0,errorTimer=0,nextTimer=0,scrubTimer=0,nextPending=null,nextError=null;
   const audio=options.audioPreferences?audioPreferenceSession(win,player,options.audioPreferences):null;
   const savedAttributes=new Map(['controls','playsinline','webkit-playsinline'].map(name=>[name,element?.getAttribute(name) ?? null]));
@@ -68,7 +86,7 @@ export function customPlayerControls(win,player,options={}) {
   function command(action,value){try{return !!player.command(action,value);}catch{report('Không điều khiển được video này.');return false;}}
   function inFullscreen(){return options.isFullscreen?.()===true || !!doc.fullscreenElement && (doc.fullscreenElement===root || doc.fullscreenElement.contains(root));}
   function restoreNative(){if(!nativeOwned)return;nativeOwned=false;delete nativeRoot.dataset.rpCustomControls;delete nativeRoot.dataset.rpNativeChrome;delete nativeRoot.dataset.rpNativeLocked;if(element)for(const [name,value] of savedAttributes){if(value===null)element.removeAttribute(name);else element.setAttribute(name,value);}}
-  function applyChrome(){data(shell,'rpChrome',chromeVisible);data(shell,'rpLocked',locked);prop(lock,'hidden',!lastReady || !inFullscreen() || locked&&!lockVisible);if(nativeMode){const changed=nativeRoot.dataset.rpNativeChrome!==String(chromeVisible);data(nativeRoot,'rpNativeChrome',chromeVisible);data(nativeRoot,'rpNativeLocked',locked);if(changed && chromeVisible && !locked){const engine=root.querySelector('.jwplayer');engine?.classList.remove('jw-flag-user-inactive');engine?.dispatchEvent(new win.MouseEvent('mousemove',{bubbles:true}));}}}
+  function applyChrome(){lockRecord.scope=fullscreenScope();lockRecord.locked=!!lockRecord.scope && locked;data(shell,'rpChrome',chromeVisible);data(shell,'rpLocked',locked);prop(lock,'hidden',!lastReady || !inFullscreen() || locked&&!lockVisible);if(nativeMode){const changed=nativeRoot.dataset.rpNativeChrome!==String(chromeVisible);data(nativeRoot,'rpNativeChrome',chromeVisible);data(nativeRoot,'rpNativeLocked',locked);if(changed && chromeVisible && !locked){const engine=root.querySelector('.jwplayer');engine?.classList.remove('jw-flag-user-inactive');engine?.dispatchEvent(new win.MouseEvent('mousemove',{bubbles:true}));}}}
   function show(){chromeVisible=true;win.clearTimeout(hideTimer);if(!locked && !player.state().paused && settings.hidden)hideTimer=win.setTimeout(()=>{if(!scrubbing && settings.hidden){chromeVisible=false;applyChrome();}},3000);applyChrome();}
   function revealLock(){lockVisible=true;win.clearTimeout(lockTimer);lockTimer=win.setTimeout(()=>{lockVisible=false;applyChrome();},2500);applyChrome();}
   function setLocked(value){if(value && !inFullscreen())return;cancelGestures();locked=value;settings.hidden=true;win.clearTimeout(lockTimer);if(value)revealLock();else show();update();}
@@ -134,7 +152,7 @@ export function customPlayerControls(win,player,options={}) {
     text(loadDetail,hint+(metrics?' '+(metrics.bufferPolicy==='expanded'?'Đã mở rộng tải trước có giới hạn.':metrics.bufferPolicy==='limited'?'Giữ giới hạn tải để bảo vệ phát phim.':'Bộ đệm do engine quản lý.'):''));
     if(!trackSignature || !settings.hidden)updateTracks();for(const node of tracks.querySelectorAll('button'))prop(node,'disabled',!state.ready || locked);
     if(locked && !inFullscreen()){cancelGestures();locked=false;settings.hidden=true;win.clearTimeout(lockTimer);show();}
-    if(!state.ready){cancelGestures();scrubbing=false;locked=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);}
+    if(!state.ready){cancelGestures();scrubbing=false;settings.hidden=true;nextPending=null;nextError=null;win.clearTimeout(nextTimer);}
     // Readiness controls OUR UI, never whether the original controls return.
     nativeOwned=true;if(!nativeMode)data(nativeRoot,'rpCustomControls','1');if(element){if(element.controls)element.controls=false;attr(element,'playsinline','');attr(element,'webkit-playsinline','');}
     if(becameReady || lastPaused!==null && state.paused!==lastPaused)show();lastPaused=state.paused;
@@ -179,8 +197,8 @@ export function customPlayerControls(win,player,options={}) {
     win.queueMicrotask(()=>{if(disposed || locked || !player.state().ready)return;const value=player.audio?.() || {};audio?.intent(value.muted===true || value.volume===0);update();});
   };
   if(nativeMode){center.remove();chrome.remove();settings.remove();surface.remove();root.addEventListener('click',nativeClick,true);root.addEventListener('click',nativeVolume,true);root.addEventListener('pointerup',nativeVolume,true);}
-  root.append(shell);update();
-  return {shell,surface,update,setContext(value){const key=c=>c ? [c.url,c.episodeID,c.lane,c.server].join('|') : '';const oldKey=key(context);context=value;if(oldKey && oldKey!==key(value)){nextPending=null;nextError=null;win.clearTimeout(nextTimer);setLocked(false);}update();},
+  root.append(shell);update();if(locked)revealLock();
+  return {shell,surface,update,setContext(value){const key=c=>c ? [c.url,c.episodeID,c.lane,c.server].join('|') : '';const oldKey=key(context);context=value;if(oldKey && oldKey!==key(value)){nextPending=null;nextError=null;win.clearTimeout(nextTimer);cancelGestures();settings.hidden=true;if(!inFullscreen())setLocked(false);}update();},
     requestResult(status){if(status!=='navigating')finishNext(status);},
     dispose(){if(disposed)return;checkpointAudio();disposed=true;win.clearInterval(loadTimer);root.removeEventListener('click',nativeClick,true);root.removeEventListener('click',nativeVolume,true);root.removeEventListener('pointerup',nativeVolume,true);offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);doc.removeEventListener('visibilitychange',changed);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);win.removeEventListener('pagehide',checkpointAudio);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
   };

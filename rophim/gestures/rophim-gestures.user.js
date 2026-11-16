@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.16
+// @version      0.4.17
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -1778,6 +1778,21 @@ SOFTWARE.
   }
 
   // shared/player/custom-controls.js
+  var fullscreenLocks = /* @__PURE__ */ new WeakMap();
+  function fullscreenLockRecord(doc) {
+    let record = fullscreenLocks.get(doc);
+    if (!record) {
+      record = { scope: null, locked: false };
+      fullscreenLocks.set(doc, record);
+      doc.addEventListener("fullscreenchange", () => {
+        if (record.scope !== doc.fullscreenElement) {
+          record.scope = null;
+          record.locked = false;
+        }
+      });
+    }
+    return record;
+  }
   function customPlayerControls(win, player, options = {}) {
     const { video, root } = player, doc = win.document, nativeRoot = player.nativeRoot || root, element = video.nodeType === 1 ? video : null;
     playerUIStyle(doc);
@@ -1842,6 +1857,9 @@ SOFTWARE.
       return node;
     }
     let disposed = false, locked = false, chromeVisible = true, lockVisible = true, scrubbing = false, nativeOwned = false, lastReady = false, lastPaused = null, context = null, autoPlayAttempted = false;
+    const lockRecord = fullscreenLockRecord(doc);
+    const fullscreenScope = () => inFullscreen() ? doc.fullscreenElement || root : null;
+    locked = !!fullscreenScope() && lockRecord.scope === fullscreenScope() && lockRecord.locked;
     let hideTimer = 0, lockTimer = 0, tipTimer = 0, errorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
     const audio = options.audioPreferences ? audioPreferenceSession(win, player, options.audioPreferences) : null;
     const savedAttributes = new Map(["controls", "playsinline", "webkit-playsinline"].map((name) => [name, element?.getAttribute(name) ?? null]));
@@ -2008,6 +2026,8 @@ SOFTWARE.
       }
     }
     function applyChrome() {
+      lockRecord.scope = fullscreenScope();
+      lockRecord.locked = !!lockRecord.scope && locked;
       data(shell, "rpChrome", chromeVisible);
       data(shell, "rpLocked", locked);
       prop(lock, "hidden", !lastReady || !inFullscreen() || locked && !lockVisible);
@@ -2303,7 +2323,6 @@ SOFTWARE.
       if (!state.ready) {
         cancelGestures();
         scrubbing = false;
-        locked = false;
         settings.hidden = true;
         nextPending = null;
         nextError = null;
@@ -2401,6 +2420,7 @@ SOFTWARE.
     }
     root.append(shell);
     update();
+    if (locked) revealLock();
     return {
       shell,
       surface,
@@ -2413,7 +2433,9 @@ SOFTWARE.
           nextPending = null;
           nextError = null;
           win.clearTimeout(nextTimer);
-          setLocked(false);
+          cancelGestures();
+          settings.hidden = true;
+          if (!inFullscreen()) setLocked(false);
         }
         update();
       },

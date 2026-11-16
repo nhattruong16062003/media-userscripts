@@ -45,7 +45,7 @@ for(const kind of ['noads','gestures','history','source']){
   let headerMotchill=entry.slice(0,entry.indexOf('// ==/UserScript==')+'// ==/UserScript=='.length);
   const mcVersion=JSON.parse(await readFile(path.join(root,'motchill/package.json'),'utf8')).version;
   headerMotchill=metadata('motchill',kind,mcVersion,headerMotchill);
-  const libs=['sites.js','video-bridge.js',...(kind==='gestures'?['episode-machine.js','player-adapters.js','player-controller.js','next-provider-navigation.js','translations.js','custom-player.js']:[])];
+  const libs=['sites.js','video-bridge.js',...(kind==='gestures'?['history-resume.js','episode-machine.js','player-adapters.js','player-controller.js','next-provider-navigation.js','translations.js','custom-player.js']:[])];
   const body=[];
   for(const file of libs)body.push('// ---- lib/'+file+' ----\n'+(file==='sites.js'?sites:await readFile(path.join(root,'motchill/lib',file),'utf8')));
   const start=entry.indexOf('// BEGIN MOTCHILL SITES (generated)'),end=entry.indexOf('// END MOTCHILL SITES')+'// END MOTCHILL SITES'.length;

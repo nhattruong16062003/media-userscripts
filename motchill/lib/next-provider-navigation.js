@@ -32,6 +32,16 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       const matches=choices.filter(ep=>ep.server===server);if(matches.length!==1)throw new Error('Chưa có tập trên server đang chọn');
       const episode=matches[0],src=new URL('/embed/'+episode.id,original.source).href;
       if(!sites.knownEmbedPage(src))throw new Error('Nguồn nhúng chưa cấp quyền');
+      if(target.intent==='server' && !target.historySelection && sites.translationKey(server)!==sourcePage.language){
+        // Native server buttons and the translation component must apply the
+        // same saved-target policy, before warming or replacing any resource.
+        document.dispatchEvent(new Event('mc-before-server-change'));
+        const before=key(),media=currentMedia,mediaId=media?.state?.mediaId;
+        const stored=await lookupMotchillHistoryProgress({...sourcePage,...target,server,language:sites.translationKey(server),episodeKey:sites.episodeKey(route.episode)},{signal});
+        if(signal.aborted || key()!==before || currentMedia!==media || media?.state?.mediaId!==mediaId || state()?.episode.id!==original.episode.id)throw new Error('Nguồn đã đổi trong lúc đọc lịch sử');
+        if(!['found','missing','unavailable'].includes(stored.status))throw new Error('Chưa đọc được lịch sử bản dịch. Hãy thử lại');
+        if(stored.status==='found')target.resume=stored.value;
+      }
       const frame=document.createElement('iframe');frame.className=original.frame.className+' mc-native-prepared';frame.title='Chuẩn bị nguồn phim';
       frame.dataset.mcManaged='provider';frame.dataset.mcRole='prepared';frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media';frame.allowFullscreen=true;
       frame.referrerPolicy=original.frame.referrerPolicy || 'strict-origin-when-cross-origin';frame.src=src;shell.append(frame);
@@ -148,7 +158,10 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       event.preventDefault();event.stopImmediatePropagation();const server=button.dataset.mcNativeLabel || button.textContent.trim();
       if(server===source.episode.server || machine.busy)return;
       clicked=button;button.dataset.mcNativeLabel=server;
-      transitionTo({...page(),server,resume:{position:currentMedia?.currentTime,duration:currentMedia?.duration},language:sites.translationKey(server),intent:'server'},'server');return;
+      const historySelection=button.dataset.mcHistoryResume==='1';
+      // History's pending-selection flow has deliberately detached its old
+      // watcher; it restores the verified saved target after this commit.
+      transitionTo({...page(),server,historySelection,resume:historySelection?null:{position:currentMedia?.currentTime,duration:currentMedia?.duration},language:sites.translationKey(server),intent:'server'},'server');return;
     }
     const link=event.target.closest?.('a[href]');if(!link || link.closest('.mh-continue') || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button!==0 || link.target==='_blank')return;
     const target=sites.url(link.href),route=target && sites.route(target.href,sites.families.NEXT),info=page();

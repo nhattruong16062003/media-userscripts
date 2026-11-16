@@ -50,46 +50,9 @@ function startMotchillTranslations(sites, controller, options = {}) {
   }
   function lookupProgress(target) {
     if (destroyed) return Promise.resolve({ status: 'cancelled' });
-    return new Promise((resolve) => {
-      const id = crypto.randomUUID();
-      let timer, settled = false, claimed = false;
-      const cancel = () => finish({ status: 'cancelled' });
-      const finish = (result) => {
-        if (settled) return;
-        settled = true; clearTimeout(timer); pendingLookups.delete(cancel);
-        document.removeEventListener('mc-history-resume-response', response); resolve(result);
-      };
-      const received = (value) => {
-        if (value === null) return finish({ status: 'missing' });
-        if (value && Number.isFinite(value.position) && value.position >= 0 && Number.isFinite(value.duration)
-          && value.duration > 0 && value.position < value.duration) {
-          finish({ status: 'found', value: { position: value.position, duration: value.duration } });
-        } else finish({ status: 'error' });
-      };
-      const response = (event) => {
-        let result;
-        try { result = JSON.parse(event.detail); } catch (_) { return; }
-        if (result?.id !== id) return;
-        if (result.error) finish({ status: 'error' });
-        else received(result.value);
-      };
-      document.addEventListener('mc-history-resume-response', response);
-      pendingLookups.add(cancel);
-      timer = setTimeout(() => {
-        // History acknowledges synchronously, before waiting for GM storage.
-        // Older builds do not acknowledge; retain their response window and
-        // fail closed if their stylesheet exists or the page is still loading.
-        const historyPresent = claimed || document.getElementById('mh-style') || document.readyState === 'loading';
-        finish({ status: options.lookupProgress || historyPresent ? 'timeout' : 'unavailable' });
-      }, options.lookupTimeout ?? 800);
-      if (options.lookupProgress) {
-        try { Promise.resolve(options.lookupProgress(target)).then(received, () => finish({ status: 'error' })); }
-        catch (_) { finish({ status: 'error' }); }
-      } else claimed = !document.dispatchEvent(new CustomEvent('mc-history-resume-request', {
-        cancelable: true, detail: JSON.stringify({ id, info: target }),
-      }));
-    });
+    return lookupMotchillHistoryProgress(target, { ...options, pending: pendingLookups });
   }
+
   function message(text) {
     if (!component) return;
     let status = component.querySelector('.mc-translation-status');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - lịch sử xem
 // @namespace    motchill-history
-// @version      6.0.16
+// @version      6.0.17
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js
@@ -1615,6 +1615,9 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     loaded.then(async () => {
       if (storageError) return;
       poll();
+      // The server-change event saves the outgoing progress asynchronously.
+      // Wait for that journal write before reading a target-language position.
+      await queue;
       const active = currentInfo;
       const requestPageUrl = location.href;
       const target = request.info;
@@ -1711,11 +1714,16 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       }
       nativeBinding = { video: media, source, info, epoch };
     } else nativeBinding = null;
-    const key = [location.href, info.film, info.episodeKey, info.language].join('|');
+    const source = mediaIdentity(media);
+    const key = [location.href, info.film, info.episodeKey, info.language, source].join('|');
     if (media === attached && key === activeKey) return;
     detach(); attached = media; activeKey = key; currentInfo = info;
     const watchUrl = location.href;
-    detach = watch(media, info, () => attached === media && activeKey === key && location.href === watchUrl && media.isConnected && !sites.isPrepared(media) && !bridge.state()?.ad);
+    detach = watch(media, info, () => attached === media && activeKey === key && location.href === watchUrl && mediaIdentity(media) === source
+      && media.isConnected && !sites.isPrepared(media) && !bridge.state()?.ad
+      // A persistent provider publishes a new server before history's next
+      // interval. Old media listeners cannot seek/save that new translation.
+      && (!sites.nextProviderState() || sites.sameEpisode(info, sites.read())));
   }
   function watch(video, info, isActive) {
     let ready = false;
@@ -1738,7 +1746,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         restored = true;
         if (video.state) awaitingSeek = saved.position;
         video.currentTime = saved.position;
-        video.play()?.catch(() => {});
+        // Restoring a position must preserve an explicit Pause. The engine or
+        // custom Play owns playback/autoplay; history only owns the seek.
       }
     }
     function save() {

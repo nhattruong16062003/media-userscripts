@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.16
+// @version      6.0.17
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -1161,6 +1161,21 @@ var SharedPlayer = (() => {
   }
 
   // shared/player/custom-controls.js
+  var fullscreenLocks = /* @__PURE__ */ new WeakMap();
+  function fullscreenLockRecord(doc) {
+    let record = fullscreenLocks.get(doc);
+    if (!record) {
+      record = { scope: null, locked: false };
+      fullscreenLocks.set(doc, record);
+      doc.addEventListener("fullscreenchange", () => {
+        if (record.scope !== doc.fullscreenElement) {
+          record.scope = null;
+          record.locked = false;
+        }
+      });
+    }
+    return record;
+  }
   function customPlayerControls(win, player, options = {}) {
     const { video, root } = player, doc = win.document, nativeRoot = player.nativeRoot || root, element = video.nodeType === 1 ? video : null;
     playerUIStyle(doc);
@@ -1225,6 +1240,9 @@ var SharedPlayer = (() => {
       return node;
     }
     let disposed = false, locked = false, chromeVisible = true, lockVisible = true, scrubbing = false, nativeOwned = false, lastReady = false, lastPaused = null, context = null, autoPlayAttempted = false;
+    const lockRecord = fullscreenLockRecord(doc);
+    const fullscreenScope = () => inFullscreen() ? doc.fullscreenElement || root : null;
+    locked = !!fullscreenScope() && lockRecord.scope === fullscreenScope() && lockRecord.locked;
     let hideTimer = 0, lockTimer = 0, tipTimer = 0, errorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
     const audio = options.audioPreferences ? audioPreferenceSession(win, player, options.audioPreferences) : null;
     const savedAttributes = new Map(["controls", "playsinline", "webkit-playsinline"].map((name) => [name, element?.getAttribute(name) ?? null]));
@@ -1391,6 +1409,8 @@ var SharedPlayer = (() => {
       }
     }
     function applyChrome() {
+      lockRecord.scope = fullscreenScope();
+      lockRecord.locked = !!lockRecord.scope && locked;
       data(shell, "rpChrome", chromeVisible);
       data(shell, "rpLocked", locked);
       prop(lock, "hidden", !lastReady || !inFullscreen() || locked && !lockVisible);
@@ -1686,7 +1706,6 @@ var SharedPlayer = (() => {
       if (!state.ready) {
         cancelGestures();
         scrubbing = false;
-        locked = false;
         settings.hidden = true;
         nextPending = null;
         nextError = null;
@@ -1784,6 +1803,7 @@ var SharedPlayer = (() => {
     }
     root.append(shell);
     update();
+    if (locked) revealLock();
     return {
       shell,
       surface,
@@ -1796,7 +1816,9 @@ var SharedPlayer = (() => {
           nextPending = null;
           nextError = null;
           win.clearTimeout(nextTimer);
-          setLocked(false);
+          cancelGestures();
+          settings.hidden = true;
+          if (!inFullscreen()) setLocked(false);
         }
         update();
       },
@@ -3787,6 +3809,50 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
 }
 
 
+// ---- lib/history-resume.js ----
+// Both the native server row and the translation component use this contract.
+// A claimed but failed/slow history read must never become a current-time fallback.
+function lookupMotchillHistoryProgress(target, options = {}) {
+  return new Promise((resolve) => {
+    const id = crypto.randomUUID();
+    let timer, settled = false, claimed = false;
+    const cancel = () => finish({ status: 'cancelled' });
+    const finish = (result) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); options.pending?.delete(cancel);
+      document.removeEventListener('mc-history-resume-response', response);
+      options.signal?.removeEventListener('abort', cancel); resolve(result);
+    };
+    const received = (value) => {
+      if (value === null) return finish({ status: 'missing' });
+      if (value && Number.isFinite(value.position) && value.position >= 0 && Number.isFinite(value.duration)
+        && value.duration > 0 && value.position < value.duration) {
+        finish({ status: 'found', value: { position: value.position, duration: value.duration } });
+      } else finish({ status: 'error' });
+    };
+    const response = (event) => {
+      let result;
+      try { result = JSON.parse(event.detail); } catch (_) { return; }
+      if (result?.id !== id) return;
+      if (result.error) finish({ status: 'error' }); else received(result.value);
+    };
+    document.addEventListener('mc-history-resume-response', response);
+    options.pending?.add(cancel); options.signal?.addEventListener('abort', cancel, { once: true });
+    if (options.signal?.aborted) { cancel(); return; }
+    timer = setTimeout(() => {
+      const present = claimed || document.getElementById('mh-style') || document.readyState === 'loading';
+      finish({ status: options.lookupProgress || present ? 'timeout' : 'unavailable' });
+    }, options.lookupTimeout ?? 800);
+    if (options.lookupProgress) {
+      try { Promise.resolve(options.lookupProgress(target)).then(received, () => finish({ status: 'error' })); }
+      catch (_) { finish({ status: 'error' }); }
+    } else claimed = !document.dispatchEvent(new CustomEvent('mc-history-resume-request', {
+      cancelable: true, detail: JSON.stringify({ id, info: target }),
+    }));
+  });
+}
+
+
 // ---- lib/episode-machine.js ----
 // Pipeline dùng chung cho bấm tay, mốc 90 giây và ended. Hook player chỉ được
 // resolve activate sau khi đã xác nhận đúng tập, seek 0 và phát thực tế.
@@ -5029,6 +5095,16 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       const matches=choices.filter(ep=>ep.server===server);if(matches.length!==1)throw new Error('Chưa có tập trên server đang chọn');
       const episode=matches[0],src=new URL('/embed/'+episode.id,original.source).href;
       if(!sites.knownEmbedPage(src))throw new Error('Nguồn nhúng chưa cấp quyền');
+      if(target.intent==='server' && !target.historySelection && sites.translationKey(server)!==sourcePage.language){
+        // Native server buttons and the translation component must apply the
+        // same saved-target policy, before warming or replacing any resource.
+        document.dispatchEvent(new Event('mc-before-server-change'));
+        const before=key(),media=currentMedia,mediaId=media?.state?.mediaId;
+        const stored=await lookupMotchillHistoryProgress({...sourcePage,...target,server,language:sites.translationKey(server),episodeKey:sites.episodeKey(route.episode)},{signal});
+        if(signal.aborted || key()!==before || currentMedia!==media || media?.state?.mediaId!==mediaId || state()?.episode.id!==original.episode.id)throw new Error('Nguồn đã đổi trong lúc đọc lịch sử');
+        if(!['found','missing','unavailable'].includes(stored.status))throw new Error('Chưa đọc được lịch sử bản dịch. Hãy thử lại');
+        if(stored.status==='found')target.resume=stored.value;
+      }
       const frame=document.createElement('iframe');frame.className=original.frame.className+' mc-native-prepared';frame.title='Chuẩn bị nguồn phim';
       frame.dataset.mcManaged='provider';frame.dataset.mcRole='prepared';frame.allow='autoplay; fullscreen; picture-in-picture; encrypted-media';frame.allowFullscreen=true;
       frame.referrerPolicy=original.frame.referrerPolicy || 'strict-origin-when-cross-origin';frame.src=src;shell.append(frame);
@@ -5145,7 +5221,10 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       event.preventDefault();event.stopImmediatePropagation();const server=button.dataset.mcNativeLabel || button.textContent.trim();
       if(server===source.episode.server || machine.busy)return;
       clicked=button;button.dataset.mcNativeLabel=server;
-      transitionTo({...page(),server,resume:{position:currentMedia?.currentTime,duration:currentMedia?.duration},language:sites.translationKey(server),intent:'server'},'server');return;
+      const historySelection=button.dataset.mcHistoryResume==='1';
+      // History's pending-selection flow has deliberately detached its old
+      // watcher; it restores the verified saved target after this commit.
+      transitionTo({...page(),server,historySelection,resume:historySelection?null:{position:currentMedia?.currentTime,duration:currentMedia?.duration},language:sites.translationKey(server),intent:'server'},'server');return;
     }
     const link=event.target.closest?.('a[href]');if(!link || link.closest('.mh-continue') || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button!==0 || link.target==='_blank')return;
     const target=sites.url(link.href),route=target && sites.route(target.href,sites.families.NEXT),info=page();
@@ -5219,46 +5298,9 @@ function startMotchillTranslations(sites, controller, options = {}) {
   }
   function lookupProgress(target) {
     if (destroyed) return Promise.resolve({ status: 'cancelled' });
-    return new Promise((resolve) => {
-      const id = crypto.randomUUID();
-      let timer, settled = false, claimed = false;
-      const cancel = () => finish({ status: 'cancelled' });
-      const finish = (result) => {
-        if (settled) return;
-        settled = true; clearTimeout(timer); pendingLookups.delete(cancel);
-        document.removeEventListener('mc-history-resume-response', response); resolve(result);
-      };
-      const received = (value) => {
-        if (value === null) return finish({ status: 'missing' });
-        if (value && Number.isFinite(value.position) && value.position >= 0 && Number.isFinite(value.duration)
-          && value.duration > 0 && value.position < value.duration) {
-          finish({ status: 'found', value: { position: value.position, duration: value.duration } });
-        } else finish({ status: 'error' });
-      };
-      const response = (event) => {
-        let result;
-        try { result = JSON.parse(event.detail); } catch (_) { return; }
-        if (result?.id !== id) return;
-        if (result.error) finish({ status: 'error' });
-        else received(result.value);
-      };
-      document.addEventListener('mc-history-resume-response', response);
-      pendingLookups.add(cancel);
-      timer = setTimeout(() => {
-        // History acknowledges synchronously, before waiting for GM storage.
-        // Older builds do not acknowledge; retain their response window and
-        // fail closed if their stylesheet exists or the page is still loading.
-        const historyPresent = claimed || document.getElementById('mh-style') || document.readyState === 'loading';
-        finish({ status: options.lookupProgress || historyPresent ? 'timeout' : 'unavailable' });
-      }, options.lookupTimeout ?? 800);
-      if (options.lookupProgress) {
-        try { Promise.resolve(options.lookupProgress(target)).then(received, () => finish({ status: 'error' })); }
-        catch (_) { finish({ status: 'error' }); }
-      } else claimed = !document.dispatchEvent(new CustomEvent('mc-history-resume-request', {
-        cancelable: true, detail: JSON.stringify({ id, info: target }),
-      }));
-    });
+    return lookupMotchillHistoryProgress(target, { ...options, pending: pendingLookups });
   }
+
   function message(text) {
     if (!component) return;
     let status = component.querySelector('.mc-translation-status');
