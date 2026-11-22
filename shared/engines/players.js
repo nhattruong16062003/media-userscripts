@@ -97,7 +97,7 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=tru
       // Native chrome is hidden, so our Play must remain reachable before
       // metadata without authorizing gestures/seek on an unready resource.
       const item=kind==='jw'?api.getPlaylistItem?.():null,file=item?.file || item?.sources?.[0]?.file;
-      const initializable=connected && !failed && !ad && video.readyState===0 && kind==='jw' && ['idle','paused'].includes(engineState) && typeof file==='string' && /^https?:\/\//.test(file);
+      const initializable=connected && !failed && !ad && video.readyState===0 && kind==='jw' && ['idle','paused'].includes(engineState) && typeof file==='string' && /^(?:https?:\/\/|data:application\/vnd\.apple\.mpegurl;base64,)/i.test(file);
       const value={kind,failed,initializable,ready:connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time:finite(time) ? time : 0, duration:finite(duration) ? duration : 0, rate:video.playbackRate, paused:video.paused, ended:video.ended,played:video.played.length>0};
       return loadMonitor?{...value,load:loadMonitor.snapshot(value)}:value;
     } catch { return {kind,ready:false,ad:true,time:0,duration:0,rate:1,paused:true,ended:false,played:false}; }

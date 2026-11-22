@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.18
+// @version      0.4.19
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -1133,7 +1133,7 @@ SOFTWARE.
         const ad = !!isAd();
         const connected = video.isConnected && playerFingerprint(candidate) === initialSource && mediaVisible(video, video.ownerDocument.defaultView), engineState = kind === "jw" ? api.getState?.() : null, failed = !!video.error || engineState === "error";
         const item = kind === "jw" ? api.getPlaylistItem?.() : null, file = item?.file || item?.sources?.[0]?.file;
-        const initializable = connected && !failed && !ad && video.readyState === 0 && kind === "jw" && ["idle", "paused"].includes(engineState) && typeof file === "string" && /^https?:\/\//.test(file);
+        const initializable = connected && !failed && !ad && video.readyState === 0 && kind === "jw" && ["idle", "paused"].includes(engineState) && typeof file === "string" && /^(?:https?:\/\/|data:application\/vnd\.apple\.mpegurl;base64,)/i.test(file);
         const value = { kind, failed, initializable, ready: connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
         return loadMonitor ? { ...value, load: loadMonitor.snapshot(value) } : value;
       } catch {
@@ -2939,8 +2939,8 @@ SOFTWARE.
 
   // shared/bridge/ownership.js
   function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin = () => false }, start) {
-    const tag = "media-userscripts-owner-v1", doc = win.document;
-    let active = false, disposed = false, timer = 0;
+    const tag = "media-userscripts-owner-v1";
+    let active = false, disposed = false, timer = 0, blankTimer = 0, blankTicks = 0;
     const challenge = Array.from(win.crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
     const allowed = (value) => {
       try {
@@ -2949,34 +2949,64 @@ SOFTWARE.
         return false;
       }
     };
-    const parentOrigin = (() => {
+    const parentOrigin = () => {
       try {
-        return doc.referrer ? new URL(doc.referrer).origin : null;
+        return win.document.referrer ? new URL(win.document.referrer).origin : null;
       } catch {
         return null;
       }
-    })();
+    };
     const ask = () => {
-      if (!active && !disposed) win.parent.postMessage({ tag, type: "ready", family, feature, challenge }, parentOrigin || "*");
+      if (!active && !disposed) win.parent.postMessage({ tag, type: "ready", family, feature, challenge }, parentOrigin() || "*");
+    };
+    const stopBlank = () => {
+      if (blankTimer) {
+        win.clearInterval(blankTimer);
+        blankTimer = 0;
+      }
+      win.removeEventListener("DOMContentLoaded", checkLocation);
+      win.removeEventListener("load", checkLocation);
     };
     const activate = () => {
       if (active || disposed) return;
       active = true;
+      stopBlank();
       win.clearInterval(timer);
-      for (const frame of doc.querySelectorAll("iframe[src]")) if (allowed(frame.src)) frame.contentWindow?.postMessage({ tag, type: "probe", family, feature }, new URL(frame.src).origin);
+      for (const frame of win.document.querySelectorAll("iframe[src]")) if (allowed(frame.src)) frame.contentWindow?.postMessage({ tag, type: "probe", family, feature }, new URL(frame.src).origin);
       start();
+    };
+    const checkLocation = () => {
+      if (active || disposed) return stopBlank();
+      let detached = false;
+      try {
+        detached = !!(win.closed || win.frameElement && !win.frameElement.isConnected);
+      } catch {
+      }
+      if (detached) return dispose();
+      const href = win.location.href;
+      if (href === "about:blank") {
+        if (++blankTicks >= 200) dispose();
+        return;
+      }
+      stopBlank();
+      if (isSiteURL(href)) activate();
+      else if (win.parent !== win && isFrameURL2(href) && !timer) {
+        timer = win.setInterval(ask, 1e3);
+        ask();
+      }
     };
     const receive = (event) => {
       const data = event.data;
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
-      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!parentOrigin || parentOrigin === event.origin);
+      const expectedParent = parentOrigin();
+      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
       if (data.type === "probe" && !active && fromParent) {
         ask();
         return;
       }
       if (typeof data.challenge !== "string" || !/^[a-f0-9]{32}$/.test(data.challenge)) return;
       if (data.type === "ready" && active) {
-        const frame = [...doc.querySelectorAll("iframe[src]")].find((node) => node.isConnected && node.contentWindow === event.source);
+        const frame = [...win.document.querySelectorAll("iframe[src]")].find((node) => node.isConnected && node.contentWindow === event.source);
         if (!frame || !allowed(frame.src)) return;
         let origin;
         try {
@@ -2995,15 +3025,25 @@ SOFTWARE.
     else if (win.parent !== win && isFrameURL2(win.location.href)) {
       timer = win.setInterval(ask, 1e3);
       ask();
+    } else if (win.parent !== win && win.location.href === "about:blank") {
+      win.addEventListener("DOMContentLoaded", checkLocation);
+      win.addEventListener("load", checkLocation);
+      blankTimer = win.setInterval(checkLocation, 50);
     }
     const dispose = () => {
       disposed = true;
+      stopBlank();
       win.clearInterval(timer);
       win.removeEventListener("message", receive);
       win.removeEventListener("pagehide", hide);
     };
     const hide = (event) => {
-      if (!event.persisted) dispose();
+      if (event.persisted) return;
+      if (!active && blankTimer && win.location.href === "about:blank") {
+        queueMicrotask(checkLocation);
+        return;
+      }
+      dispose();
     };
     win.addEventListener("pagehide", hide);
     return { get active() {

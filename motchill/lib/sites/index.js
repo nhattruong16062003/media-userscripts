@@ -3,7 +3,7 @@
 function createMotchillSites() {
   const families = Object.freeze({
     CLASSIC: 'ophim-classic', OPHIM: 'ophim', NEXT: 'nextjs', NEXT_REVIVE: 'next-revive',
-    APIPHIM: 'apiphim', DOO: 'dooplay', MYUI: 'myui', WRAPPER: 'iframe-wrapper', UNKNOWN: 'unknown',
+    APIPHIM: 'apiphim', DOO: 'dooplay', MYUI: 'myui', CHIBIFLIX: 'chibiflix', WRAPPER: 'iframe-wrapper', UNKNOWN: 'unknown',
   });
   // Phạm vi player iframe đã khảo sát, KHÔNG phải bảng domain -> version.
   // Website đổi domain vẫn được detect() bằng DOM/asset; host player mới cần xác minh.
@@ -12,8 +12,10 @@ function createMotchillSites() {
   // below; NC currently returns a Cloudflare challenge. VSM v9 was HTTP200,
   // with the same JW player/origin.js schema as the verified v8 player.
   // Tập 35 sv-1 do người dùng cung cấp (2026-11-14) khai báo embed11.
+  // motchillv.online sv-2 (2026-11-21): player.cloudbeta.win/embed/... (JW 8.38.8).
+  // motchillfv.help (2026-11-21): embed10/15/18.streamc.xyz/embed.php (Stream Panel R25 JW 8.51.3).
   // Quyền origin riêng; không coi hostname là bằng chứng về engine bên trong.
-  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'player.cloudbeta.win', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'embed10.streamc.xyz', 'embed15.streamc.xyz', 'embed18.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
   const ROLE_ATTR = 'data-mc-role';
   const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
   // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
@@ -62,10 +64,10 @@ function createMotchillSites() {
     if (!parsed || parsed.username || parsed.password) return false;
     const paths = {
       'fcloud.live': /^\/cinema\//, 'player.phimapi.com': /^\/player\/?$/,
-      'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//,
+      'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//, 'player.cloudbeta.win': /^\/embed\//,
       'cdn.loadvid.com': /^\/videos\/play\//, 'embed13.streamc.xyz': /^\/.+/,
       'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
-      'embed11.streamc.xyz': /^\/embed\.php$/,
+      'embed11.streamc.xyz': /^\/embed\.php$/, 'embed10.streamc.xyz': /^\/embed\.php$/, 'embed15.streamc.xyz': /^\/embed\.php$/, 'embed18.streamc.xyz': /^\/embed\.php$/,
       'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
       'api.clubc.live': /^\/embed\/[1-9]\d*\/?$/,
     };
@@ -130,9 +132,19 @@ function createMotchillSites() {
     // Dẫn chứng live 2026-11-12: https://motchill.garden/intro/quan-an-dem-nhung-cau-chuyen-o-tokyo-phan-3/
     if (/\/plugins\/apiphim\/|\/themes\/xemphim\//.test(sources) || doc.querySelector('.apx-site-header')) return families.APIPHIM;
     // Dẫn chứng live: https://motchillkd.net/phim-le/allen/ (theme motchill2, DooPlay).
-    if (/\/themes\/motchill2\//.test(sources) || doc.querySelector('.dooplay_player,#dooplay_player_response')) return families.DOO;
+    // https://motchillsc.mom/ + /phim-bo/… + /tap-phim/…-tap-1 (2026-11-21): the same DooPlay 2.5
+    // under a renamed theme folder. Theme folder names are deployment choices; the
+    // contract is DooPlay's own enqueue handle on its own asset path (pathname only).
+    const dooAsset = [...doc.querySelectorAll('link#dooplay-css[href],script#dt_main_ajax-js[src]')].some((el) => {
+      const asset = url(el.getAttribute('href') || el.getAttribute('src'), pageUrl)?.pathname || '';
+      return el.id === 'dooplay-css' ? /\/themes\/[^/]+\/assets\/css\/front\.style\.min\.css$/.test(asset)
+        : /\/themes\/[^/]+\/assets\/js\/front\.ajax\.min\.js$/.test(asset);
+    });
+    if (/\/themes\/motchill2\//.test(sources) || dooAsset || doc.querySelector('.dooplay_player,#dooplay_player_response')) return families.DOO;
     // Dẫn chứng live: https://motchillv.fun/phim/thuong-cong-chua/tap-1 (Yii + MyUI).
     if (/\/themes\/motchill\/.*yii\.js/.test(sources) || doc.querySelector('.myui-header__top')) return families.MYUI;
+    // Dẫn chứng live 2026-11-21: https://motchillfv.help/ + /phim/100-ngay-lua-doi/ + /xem-phim/100-ngay-lua-doi-tap-1/?sv=vietsub-1 (theme chibiflix).
+    if (/\/themes\/chibiflix\//.test(sources) || doc.body?.classList.contains('wp-theme-chibiflix')) return families.CHIBIFLIX;
     // Dẫn chứng live: https://motchille.com.mx/phim/thuong-cong-chua-1792794601/k-tap-01
     // Domain cũ trong README: https://motchilln.fm/, https://motchillt.app/ (hiện lỗi DNS).
     const nextRuntime = /\/_next\//.test(sources) || !!doc.querySelector('#__NEXT_DATA__');
@@ -173,8 +185,9 @@ function createMotchillSites() {
       case families.NEXT: return nextAdapter(doc, pageUrl); // motchille.com.mx
       case families.NEXT_REVIVE: return reviveAdapter(doc, pageUrl); // motchill68.tv; route/schema, never hostname
       case families.APIPHIM: return apiPhimAdapter(doc, pageUrl); // motchill.garden
-      case families.DOO: return dooAdapter(doc, pageUrl); // motchillkd.net
+      case families.DOO: return dooAdapter(doc, pageUrl); // motchillkd.net, motchillsc.mom
       case families.MYUI: return myuiAdapter(doc, pageUrl); // motchillv.fun
+      case families.CHIBIFLIX: return chibiflixAdapter(doc, pageUrl); // motchillfv.help
       case families.WRAPPER: return baseAdapter(resolved, [{ selector: 'main', position: 'prepend' }, { selector: 'body', position: 'prepend' }], '', doc, pageUrl); // iframe Motchill được xác minh
       default: return baseAdapter(families.UNKNOWN, [{ selector: 'main', position: 'prepend' }, { selector: 'body', position: 'prepend' }], '', doc, pageUrl); // Không đoán source chưa biết
     }
@@ -200,6 +213,8 @@ function createMotchillSites() {
 // @include dooplay.js
 
 // @include myui.js
+
+// @include chibiflix.js
 
   function structured(doc = document) {
     const nodes = [];
@@ -240,9 +255,15 @@ function createMotchillSites() {
         match = path.match(/^\/(phim-le)\/([^/]+)\/?$/);
         if (match) return { slug: match[2], episode: 'full', path };
         // Live: https://motchillkd.net/xem-phim/tam-sinh-tam-the-thap-ly-dao-hoa-tap-1/
-        match = path.match(/^\/xem-phim\/(.+)-tap-(\d+)\/?$/);
+        // Live: https://motchillsc.mom/tap-phim/hom-nay-troi-do-mua-bong-may-tap-1 (DooPlay episodes post type).
+        match = path.match(/^\/(?:xem-phim|tap-phim)\/(.+)-tap-(\d+)\/?$/);
         if (match) return { slug: match[1], episode: 'tap-' + match[2], path };
         return null;
+      case families.CHIBIFLIX:
+        // Live: https://motchillfv.help/xem-phim/100-ngay-lua-doi-tap-1/?sv=vietsub-1
+        match = path.match(/^\/xem-phim\/(.+)-tap-(\d+|full)\/?$/i);
+        if (!match) return null;
+        return { slug: match[1], episode: match[2].toLowerCase() === 'full' ? 'full' : 'tap-' + match[2], path: path + target.search };
       default: return null;
     }
     return match ? { slug: match[1], episode: match[2], path } : null;
@@ -257,7 +278,7 @@ function createMotchillSites() {
       case families.CLASSIC:
         match = path.match(/^\/(?:xem-phim|phim)\/([^/]+)\/?$/);
         return match ? { slug: match[1], path, isWatch: false } : null;
-      case families.OPHIM: case families.NEXT: case families.NEXT_REVIVE: case families.MYUI:
+      case families.OPHIM: case families.NEXT: case families.NEXT_REVIVE: case families.MYUI: case families.CHIBIFLIX:
         match = path.match(/^\/phim\/([^/]+)\/?$/);
         return match ? { slug: match[1], path, isWatch: false } : null;
       case families.APIPHIM:
@@ -303,7 +324,7 @@ function createMotchillSites() {
         out.searchParams.set('search', q);
         return out.href;
       }
-      case families.CLASSIC: case families.OPHIM: case families.APIPHIM: case families.DOO: {
+      case families.CLASSIC: case families.OPHIM: case families.APIPHIM: case families.DOO: case families.CHIBIFLIX: {
         const out = new URL('/', base.origin);
         out.searchParams.set('s', q);
         return out.href;
@@ -341,8 +362,8 @@ function createMotchillSites() {
     const detailRsc = pages.find((p) => p.movieSlug === slug && Array.isArray(p.episodes));
     const rsc = watchRsc || (detailRsc ? { movie: {}, serverEpisodes: detailRsc.episodes } : null);
     const data = rsc?.movie || {};
-    let rawTitle = data.name || movie.name || text(doc.querySelector('h1.movie-identity__title,h1.epih1,h1.title:not(:empty),.sheader .data h1,.movie-title,.title-1,h1:not(.apiphim-ads-text):not(:empty)')) || doc.title;
-    let rawOriginal = data.origin_name || movie.alternateName || text(doc.querySelector('.movie-identity__origin,h2.real-name,h2.origtitle,h2.title2,.sheader .extra .tagline')) || '';
+    let rawTitle = data.name || movie.name || text(doc.querySelector('h1.movie-identity__title,h1.epih1,h1.title:not(:empty),.sheader .data h1,.movie-title,.title-1,.media-name')) || text(doc.querySelector('h1:not(.apiphim-ads-text):not(:empty)')) || doc.title;
+    let rawOriginal = data.origin_name || movie.alternateName || text(doc.querySelector('.movie-identity__origin,h2.real-name,h2.origtitle,h2.title2,.sheader .extra .tagline,.alias-name')) || '';
     if (family === families.OPHIM || family === families.CLASSIC) {
       // Live motchillf.im: JSON-LD appends " Motchill" to both movie names,
       // while the actual film heading/original-name link supplies clean names.
@@ -368,7 +389,9 @@ function createMotchillSites() {
     // datePublished/dateCreated thường là ngày đăng bài, KHÔNG phải năm phim.
     const nextProductionYear = family === families.NEXT ? [...doc.querySelectorAll('span')].map(text)
       .find((value) => /^Năm sản xuất:\s*(?:19|20)\d{2}$/i.test(value)) : '';
-    const yearText = data.publish_year || data.year || text(doc.querySelector('.origyear,.movie-year,.movie-identity__year,.apx-hero-fact--year,.publish-year,.sheader .date')) || nextProductionYear;
+    const chibiflixYear = family === families.CHIBIFLIX ? [...doc.querySelectorAll('.detail-more .hl-tags .tag-classic span,.hl-tags .tag-classic span')].map(text)
+      .find((value) => /^(?:19|20)\d{2}$/.test(value)) : '';
+    const yearText = data.publish_year || data.year || text(doc.querySelector('.origyear,.movie-year,.movie-identity__year,.apx-hero-fact--year,.publish-year,.sheader .date')) || nextProductionYear || chibiflixYear;
     const year = String(yearText || '').match(/\b(?:19|20)\d{2}\b/)?.[0] || extractTitleYear(rawTitle, rawOriginal);
     const season = extractSeason(cleanedTitle, rawOriginal, slug);
     const externalIds = {};
@@ -396,11 +419,13 @@ function createMotchillSites() {
     const apxId = apxPanel?.getAttribute('data-apx-server-panel');
     const apxBtn = apxId != null ? doc.querySelector(`[data-apx-server-button="${apxId}"]`) : null;
     const apxLabel = apxBtn?.getAttribute('data-apx-translation-kind') || apxBtn?.getAttribute('data-apx-server-label') || text(apxBtn);
-    const candidates = [linkEl?.closest?.('.control-box,.tab-pane')?.getAttribute('data-server'),
+    const candidates = [linkEl?.closest?.('.control-box,.tab-pane,.de-eps')?.getAttribute('data-server'),
+      text(linkEl?.querySelector?.('.ver')), url(linkEl?.getAttribute?.('href'), doc?.URL || location.href)?.searchParams.get('sv'),
       variant?.server, apxLabel, groupLabel, text(tabLabel), data?.lang, data?.language, fallbackLabel];
     return candidates.map(translationKey).find(Boolean) || '';
   }
-  function translationServers(doc, family) {
+  function translationServers(doc, family, pageUrl) {
+    if (family === families.CHIBIFLIX) return chibiflixServers(doc, pageUrl || url(doc.URL)?.href || location.href);
     if(family===families.NEXT){
       const state=nextProviderState(doc,doc.URL);
       if(state)return nextProviderButtons(doc,doc.URL).map(node=>{
@@ -451,8 +476,8 @@ function createMotchillSites() {
       return { language, label, selected, node, source };
     }).filter((entry) => entry?.language);
   }
-  function currentServerLanguage(doc, family) {
-    const choices = translationServers(doc, family);
+  function currentServerLanguage(doc, family, pageUrl) {
+    const choices = translationServers(doc, family, pageUrl);
     const selected = choices.filter((entry) => entry.selected);
     return selected.length === 1 ? selected[0].language : choices.length === 1 ? choices[0].language : '';
   }
@@ -464,13 +489,19 @@ function createMotchillSites() {
     const meta = extractMeta(family, currentRoute.slug, doc, page.href);
     const currentPath = page.pathname.replace(/\/$/, '');
     const allSelectorLinks = [...doc.querySelectorAll(selector || ':not(*)')];
-    const current = allSelectorLinks.find((a) => url(a.getAttribute('href'), page.href)?.pathname.replace(/\/$/, '') === currentPath);
+    const current = allSelectorLinks.find((a) => {
+      const target = url(a.getAttribute('href'), page.href);
+      return target && target.pathname.replace(/\/$/, '') === currentPath && target.search === page.search;
+    }) || allSelectorLinks.find((a) => {
+      const target = url(a.getAttribute('href'), page.href);
+      return target && target.pathname.replace(/\/$/, '') === currentPath && (a.classList.contains('on-air') || a.classList.contains('active'));
+    }) || allSelectorLinks.find((a) => url(a.getAttribute('href'), page.href)?.pathname.replace(/\/$/, '') === currentPath);
     const links = allSelectorLinks.filter((a) => {
       const target = url(a.getAttribute('href'), page.href);
       const other = target && target.origin === page.origin && route(target.href, family, page.href);
       return other && other.slug === currentRoute.slug;
     });
-    const siblings = current?.closest('.list-episode,.tab-pane,.apx-episode-grid,ul,.episodios') || current?.parentElement;
+    const siblings = current?.closest('.list-episode,.tab-pane,.apx-episode-grid,ul,.episodios,.de-eps,.de-type') || current?.parentElement;
     const grouped = siblings ? links.filter((a) => siblings.contains(a)) : links;
     const number = Number(episodeKey(currentRoute.episode).replace('ep:', ''));
     const next = grouped.map((a) => {
@@ -478,7 +509,7 @@ function createMotchillSites() {
       return { node: a, target, parsed: target ? route(target.href, family, page.href) : null };
     }).filter((x) => x.parsed && x.target && Number(episodeKey(x.parsed.episode).replace('ep:', '')) === number + 1)[0];
     const provider=family===families.NEXT?nextProviderState(doc,page.href):null;
-    const selectedLanguage = provider?translationKey(provider.episode.server):currentServerLanguage(doc, family);
+    const selectedLanguage = provider?translationKey(provider.episode.server):currentServerLanguage(doc, family, page.href);
     const routeVariants = meta.rsc?.episodeVariants?.filter((v) => v?.slug === currentRoute.episode) || [];
     const ambiguousLanguage = family === families.NEXT && !selectedLanguage
       && new Set(routeVariants.map((v) => translationKey(v.server)).filter(Boolean)).size > 1;
@@ -487,7 +518,8 @@ function createMotchillSites() {
     const variant = provider?.episode || !ambiguousLanguage && routeVariants.find((v) => v.slug === currentRoute.episode
       && (!selectedLanguage || translationKey(v.server) === selectedLanguage));
     const rscNext = (provider?.data.movie.episodes || meta.rsc?.serverEpisodes)?.find((v) => v && v.server === variant?.server && Number(episodeKey(v.slug).replace('ep:', '')) === number + 1 && (!provider || v.type==='m3u8'));
-    const label = variant?.name || (current ? text(current) : currentRoute.episode);
+    const epLabel = (node, fallback) => text(node?.querySelector?.('.ep-sort,.media-title')) || text(node) || fallback;
+    const label = variant?.name || (current ? epLabel(current, currentRoute.episode) : currentRoute.episode);
     const language = ambiguousLanguage ? '' : selectedLanguage || linkLanguage(current, doc, variant, meta.data, label);
     return { ...currentRoute, family, title: meta.title, originalTitle: meta.originalTitle,
       year: meta.year, season: meta.season, language, server:variant?.server || '',externalIds: meta.externalIds,
@@ -495,7 +527,7 @@ function createMotchillSites() {
       episode: label, url: page.href, next: rscNext ? {
         path: '/phim/' + currentRoute.slug + '/' + rscNext.slug, episode: rscNext.name, episodeKey: episodeKey(rscNext.slug), server:rscNext.server,language,
         url: new URL('/phim/' + currentRoute.slug + '/' + rscNext.slug, page.origin).href,
-      } : next ? { path: next.parsed.path, episode: text(next.node), episodeKey: episodeKey(next.parsed.episode), url: next.target.href } : null,
+      } : next ? { path: next.parsed.path, episode: epLabel(next.node, next.parsed.episode), episodeKey: episodeKey(next.parsed.episode), url: next.target.href } : null,
     };
   }
   function readDetail(family, selector, doc = document, pageUrl = location.href) {
@@ -529,7 +561,7 @@ function createMotchillSites() {
     for (const a of domLinks) {
       const target = url(a.getAttribute('href'), page.href);
       const other = route(target.href, resolvedFamily, page.href);
-      const epText = text(a) || other.episode;
+      const epText = text(a.querySelector?.('.ep-sort,.media-title')) || text(a) || other.episode;
       pushEp({ url: target.href, path: other.path, episode: epText, episodeKey: episodeKey(other.episode),
         language: linkLanguage(a, doc, null, meta.data, epText) });
     }
@@ -541,7 +573,7 @@ function createMotchillSites() {
           episodeKey: episodeKey(ep.slug), language: linkLanguage(null, doc, ep, meta.data, ep.name || ep.slug) });
       }
     }
-    if (watch) for (const entry of translationServers(doc, resolvedFamily)) {
+    if (watch && resolvedFamily !== families.CHIBIFLIX) for (const entry of translationServers(doc, resolvedFamily)) {
       // Server options are bound to this loaded episode. Their labels are
       // evidence for a translation, unlike a generic film-level description.
       pushEp({ url: page.href, path: watch.path, episode: watch.episode,
@@ -568,11 +600,12 @@ function createMotchillSites() {
       const detail = !watch && detailRoute(target.href, resolvedFamily, page.href);
       const parsed = watch || detail;
       if (!parsed) continue;
-      const card = a.closest('article,li,.item,.film-item,.movie-card,.apx-card,.myui-vodlist__box');
-      const rawTitle = (a.getAttribute('title') || text(a.querySelector('h2,h3,h4,.title,.name')) || text(a) || '').replace(/\s+/g, ' ').trim();
+      const card = a.closest('article,li,.item,.film-item,.movie-card,.apx-card,.myui-vodlist__box,.sw-cover,.sw-item,.h-item,.swiper-slide');
+      const rawTitle = (a.closest('.alias-title,.media-alias-title') ? '' : text(card?.querySelector('.item-title,.media-title')) || a.getAttribute('title') || text(a.querySelector('h2,h3,h4,.title,.name')) || text(a) || '').replace(/\s+/g, ' ').trim();
       const cleanedCardTitle = rawTitle.replace(/^(?:Xem\s+)?Phim\s+/i, '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').replace(/\s+(?:19|20)\d{2}$/, '').trim();
-      const cardOrig = cleanOriginal(text(card?.querySelector('.origtitle,.original-name,.sub-title')));
-      const year = extractTitleYear(rawTitle, text(card)) || '';
+      const cardOrig = cleanOriginal(text(card?.querySelector('.origtitle,.original-name,.sub-title,.alias-title,.media-alias-title')));
+      const cardTagYear = resolvedFamily === families.CHIBIFLIX ? [...(card?.querySelectorAll('.hl-tags .tag-classic span') || [])].map(text).find((value) => /^(?:19|20)\d{2}$/.test(value)) || '' : '';
+      const year = extractTitleYear(rawTitle, text(card)) || cardTagYear;
       const season = extractSeason(cleanedCardTitle, cardOrig, parsed.slug);
       const prev = items.get(target.href) || { url: target.href, path: parsed.path, slug: parsed.slug, film: filmSlug(parsed.slug),
         title: '', originalTitle: '', year: '', season: '', isWatch: !!watch,
@@ -616,10 +649,12 @@ function createMotchillSites() {
   }
   function findVideo(doc = document) {
     return [...doc.querySelectorAll('#player video,#jwplayer video,.jwplayer video,#player-wrapper video,#dooplay_player_response video,video')]
-      .find((v) => visible(v) && !isPrepared(v) && !v.closest('.jw-flag-ads,[data-ad],.ads-banner,.apx-trailer-player,#fake_jwplayer,[id*="trailer"]')) || null;
+      .find((v) => visible(v) && !isPrepared(v)
+        && !v.closest('.jw-flag-ads,[data-ad],.ads-banner,.apx-trailer-player,#fake_jwplayer,[id*="trailer"],#tvc-container,#tvc-video')
+        && !/\/wp-content\/ADS\//i.test(v.currentSrc || v.src || v.getAttribute('src') || '')) || null;
   }
   function playerFrames(doc = document, pageUrl = location.href) {
-    return [...doc.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#dooplay_player_response iframe,main iframe,iframe[allowfullscreen]')]
+    return [...doc.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#dooplay_player_response iframe,#embed-player,.player-ratio iframe,main iframe,iframe[allowfullscreen]')]
       .filter((el) => {
         const target = url(el.getAttribute('src'), pageUrl);
         return visible(el) && !isPrepared(el) && target && (isMotchill(target.hostname) || embedHosts.has(target.hostname) && (target.hostname!=='api.clubc.live' || knownEmbedPage(target.href))) && !el.closest('.ads-banner,.apx-trailer-player');

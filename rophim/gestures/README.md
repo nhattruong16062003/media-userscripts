@@ -1,5 +1,5 @@
 # RoPhim — Điều khiển trình phát
 
-Phiên bản **0.4.18**. Mở [link cài](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.18/rophim/gestures/rophim-gestures.user.js) bằng Firefox đã cài Tampermonkey, rồi chọn Cài đặt/Cập nhật.
+Phiên bản **0.4.19**. Mở [link cài](https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/v0.4.19/rophim/gestures/rophim-gestures.user.js) bằng Firefox đã cài Tampermonkey, rồi chọn Cài đặt/Cập nhật.
 
 Xem [hướng dẫn sử dụng](../README.md) và [cài trên Firefox](../docs/FIREFOX.md).

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.18
+// @version      6.0.19
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -14,12 +14,16 @@
 // @match        https://player.phimapi.com/player/*
 // @match        https://maztoycdn.xyz/watch/*
 // @match        https://player.cbplay.cc/embed/*
+// @match        https://player.cloudbeta.win/embed/*
 // @match        https://cdn.loadvid.com/videos/play/*
 // @match        https://embed13.streamc.xyz/*
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
+// @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed15.streamc.xyz/embed.php*
+// @match        https://embed18.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @match        https://api.clubc.live/embed/*
@@ -56,8 +60,8 @@
     runFamily: () => runFamily
   });
   function runFamily(win, { family, feature, isSiteURL, isFrameURL, isFrameOrigin = () => false }, start) {
-    const tag = "media-userscripts-owner-v1", doc = win.document;
-    let active = false, disposed = false, timer = 0;
+    const tag = "media-userscripts-owner-v1";
+    let active = false, disposed = false, timer = 0, blankTimer = 0, blankTicks = 0;
     const challenge = Array.from(win.crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
     const allowed = (value) => {
       try {
@@ -66,34 +70,64 @@
         return false;
       }
     };
-    const parentOrigin = (() => {
+    const parentOrigin = () => {
       try {
-        return doc.referrer ? new URL(doc.referrer).origin : null;
+        return win.document.referrer ? new URL(win.document.referrer).origin : null;
       } catch {
         return null;
       }
-    })();
+    };
     const ask = () => {
-      if (!active && !disposed) win.parent.postMessage({ tag, type: "ready", family, feature, challenge }, parentOrigin || "*");
+      if (!active && !disposed) win.parent.postMessage({ tag, type: "ready", family, feature, challenge }, parentOrigin() || "*");
+    };
+    const stopBlank = () => {
+      if (blankTimer) {
+        win.clearInterval(blankTimer);
+        blankTimer = 0;
+      }
+      win.removeEventListener("DOMContentLoaded", checkLocation);
+      win.removeEventListener("load", checkLocation);
     };
     const activate = () => {
       if (active || disposed) return;
       active = true;
+      stopBlank();
       win.clearInterval(timer);
-      for (const frame of doc.querySelectorAll("iframe[src]")) if (allowed(frame.src)) frame.contentWindow?.postMessage({ tag, type: "probe", family, feature }, new URL(frame.src).origin);
+      for (const frame of win.document.querySelectorAll("iframe[src]")) if (allowed(frame.src)) frame.contentWindow?.postMessage({ tag, type: "probe", family, feature }, new URL(frame.src).origin);
       start();
+    };
+    const checkLocation = () => {
+      if (active || disposed) return stopBlank();
+      let detached = false;
+      try {
+        detached = !!(win.closed || win.frameElement && !win.frameElement.isConnected);
+      } catch {
+      }
+      if (detached) return dispose();
+      const href = win.location.href;
+      if (href === "about:blank") {
+        if (++blankTicks >= 200) dispose();
+        return;
+      }
+      stopBlank();
+      if (isSiteURL(href)) activate();
+      else if (win.parent !== win && isFrameURL(href) && !timer) {
+        timer = win.setInterval(ask, 1e3);
+        ask();
+      }
     };
     const receive = (event) => {
       const data = event.data;
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
-      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!parentOrigin || parentOrigin === event.origin);
+      const expectedParent = parentOrigin();
+      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
       if (data.type === "probe" && !active && fromParent) {
         ask();
         return;
       }
       if (typeof data.challenge !== "string" || !/^[a-f0-9]{32}$/.test(data.challenge)) return;
       if (data.type === "ready" && active) {
-        const frame = [...doc.querySelectorAll("iframe[src]")].find((node) => node.isConnected && node.contentWindow === event.source);
+        const frame = [...win.document.querySelectorAll("iframe[src]")].find((node) => node.isConnected && node.contentWindow === event.source);
         if (!frame || !allowed(frame.src)) return;
         let origin;
         try {
@@ -112,15 +146,25 @@
     else if (win.parent !== win && isFrameURL(win.location.href)) {
       timer = win.setInterval(ask, 1e3);
       ask();
+    } else if (win.parent !== win && win.location.href === "about:blank") {
+      win.addEventListener("DOMContentLoaded", checkLocation);
+      win.addEventListener("load", checkLocation);
+      blankTimer = win.setInterval(checkLocation, 50);
     }
     const dispose = () => {
       disposed = true;
+      stopBlank();
       win.clearInterval(timer);
       win.removeEventListener("message", receive);
       win.removeEventListener("pagehide", hide);
     };
     const hide = (event) => {
-      if (!event.persisted) dispose();
+      if (event.persisted) return;
+      if (!active && blankTimer && win.location.href === "about:blank") {
+        queueMicrotask(checkLocation);
+        return;
+      }
+      dispose();
     };
     win.addEventListener("pagehide", hide);
     return { get active() {
@@ -2399,7 +2443,7 @@ var SharedPlayer = (() => {
         const ad = !!isAd();
         const connected = video.isConnected && playerFingerprint(candidate) === initialSource && mediaVisible(video, video.ownerDocument.defaultView), engineState = kind === "jw" ? api.getState?.() : null, failed = !!video.error || engineState === "error";
         const item = kind === "jw" ? api.getPlaylistItem?.() : null, file = item?.file || item?.sources?.[0]?.file;
-        const initializable = connected && !failed && !ad && video.readyState === 0 && kind === "jw" && ["idle", "paused"].includes(engineState) && typeof file === "string" && /^https?:\/\//.test(file);
+        const initializable = connected && !failed && !ad && video.readyState === 0 && kind === "jw" && ["idle", "paused"].includes(engineState) && typeof file === "string" && /^(?:https?:\/\/|data:application\/vnd\.apple\.mpegurl;base64,)/i.test(file);
         const value = { kind, failed, initializable, ready: connected && !failed && video.readyState >= 1 && finite(duration) && duration > 0 && finite(time) && !ad, ad, time: finite(time) ? time : 0, duration: finite(duration) ? duration : 0, rate: video.playbackRate, paused: video.paused, ended: video.ended, played: video.played.length > 0 };
         return loadMonitor ? { ...value, load: loadMonitor.snapshot(value) } : value;
       } catch {
@@ -2488,7 +2532,7 @@ var SharedPlayer = (() => {
 function createMotchillSites() {
   const families = Object.freeze({
     CLASSIC: 'ophim-classic', OPHIM: 'ophim', NEXT: 'nextjs', NEXT_REVIVE: 'next-revive',
-    APIPHIM: 'apiphim', DOO: 'dooplay', MYUI: 'myui', WRAPPER: 'iframe-wrapper', UNKNOWN: 'unknown',
+    APIPHIM: 'apiphim', DOO: 'dooplay', MYUI: 'myui', CHIBIFLIX: 'chibiflix', WRAPPER: 'iframe-wrapper', UNKNOWN: 'unknown',
   });
   // Phạm vi player iframe đã khảo sát, KHÔNG phải bảng domain -> version.
   // Website đổi domain vẫn được detect() bằng DOM/asset; host player mới cần xác minh.
@@ -2497,8 +2541,10 @@ function createMotchillSites() {
   // below; NC currently returns a Cloudflare challenge. VSM v9 was HTTP200,
   // with the same JW player/origin.js schema as the verified v8 player.
   // Tập 35 sv-1 do người dùng cung cấp (2026-11-14) khai báo embed11.
+  // motchillv.online sv-2 (2026-11-21): player.cloudbeta.win/embed/... (JW 8.38.8).
+  // motchillfv.help (2026-11-21): embed10/15/18.streamc.xyz/embed.php (Stream Panel R25 JW 8.51.3).
   // Quyền origin riêng; không coi hostname là bằng chứng về engine bên trong.
-  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'player.cloudbeta.win', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'embed10.streamc.xyz', 'embed15.streamc.xyz', 'embed18.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
   const ROLE_ATTR = 'data-mc-role';
   const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
   // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
@@ -2547,10 +2593,10 @@ function createMotchillSites() {
     if (!parsed || parsed.username || parsed.password) return false;
     const paths = {
       'fcloud.live': /^\/cinema\//, 'player.phimapi.com': /^\/player\/?$/,
-      'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//,
+      'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//, 'player.cloudbeta.win': /^\/embed\//,
       'cdn.loadvid.com': /^\/videos\/play\//, 'embed13.streamc.xyz': /^\/.+/,
       'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
-      'embed11.streamc.xyz': /^\/embed\.php$/,
+      'embed11.streamc.xyz': /^\/embed\.php$/, 'embed10.streamc.xyz': /^\/embed\.php$/, 'embed15.streamc.xyz': /^\/embed\.php$/, 'embed18.streamc.xyz': /^\/embed\.php$/,
       'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
       'api.clubc.live': /^\/embed\/[1-9]\d*\/?$/,
     };
@@ -2615,9 +2661,19 @@ function createMotchillSites() {
     // Dẫn chứng live 2026-11-12: https://motchill.garden/intro/quan-an-dem-nhung-cau-chuyen-o-tokyo-phan-3/
     if (/\/plugins\/apiphim\/|\/themes\/xemphim\//.test(sources) || doc.querySelector('.apx-site-header')) return families.APIPHIM;
     // Dẫn chứng live: https://motchillkd.net/phim-le/allen/ (theme motchill2, DooPlay).
-    if (/\/themes\/motchill2\//.test(sources) || doc.querySelector('.dooplay_player,#dooplay_player_response')) return families.DOO;
+    // https://motchillsc.mom/ + /phim-bo/… + /tap-phim/…-tap-1 (2026-11-21): the same DooPlay 2.5
+    // under a renamed theme folder. Theme folder names are deployment choices; the
+    // contract is DooPlay's own enqueue handle on its own asset path (pathname only).
+    const dooAsset = [...doc.querySelectorAll('link#dooplay-css[href],script#dt_main_ajax-js[src]')].some((el) => {
+      const asset = url(el.getAttribute('href') || el.getAttribute('src'), pageUrl)?.pathname || '';
+      return el.id === 'dooplay-css' ? /\/themes\/[^/]+\/assets\/css\/front\.style\.min\.css$/.test(asset)
+        : /\/themes\/[^/]+\/assets\/js\/front\.ajax\.min\.js$/.test(asset);
+    });
+    if (/\/themes\/motchill2\//.test(sources) || dooAsset || doc.querySelector('.dooplay_player,#dooplay_player_response')) return families.DOO;
     // Dẫn chứng live: https://motchillv.fun/phim/thuong-cong-chua/tap-1 (Yii + MyUI).
     if (/\/themes\/motchill\/.*yii\.js/.test(sources) || doc.querySelector('.myui-header__top')) return families.MYUI;
+    // Dẫn chứng live 2026-11-21: https://motchillfv.help/ + /phim/100-ngay-lua-doi/ + /xem-phim/100-ngay-lua-doi-tap-1/?sv=vietsub-1 (theme chibiflix).
+    if (/\/themes\/chibiflix\//.test(sources) || doc.body?.classList.contains('wp-theme-chibiflix')) return families.CHIBIFLIX;
     // Dẫn chứng live: https://motchille.com.mx/phim/thuong-cong-chua-1792794601/k-tap-01
     // Domain cũ trong README: https://motchilln.fm/, https://motchillt.app/ (hiện lỗi DNS).
     const nextRuntime = /\/_next\//.test(sources) || !!doc.querySelector('#__NEXT_DATA__');
@@ -2658,8 +2714,9 @@ function createMotchillSites() {
       case families.NEXT: return nextAdapter(doc, pageUrl); // motchille.com.mx
       case families.NEXT_REVIVE: return reviveAdapter(doc, pageUrl); // motchill68.tv; route/schema, never hostname
       case families.APIPHIM: return apiPhimAdapter(doc, pageUrl); // motchill.garden
-      case families.DOO: return dooAdapter(doc, pageUrl); // motchillkd.net
+      case families.DOO: return dooAdapter(doc, pageUrl); // motchillkd.net, motchillsc.mom
       case families.MYUI: return myuiAdapter(doc, pageUrl); // motchillv.fun
+      case families.CHIBIFLIX: return chibiflixAdapter(doc, pageUrl); // motchillfv.help
       case families.WRAPPER: return baseAdapter(resolved, [{ selector: 'main', position: 'prepend' }, { selector: 'body', position: 'prepend' }], '', doc, pageUrl); // iframe Motchill được xác minh
       default: return baseAdapter(families.UNKNOWN, [{ selector: 'main', position: 'prepend' }, { selector: 'body', position: 'prepend' }], '', doc, pageUrl); // Không đoán source chưa biết
     }
@@ -2699,6 +2756,73 @@ function createMotchillSites() {
       { selector: 'body', position: 'prepend' },
     ], 'a[href*="/phim/"]', doc, pageUrl);
   }
+  // React Flight framing, data only (never evaluated): `<hexId>:<tag><payload>`.
+  // Text (T) and binary tags carry `<hexByteLength>,` and exactly that many
+  // UTF-8 BYTES with no trailing newline; every other row ends at '\n'. Live
+  // motchill68.tv: `22:T789,<JSON-LD with Vietnamese>9:[...episodes]`. String
+  // indices are UTF-16 units, so framing is done on bytes, never on split('\n').
+  const FLIGHT_LENGTH_TAGS = new Set([84, 65, 79, 111, 85, 83, 115, 76, 108, 71, 103, 77, 109, 86]);
+  function utf8Encode(value, out) {
+    for (let i = 0; i < value.length; i++) {
+      let c = value.charCodeAt(i);
+      if (c >= 0xd800 && c < 0xdc00 && i + 1 < value.length) {
+        const low = value.charCodeAt(i + 1);
+        if (low >= 0xdc00 && low < 0xe000) { c = 0x10000 + ((c - 0xd800) << 10) + (low - 0xdc00); i++; }
+      }
+      if (c >= 0xd800 && c < 0xe000) c = 0xfffd; // lone surrogate, as TextEncoder
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | c >> 6, 0x80 | c & 63);
+      else if (c < 0x10000) out.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+      else out.push(0xf0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+    }
+  }
+  function utf8Decode(bytes, start, end) {
+    const cont = (i) => i < end && (bytes[i] & 0xc0) === 0x80;
+    let out = '', codes = [];
+    for (let i = start; i < end;) {
+      const b = bytes[i];
+      let c = 0xfffd, size = 1;
+      if (b < 0x80) c = b;
+      else if (b >= 0xc2 && b < 0xe0 && cont(i + 1)) { c = (b & 31) << 6 | bytes[i + 1] & 63; size = 2; }
+      else if (b >= 0xe0 && b < 0xf0 && cont(i + 1) && cont(i + 2)) {
+        c = (b & 15) << 12 | (bytes[i + 1] & 63) << 6 | bytes[i + 2] & 63; size = 3;
+        if (c < 0x800 || c >= 0xd800 && c < 0xe000) c = 0xfffd;
+      } else if (b >= 0xf0 && b < 0xf5 && cont(i + 1) && cont(i + 2) && cont(i + 3)) {
+        c = (b & 7) << 18 | (bytes[i + 1] & 63) << 12 | (bytes[i + 2] & 63) << 6 | bytes[i + 3] & 63; size = 4;
+        if (c < 0x10000 || c > 0x10ffff) c = 0xfffd;
+      }
+      codes.push(c); i += size;
+      if (codes.length >= 4096) { out += String.fromCodePoint(...codes); codes = []; }
+    }
+    return out + String.fromCodePoint(...codes);
+  }
+  function flightRows(bytes) {
+    const rows = new Map(), n = bytes.length;
+    const hex = (b) => b >= 48 && b <= 57 || b >= 97 && b <= 102 || b >= 65 && b <= 70;
+    const lineEnd = (from) => { let i = from; while (i < n && bytes[i] !== 10) i++; return i; };
+    let pos = 0;
+    while (pos < n) {
+      let colon = pos;
+      while (colon < n && colon - pos < 16 && hex(bytes[colon])) colon++;
+      if (colon === pos || bytes[colon] !== 58) { pos = lineEnd(pos) + 1; continue; }
+      const id = String.fromCharCode(...bytes.slice(pos, colon)), tag = bytes[colon + 1];
+      if (FLIGHT_LENGTH_TAGS.has(tag)) {
+        let cursor = colon + 2, length = 0;
+        while (cursor < n && cursor - colon - 2 < 8 && hex(bytes[cursor])) length = length * 16 + parseInt(String.fromCharCode(bytes[cursor++]), 16);
+        // Malformed header: resynchronise at the next newline like the old reader.
+        if (cursor === colon + 2 || bytes[cursor] !== 44) { pos = lineEnd(colon) + 1; continue; }
+        const start = cursor + 1, end = start + length;
+        // Incomplete record: the remaining bytes are its payload, never new rows.
+        if (end > n) break;
+        if (tag === 84) rows.set(id, utf8Decode(bytes, start, end));
+        pos = end; continue;
+      }
+      const end = lineEnd(colon + 1);
+      try { rows.set(id, JSON.parse(utf8Decode(bytes, colon + 1, end))); } catch { /* tagged/non-JSON Flight record */ }
+      pos = end + 1;
+    }
+    return rows;
+  }
   function nextData(doc = document, pageUrl = location.href) {
     const scripts = [...doc.querySelectorAll('script')].filter((s) => s.textContent.trim().startsWith('self.__next_f.push('));
     const parsedPage = url(pageUrl);
@@ -2706,23 +2830,19 @@ function createMotchillSites() {
     const cacheKey = path + ':' + scripts.length + ':' + (scripts.at(-1)?.textContent.length || 0);
     const cached = flightCache.get(doc);
     if (cached?.key === cacheKey) return cached.pages;
-    const pages = [], rows=new Map();
-    let stream='';
+    const pages = [], bytes = [];
     for (const script of scripts) {
       try {
         const arg = script.textContent.trim().slice('self.__next_f.push('.length).replace(/\);?\s*$/, '');
-        const chunk = JSON.parse(arg)[1];
-        if (typeof chunk !== 'string') continue;
-        stream+=chunk;
+        const entry = JSON.parse(arg);
+        // Next.js inline RSC: [1,text] and [3,base64 bytes] are parts of ONE byte
+        // stream; [0] bootstrap and [2] form state are not Flight rows.
+        if (!Array.isArray(entry) || typeof entry[1] !== 'string') continue;
+        if (entry[0] === 1) utf8Encode(entry[1], bytes);
+        else if (entry[0] === 3) { const binary = atob(entry[1]); for (let i = 0; i < binary.length; i++) bytes.push(binary.charCodeAt(i)); }
       } catch (e) { /* script khác */ }
     }
-    for (const line of stream.split('\n')) {
-          const index = line.indexOf(':');
-          if (index < 0) continue;
-          const id=line.slice(0,index);
-          if(!/^[a-f\d]+$/i.test(id))continue;
-          try{rows.set(id,JSON.parse(line.slice(index+1)));}catch{/* non-JSON Flight record */}
-    }
+    const rows = flightRows(bytes);
     // Flight references are data paths, never JavaScript. Resolve only existing
     // own properties, with cycle/depth and work bounds for malformed streams.
     let budget=100000;
@@ -2916,7 +3036,7 @@ function createMotchillSites() {
       { selector: '#contenedor', position: 'prepend' },
       { selector: 'main', position: 'prepend' },
       { selector: 'body', position: 'prepend' },
-    ], '.episodiotitle a[href],.episodios a[href],a[href*="/xem-phim/"]', doc, pageUrl);
+    ], '.episodiotitle a[href],.episodios a[href],a[href*="/xem-phim/"],a[href*="/tap-phim/"]', doc, pageUrl);
   }
 
 
@@ -2929,6 +3049,61 @@ function createMotchillSites() {
       { selector: 'main', position: 'prepend' },
       { selector: 'body', position: 'prepend' },
     ], '#servers-container .tab-pane.active a[href],.myui-content__list a[href]', doc, pageUrl);
+  }
+
+
+/* adapter:chibiflix.js */
+  function chibiflixAdapter(doc, pageUrl) {
+    // Live 2026-11-21: https://motchillfv.help/ + /phim/100-ngay-lua-doi/ + /xem-phim/100-ngay-lua-doi-tap-1/?sv=vietsub-1
+    return baseAdapter(families.CHIBIFLIX, [
+      { selector: '#wrapper .row-content', position: 'before' },
+      { selector: '#wrapper .fluid-gap', position: 'prepend' },
+      { selector: '#wrapper', position: 'prepend' },
+      { selector: 'main', position: 'prepend' },
+      { selector: 'body', position: 'prepend' },
+    ], '#episodes-list .de-eps[data-server] a.item[href],#episodes-list .de-type a.item[href],.de-eps[data-server] a.item[href],.de-type a.item[href]', doc, pageUrl);
+  }
+  function chibiflixServers(doc = document, pageUrl = url(doc.URL)?.href || location.href) {
+    const page = url(pageUrl, location.href);
+    const currentRoute = page ? route(page.href, families.CHIBIFLIX, page.href) : null;
+    const currentKey = currentRoute ? episodeKey(currentRoute.episode) : '';
+    const activeSv = page?.searchParams.get('sv') || '';
+    const boxes = [...doc.querySelectorAll('.de-eps[data-server]')];
+    if (boxes.length) {
+      const items = boxes.map((box) => {
+        const serverId = box.getAttribute('data-server') || '';
+        const tab = [...doc.querySelectorAll('.v-tabs-min .nav-link[data-server]')].find((el) => el.getAttribute('data-server') === serverId);
+        const links = [...box.querySelectorAll('a.item[href]')];
+        const epLink = (currentKey && links.find((a) => {
+          const target = url(a.getAttribute('href'), page?.href);
+          const parsed = target && route(target.href, families.CHIBIFLIX, page?.href);
+          return parsed && parsed.slug === currentRoute.slug && episodeKey(parsed.episode) === currentKey;
+        })) || links.find((a) => a.classList.contains('on-air') || a.classList.contains('active')) || null;
+        const label = text(tab) || serverId;
+        const language = translationKey(label) || translationKey(serverId);
+        return { node: epLink || tab || box, serverId, tab, epLink, label, language, source: '' };
+      }).filter((entry) => entry.language);
+      const hasSvMatch = !!activeSv && items.some((entry) => entry.serverId === activeSv);
+      const hasOnAir = items.some((entry) => entry.epLink?.classList.contains('on-air') || entry.epLink?.classList.contains('active'));
+      return items.map(({ node, serverId, tab, epLink, label, language, source }) => ({
+        node, label, language, source,
+        selected: hasSvMatch ? serverId === activeSv
+          : hasOnAir ? !!(epLink?.classList.contains('on-air') || epLink?.classList.contains('active'))
+          : !!tab?.classList.contains('active'),
+      }));
+    }
+    const movies = [...doc.querySelectorAll('#episodes-list .de-type a.item[href],.de-type a.item[href]')].map((a) => {
+      const target = url(a.getAttribute('href'), page?.href);
+      const sv = target?.searchParams.get('sv') || '';
+      const label = text(a.querySelector('.ver')) || sv || text(a);
+      const language = translationKey(label) || translationKey(sv);
+      return { node: a, sv, label, language, source: '' };
+    }).filter((entry) => entry.language);
+    const hasSvMatch = !!activeSv && movies.some((entry) => entry.sv === activeSv);
+    return movies.map(({ node, sv, label, language, source }) => ({
+      node, label, language, source,
+      selected: hasSvMatch ? sv === activeSv : node.classList.contains('active') || node.classList.contains('on-air'),
+    }));
   }
 
 
@@ -2971,9 +3146,15 @@ function createMotchillSites() {
         match = path.match(/^\/(phim-le)\/([^/]+)\/?$/);
         if (match) return { slug: match[2], episode: 'full', path };
         // Live: https://motchillkd.net/xem-phim/tam-sinh-tam-the-thap-ly-dao-hoa-tap-1/
-        match = path.match(/^\/xem-phim\/(.+)-tap-(\d+)\/?$/);
+        // Live: https://motchillsc.mom/tap-phim/hom-nay-troi-do-mua-bong-may-tap-1 (DooPlay episodes post type).
+        match = path.match(/^\/(?:xem-phim|tap-phim)\/(.+)-tap-(\d+)\/?$/);
         if (match) return { slug: match[1], episode: 'tap-' + match[2], path };
         return null;
+      case families.CHIBIFLIX:
+        // Live: https://motchillfv.help/xem-phim/100-ngay-lua-doi-tap-1/?sv=vietsub-1
+        match = path.match(/^\/xem-phim\/(.+)-tap-(\d+|full)\/?$/i);
+        if (!match) return null;
+        return { slug: match[1], episode: match[2].toLowerCase() === 'full' ? 'full' : 'tap-' + match[2], path: path + target.search };
       default: return null;
     }
     return match ? { slug: match[1], episode: match[2], path } : null;
@@ -2988,7 +3169,7 @@ function createMotchillSites() {
       case families.CLASSIC:
         match = path.match(/^\/(?:xem-phim|phim)\/([^/]+)\/?$/);
         return match ? { slug: match[1], path, isWatch: false } : null;
-      case families.OPHIM: case families.NEXT: case families.NEXT_REVIVE: case families.MYUI:
+      case families.OPHIM: case families.NEXT: case families.NEXT_REVIVE: case families.MYUI: case families.CHIBIFLIX:
         match = path.match(/^\/phim\/([^/]+)\/?$/);
         return match ? { slug: match[1], path, isWatch: false } : null;
       case families.APIPHIM:
@@ -3034,7 +3215,7 @@ function createMotchillSites() {
         out.searchParams.set('search', q);
         return out.href;
       }
-      case families.CLASSIC: case families.OPHIM: case families.APIPHIM: case families.DOO: {
+      case families.CLASSIC: case families.OPHIM: case families.APIPHIM: case families.DOO: case families.CHIBIFLIX: {
         const out = new URL('/', base.origin);
         out.searchParams.set('s', q);
         return out.href;
@@ -3072,8 +3253,8 @@ function createMotchillSites() {
     const detailRsc = pages.find((p) => p.movieSlug === slug && Array.isArray(p.episodes));
     const rsc = watchRsc || (detailRsc ? { movie: {}, serverEpisodes: detailRsc.episodes } : null);
     const data = rsc?.movie || {};
-    let rawTitle = data.name || movie.name || text(doc.querySelector('h1.movie-identity__title,h1.epih1,h1.title:not(:empty),.sheader .data h1,.movie-title,.title-1,h1:not(.apiphim-ads-text):not(:empty)')) || doc.title;
-    let rawOriginal = data.origin_name || movie.alternateName || text(doc.querySelector('.movie-identity__origin,h2.real-name,h2.origtitle,h2.title2,.sheader .extra .tagline')) || '';
+    let rawTitle = data.name || movie.name || text(doc.querySelector('h1.movie-identity__title,h1.epih1,h1.title:not(:empty),.sheader .data h1,.movie-title,.title-1,.media-name')) || text(doc.querySelector('h1:not(.apiphim-ads-text):not(:empty)')) || doc.title;
+    let rawOriginal = data.origin_name || movie.alternateName || text(doc.querySelector('.movie-identity__origin,h2.real-name,h2.origtitle,h2.title2,.sheader .extra .tagline,.alias-name')) || '';
     if (family === families.OPHIM || family === families.CLASSIC) {
       // Live motchillf.im: JSON-LD appends " Motchill" to both movie names,
       // while the actual film heading/original-name link supplies clean names.
@@ -3099,7 +3280,9 @@ function createMotchillSites() {
     // datePublished/dateCreated thường là ngày đăng bài, KHÔNG phải năm phim.
     const nextProductionYear = family === families.NEXT ? [...doc.querySelectorAll('span')].map(text)
       .find((value) => /^Năm sản xuất:\s*(?:19|20)\d{2}$/i.test(value)) : '';
-    const yearText = data.publish_year || data.year || text(doc.querySelector('.origyear,.movie-year,.movie-identity__year,.apx-hero-fact--year,.publish-year,.sheader .date')) || nextProductionYear;
+    const chibiflixYear = family === families.CHIBIFLIX ? [...doc.querySelectorAll('.detail-more .hl-tags .tag-classic span,.hl-tags .tag-classic span')].map(text)
+      .find((value) => /^(?:19|20)\d{2}$/.test(value)) : '';
+    const yearText = data.publish_year || data.year || text(doc.querySelector('.origyear,.movie-year,.movie-identity__year,.apx-hero-fact--year,.publish-year,.sheader .date')) || nextProductionYear || chibiflixYear;
     const year = String(yearText || '').match(/\b(?:19|20)\d{2}\b/)?.[0] || extractTitleYear(rawTitle, rawOriginal);
     const season = extractSeason(cleanedTitle, rawOriginal, slug);
     const externalIds = {};
@@ -3127,11 +3310,13 @@ function createMotchillSites() {
     const apxId = apxPanel?.getAttribute('data-apx-server-panel');
     const apxBtn = apxId != null ? doc.querySelector(`[data-apx-server-button="${apxId}"]`) : null;
     const apxLabel = apxBtn?.getAttribute('data-apx-translation-kind') || apxBtn?.getAttribute('data-apx-server-label') || text(apxBtn);
-    const candidates = [linkEl?.closest?.('.control-box,.tab-pane')?.getAttribute('data-server'),
+    const candidates = [linkEl?.closest?.('.control-box,.tab-pane,.de-eps')?.getAttribute('data-server'),
+      text(linkEl?.querySelector?.('.ver')), url(linkEl?.getAttribute?.('href'), doc?.URL || location.href)?.searchParams.get('sv'),
       variant?.server, apxLabel, groupLabel, text(tabLabel), data?.lang, data?.language, fallbackLabel];
     return candidates.map(translationKey).find(Boolean) || '';
   }
-  function translationServers(doc, family) {
+  function translationServers(doc, family, pageUrl) {
+    if (family === families.CHIBIFLIX) return chibiflixServers(doc, pageUrl || url(doc.URL)?.href || location.href);
     if(family===families.NEXT){
       const state=nextProviderState(doc,doc.URL);
       if(state)return nextProviderButtons(doc,doc.URL).map(node=>{
@@ -3182,8 +3367,8 @@ function createMotchillSites() {
       return { language, label, selected, node, source };
     }).filter((entry) => entry?.language);
   }
-  function currentServerLanguage(doc, family) {
-    const choices = translationServers(doc, family);
+  function currentServerLanguage(doc, family, pageUrl) {
+    const choices = translationServers(doc, family, pageUrl);
     const selected = choices.filter((entry) => entry.selected);
     return selected.length === 1 ? selected[0].language : choices.length === 1 ? choices[0].language : '';
   }
@@ -3195,13 +3380,19 @@ function createMotchillSites() {
     const meta = extractMeta(family, currentRoute.slug, doc, page.href);
     const currentPath = page.pathname.replace(/\/$/, '');
     const allSelectorLinks = [...doc.querySelectorAll(selector || ':not(*)')];
-    const current = allSelectorLinks.find((a) => url(a.getAttribute('href'), page.href)?.pathname.replace(/\/$/, '') === currentPath);
+    const current = allSelectorLinks.find((a) => {
+      const target = url(a.getAttribute('href'), page.href);
+      return target && target.pathname.replace(/\/$/, '') === currentPath && target.search === page.search;
+    }) || allSelectorLinks.find((a) => {
+      const target = url(a.getAttribute('href'), page.href);
+      return target && target.pathname.replace(/\/$/, '') === currentPath && (a.classList.contains('on-air') || a.classList.contains('active'));
+    }) || allSelectorLinks.find((a) => url(a.getAttribute('href'), page.href)?.pathname.replace(/\/$/, '') === currentPath);
     const links = allSelectorLinks.filter((a) => {
       const target = url(a.getAttribute('href'), page.href);
       const other = target && target.origin === page.origin && route(target.href, family, page.href);
       return other && other.slug === currentRoute.slug;
     });
-    const siblings = current?.closest('.list-episode,.tab-pane,.apx-episode-grid,ul,.episodios') || current?.parentElement;
+    const siblings = current?.closest('.list-episode,.tab-pane,.apx-episode-grid,ul,.episodios,.de-eps,.de-type') || current?.parentElement;
     const grouped = siblings ? links.filter((a) => siblings.contains(a)) : links;
     const number = Number(episodeKey(currentRoute.episode).replace('ep:', ''));
     const next = grouped.map((a) => {
@@ -3209,7 +3400,7 @@ function createMotchillSites() {
       return { node: a, target, parsed: target ? route(target.href, family, page.href) : null };
     }).filter((x) => x.parsed && x.target && Number(episodeKey(x.parsed.episode).replace('ep:', '')) === number + 1)[0];
     const provider=family===families.NEXT?nextProviderState(doc,page.href):null;
-    const selectedLanguage = provider?translationKey(provider.episode.server):currentServerLanguage(doc, family);
+    const selectedLanguage = provider?translationKey(provider.episode.server):currentServerLanguage(doc, family, page.href);
     const routeVariants = meta.rsc?.episodeVariants?.filter((v) => v?.slug === currentRoute.episode) || [];
     const ambiguousLanguage = family === families.NEXT && !selectedLanguage
       && new Set(routeVariants.map((v) => translationKey(v.server)).filter(Boolean)).size > 1;
@@ -3218,7 +3409,8 @@ function createMotchillSites() {
     const variant = provider?.episode || !ambiguousLanguage && routeVariants.find((v) => v.slug === currentRoute.episode
       && (!selectedLanguage || translationKey(v.server) === selectedLanguage));
     const rscNext = (provider?.data.movie.episodes || meta.rsc?.serverEpisodes)?.find((v) => v && v.server === variant?.server && Number(episodeKey(v.slug).replace('ep:', '')) === number + 1 && (!provider || v.type==='m3u8'));
-    const label = variant?.name || (current ? text(current) : currentRoute.episode);
+    const epLabel = (node, fallback) => text(node?.querySelector?.('.ep-sort,.media-title')) || text(node) || fallback;
+    const label = variant?.name || (current ? epLabel(current, currentRoute.episode) : currentRoute.episode);
     const language = ambiguousLanguage ? '' : selectedLanguage || linkLanguage(current, doc, variant, meta.data, label);
     return { ...currentRoute, family, title: meta.title, originalTitle: meta.originalTitle,
       year: meta.year, season: meta.season, language, server:variant?.server || '',externalIds: meta.externalIds,
@@ -3226,7 +3418,7 @@ function createMotchillSites() {
       episode: label, url: page.href, next: rscNext ? {
         path: '/phim/' + currentRoute.slug + '/' + rscNext.slug, episode: rscNext.name, episodeKey: episodeKey(rscNext.slug), server:rscNext.server,language,
         url: new URL('/phim/' + currentRoute.slug + '/' + rscNext.slug, page.origin).href,
-      } : next ? { path: next.parsed.path, episode: text(next.node), episodeKey: episodeKey(next.parsed.episode), url: next.target.href } : null,
+      } : next ? { path: next.parsed.path, episode: epLabel(next.node, next.parsed.episode), episodeKey: episodeKey(next.parsed.episode), url: next.target.href } : null,
     };
   }
   function readDetail(family, selector, doc = document, pageUrl = location.href) {
@@ -3260,7 +3452,7 @@ function createMotchillSites() {
     for (const a of domLinks) {
       const target = url(a.getAttribute('href'), page.href);
       const other = route(target.href, resolvedFamily, page.href);
-      const epText = text(a) || other.episode;
+      const epText = text(a.querySelector?.('.ep-sort,.media-title')) || text(a) || other.episode;
       pushEp({ url: target.href, path: other.path, episode: epText, episodeKey: episodeKey(other.episode),
         language: linkLanguage(a, doc, null, meta.data, epText) });
     }
@@ -3272,7 +3464,7 @@ function createMotchillSites() {
           episodeKey: episodeKey(ep.slug), language: linkLanguage(null, doc, ep, meta.data, ep.name || ep.slug) });
       }
     }
-    if (watch) for (const entry of translationServers(doc, resolvedFamily)) {
+    if (watch && resolvedFamily !== families.CHIBIFLIX) for (const entry of translationServers(doc, resolvedFamily)) {
       // Server options are bound to this loaded episode. Their labels are
       // evidence for a translation, unlike a generic film-level description.
       pushEp({ url: page.href, path: watch.path, episode: watch.episode,
@@ -3299,11 +3491,12 @@ function createMotchillSites() {
       const detail = !watch && detailRoute(target.href, resolvedFamily, page.href);
       const parsed = watch || detail;
       if (!parsed) continue;
-      const card = a.closest('article,li,.item,.film-item,.movie-card,.apx-card,.myui-vodlist__box');
-      const rawTitle = (a.getAttribute('title') || text(a.querySelector('h2,h3,h4,.title,.name')) || text(a) || '').replace(/\s+/g, ' ').trim();
+      const card = a.closest('article,li,.item,.film-item,.movie-card,.apx-card,.myui-vodlist__box,.sw-cover,.sw-item,.h-item,.swiper-slide');
+      const rawTitle = (a.closest('.alias-title,.media-alias-title') ? '' : text(card?.querySelector('.item-title,.media-title')) || a.getAttribute('title') || text(a.querySelector('h2,h3,h4,.title,.name')) || text(a) || '').replace(/\s+/g, ' ').trim();
       const cleanedCardTitle = rawTitle.replace(/^(?:Xem\s+)?Phim\s+/i, '').replace(/\s*\(\s*(?:19|20)\d{2}\s*\)\s*$/, '').replace(/\s+(?:19|20)\d{2}$/, '').trim();
-      const cardOrig = cleanOriginal(text(card?.querySelector('.origtitle,.original-name,.sub-title')));
-      const year = extractTitleYear(rawTitle, text(card)) || '';
+      const cardOrig = cleanOriginal(text(card?.querySelector('.origtitle,.original-name,.sub-title,.alias-title,.media-alias-title')));
+      const cardTagYear = resolvedFamily === families.CHIBIFLIX ? [...(card?.querySelectorAll('.hl-tags .tag-classic span') || [])].map(text).find((value) => /^(?:19|20)\d{2}$/.test(value)) || '' : '';
+      const year = extractTitleYear(rawTitle, text(card)) || cardTagYear;
       const season = extractSeason(cleanedCardTitle, cardOrig, parsed.slug);
       const prev = items.get(target.href) || { url: target.href, path: parsed.path, slug: parsed.slug, film: filmSlug(parsed.slug),
         title: '', originalTitle: '', year: '', season: '', isWatch: !!watch,
@@ -3347,10 +3540,12 @@ function createMotchillSites() {
   }
   function findVideo(doc = document) {
     return [...doc.querySelectorAll('#player video,#jwplayer video,.jwplayer video,#player-wrapper video,#dooplay_player_response video,video')]
-      .find((v) => visible(v) && !isPrepared(v) && !v.closest('.jw-flag-ads,[data-ad],.ads-banner,.apx-trailer-player,#fake_jwplayer,[id*="trailer"]')) || null;
+      .find((v) => visible(v) && !isPrepared(v)
+        && !v.closest('.jw-flag-ads,[data-ad],.ads-banner,.apx-trailer-player,#fake_jwplayer,[id*="trailer"],#tvc-container,#tvc-video')
+        && !/\/wp-content\/ADS\//i.test(v.currentSrc || v.src || v.getAttribute('src') || '')) || null;
   }
   function playerFrames(doc = document, pageUrl = location.href) {
-    return [...doc.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#dooplay_player_response iframe,main iframe,iframe[allowfullscreen]')]
+    return [...doc.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#dooplay_player_response iframe,#embed-player,.player-ratio iframe,main iframe,iframe[allowfullscreen]')]
       .filter((el) => {
         const target = url(el.getAttribute('src'), pageUrl);
         return visible(el) && !isPrepared(el) && target && (isMotchill(target.hostname) || embedHosts.has(target.hostname) && (target.hostname!=='api.clubc.live' || knownEmbedPage(target.href))) && !el.closest('.ads-banner,.apx-trailer-player');
@@ -3438,7 +3633,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   const providerIdentity=value=>value && typeof value.id==='string' && /^[1-9]\d*$/.test(value.id) && typeof value.movieId==='string' && /^[1-9]\d*$/.test(value.movieId) && Number.isSafeInteger(value.season) && value.season>=1 && value.season<=1000 && typeof value.server==='string' && value.server.length<200 && sites.translationKey(value.server) ? {id:value.id,movieId:value.movieId,season:value.season,server:value.server}:null;
   function readParentContext(value,origin){
     const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
-    if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !sites.translationKey(value.language))return null;
+    const validLanguage=value?.language==='' || !!sites.translationKey(value?.language);
+    if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !validLanguage)return null;
     const result=Object.fromEntries(['url','family','slug','film','episode','episodeKey','language','server'].map(key=>[key,String(value[key] || '').slice(0,2048)]));
     if(Number.isFinite(value.introSeconds) && value.introSeconds>=0 && value.introSeconds<=300)result.introSeconds=value.introSeconds;
     const next=sites.url(value.next?.url),nextRoute=next && sites.route(next.href,result.family);
@@ -3473,9 +3669,13 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   }
   function hello(frame, session) {
     const currentRole = documentRole();
+    const ownContext = sites.adapter().read();
+    const context = ownContext ? { ...ownContext, introSeconds: options.introSeconds?.() } : parentContext;
     frame.contentWindow?.postMessage({ tag: channel, type: 'hello', token: session.token,
       managed: ['episode','provider'].includes(frame.dataset.mcManaged) || managed,
-      role: session.assignedRole || frame.dataset.mcRole || currentRole,presented:!sites.isPrepared(frame),context:{...sites.adapter().read(),introSeconds:options.introSeconds?.()},fullscreen:!!document.fullscreenElement?.contains(frame) }, session.origin);
+      role: session.assignedRole || frame.dataset.mcRole || currentRole,
+      presented: parentPresented && !sites.isPrepared(frame), context,
+      fullscreen: Boolean(document.fullscreenElement?.contains(frame) || parentFullscreen) }, session.origin);
   }
   function openSession(frame,origin){
     const previous=sessions.get(frame);if(previous?.loaded)frame.removeEventListener('load',previous.loaded);
@@ -3622,6 +3822,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
           for (const frame of frames()) setRole(frame, role);
           document.dispatchEvent(new CustomEvent('mc-player-role', { detail: { role, managed } }));
         }
+        options.onHello?.();
         sendState();
       }
       if (data.type === 'role' && upstream?.token === data.token && data.managed && ['prepared', 'current'].includes(data.role)) {
@@ -3631,11 +3832,16 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       }
       if (data.type === 'command' && upstream?.token === data.token) {
         if(data.action==='play-audible' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared'))return;
+        if(data.action==='initialize-play-audible' && documentRole()==='prepared')return;
         if(data.action==='restore-audio' && (typeof data.mediaId!=='string' || !data.mediaId || documentRole()==='prepared' || typeof data.value?.muted!=='boolean' || !Number.isFinite(data.value?.volume) || data.value.volume<0 || data.value.volume>1))return;
         const video = sites.findVideo();
         observeLocal(video);
         if (!video) {const relay=relayRemote();if(data.mediaId && data.mediaId!==relay?.state?.mediaId)return;return relay?.command(data.action,data.value);}
         if(data.mediaId && data.mediaId!==(video.currentSrc || video.src || ''))return;
+        if(data.action==='initialize-play-audible'){
+          if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState!==0)return;
+          options.initializePlayAudible?.(video);return;
+        }
         if(data.action==='play-audible'){
           if(video.closest('.jw-flag-ads,[data-ad]') || video.error || video.readyState<1)return;
           options.playAudible?.(video);return;
@@ -3690,7 +3896,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     if(data.type==='intro-episode'){
       const receiver=validRemote(frame);
       if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state.localPresentation || receiver.state.ad || receiver.state.changing || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || Date.now()-(session.lastIntro || 0)<500)return;
-      session.lastIntro=Date.now();options.onIntro?.();return;
+      session.lastIntro=Date.now();if(upstream)requestIntro();else options.onIntro?.();return;
     }
     if(data.type==='replace-result'){
       const request=replacementRequests.get(data.id);
@@ -3699,7 +3905,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     }
     if(data.type==='next-episode'){
       const receiver=validRemote(frame);
-      if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !receiver?.state?.nativeEnhanced || !receiver.state.customCapable || receiver.state.ad || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || session.nextPending)return;
+      if(!session || data.token!==session.token || session.src!==frame.src || session.origin!==event.origin || !(receiver?.state?.nativeEnhanced || receiver?.state?.localPresentation) || !receiver.state.customCapable || receiver.state.ad || frame.dataset.mcRole==='prepared' || receiver.state.role==='prepared' || !data.mediaId || data.mediaId!==receiver.state.mediaId || typeof data.id!=='string' || !/^[a-f0-9-]{16,100}$/.test(data.id) || session.nextPending)return;
       const currentSession=session;session.nextPending=true;
       Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
         if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId && ok!==true && ok!=='navigating')return;
@@ -3738,7 +3944,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const items=value.tracks?.[group];
       if(Array.isArray(items) && items.length<=100 && items.every(item=>item && Number.isInteger(item.id) && item.id>=0 && item.id<100 && typeof item.label==='string' && item.label.length<=100 && typeof item.active==='boolean'))tracks[group]=items.map(({id,label,active})=>({id,label,active}));
     }
-    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,played:value.played===true,tracks,
+    value = { ...value, mediaSource: mediaSource(value.mediaSource),nativeEnhanced:value.nativeEnhanced===true,customCapable:value.customCapable===true,initializable:value.initializable===true,played:value.played===true,tracks,
       localPresentation:value.localPresentation===true,playlist:channel==='motchill-player-controls-v2' && typeof SharedPlayer!=='undefined'?SharedPlayer.mediaPlaylist(value.playlist):null,provider:providerIdentity(value.provider),changing:value.changing===true };
     // Generic player chỉ có quyền báo video, không tự nhận là website gốc.
     if (sites.embedHosts.has(sites.url(frame.src).hostname)) value = { ...value, page: null, direct: false,
@@ -4068,6 +4274,8 @@ function createMotchillPlayerAdapters(sites) {
         return { buttons: '.dooplay_player_option', containers: '#playeroptions' };
       case sites.families.MYUI: // https://motchillv.fun/
         return { buttons: '.streaming-server', containers: '.tip-change-server,.myui-player__item .player-box,.player-controls' };
+      case sites.families.CHIBIFLIX: // https://motchillfv.help/ (each translation has its own ?sv= episode route)
+        return { buttons: ':not(*)', containers: '#episodes-list .v-tabs-min,#episodes-list .de-type,.v-tabs-min' };
       default: return { buttons: ':not(*)', containers: '' };
     }
   }
@@ -4140,6 +4348,7 @@ function createMotchillPlayerAdapters(sites) {
   }
   function serverContainer(doc = document, family = sites.detect(doc)) {
     if (family === sites.families.NEXT_REVIVE) return reviveServerContainer(doc);
+    if (family === sites.families.CHIBIFLIX) return doc.querySelector('#episodes-list .v-tabs-min,#episodes-list .de-type,.v-tabs-min');
     const config = selectors(family);
     const choices = serverChoices(doc, family);
     if (config.containers) {
@@ -4314,7 +4523,8 @@ function startMotchillPlayerController(sites) {
     introSeconds:()=>learning?.introEnd(),userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
     onIntro:()=>{if(media?.isConnected)learning.skipIntro(media,contextKey());},
-    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
+    onHello:()=>{if(window.top!==window)childMode();},
+    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),initializePlayAudible:video=>customUI?.initializePlayAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -4323,19 +4533,25 @@ function startMotchillPlayerController(sites) {
       case sites.families.NEXT: // https://motchille.com.mx/
       case sites.families.NEXT_REVIVE: // https://motchill68.tv/xem-phim/thuong-cong-chua
       case sites.families.APIPHIM: // https://motchill.garden/
-      case sites.families.DOO: // https://motchillkd.net/
+      case sites.families.DOO: // https://motchillkd.net/, https://motchillsc.mom/
       case sites.families.MYUI: // https://motchillv.fun/
+      case sites.families.CHIBIFLIX: // https://motchillfv.help/
       case sites.families.WRAPPER: return true;
       default: {
         if (window.top === window) return false;
         if (sites.embedHosts.has(location.hostname)) return true;
-        // Captured Revive source: a.motchill68.tv/embed/4/274183. Accept a
-        // video-bearing Motchill embed only under a Motchill parent. Its
-        // strict-origin-when-cross-origin policy can redact the watch path.
+        // Captured Revive source: a.motchill68.tv/embed/4/274183.
+        // Captured DooPlay same-origin embeds: motchillsc.mom/tp?source=... (JW)
+        // and motchillkd.online/tvc-embed.html?embed=... (#movie-frame relay).
+        // Accept a verified Motchill player/relay embed only under a Motchill parent.
         const parent = sites.url(document.referrer);
-        return sites.isMotchill(location.hostname) && /^\/embed\/[^/]+\/[^/]+/.test(location.pathname)
-          && !!document.querySelector('video,.jwplayer') && parent && sites.isMotchill(parent.hostname)
-          && (parent.pathname === '/' || /^\/(?:xem-phim|phim|play)\//.test(parent.pathname));
+        const directPlayer = (/^\/embed\/[^/]+\/[^/]+/.test(location.pathname) || /^\/tp\/?$/.test(location.pathname))
+          && !!document.querySelector('video,.jwplayer');
+        const tvcRelay = /^\/tvc-embed\.html$/i.test(location.pathname)
+          && !!document.querySelector('#movie-container > iframe#movie-frame');
+        return sites.isMotchill(location.hostname) && (directPlayer || tvcRelay)
+          && !!parent && sites.isMotchill(parent.hostname)
+          && (parent.pathname === '/' || /^\/(?:xem-phim|tap-phim|phim-le|phim|play)\//.test(parent.pathname));
       }
     }
   };
@@ -4579,7 +4795,8 @@ function startMotchillPlayerController(sites) {
     const local = sites.findVideo();
     if(customUI?.nativeRoot){
       if(local && bridge.role==='prepared')players.prepareMedia(local);
-      if(local)customUI.enhanceLocal(local);bridge.setNativeGestures?.(false);return;
+      if(local)customUI.enhanceLocal(local);else customUI.clearLocal?.();
+      bridge.setNativeGestures?.(false);return;
     }
     const frame = bridge.remote?.frame || sites.playerFrames()[0];
     if (bridge.managed) {
@@ -4599,6 +4816,12 @@ function startMotchillPlayerController(sites) {
         document.documentElement.classList.add('mc-managed-page');
       }
     }
+    if(customUI?.localPresentation?.()){
+      if(local && bridge.role==='prepared')players.prepareMedia(local);
+      if(local)customUI.enhanceLocal(local);else customUI.clearLocal?.();
+      bridge.setNativeGestures?.(false);return;
+    }
+    customUI?.clearLocal?.();
     // The child's real DOM owns its controls and coordinates. Parent overlays
     // cannot know where a letterboxed iframe puts its controls in fullscreen.
     // Delegate gestures here, including managed episodes, and tell the parent
@@ -4908,6 +5131,7 @@ function startMotchillPlayerController(sites) {
       previous?.remove();
       rollbackMedia = null;
       transitionTarget = null; autoSuppressed = false;
+      bridge.poll();
     },
     rollback: () => {
       if (rollbackMedia) { rollbackMedia.muted = rollbackMuted; if (!rollbackPaused) rollbackMedia.play()?.catch(() => {}); }
@@ -5046,7 +5270,7 @@ function startMotchillPlayerController(sites) {
   for (const event of ['play', 'playing', 'volumechange', 'loadedmetadata', 'loadeddata', 'canplay', 'timeupdate']) document.addEventListener(event, guardPreparedPlayback, true);
   document.addEventListener('mc-player-role', event=>{
     guardPreparedPlayback(event);
-    if(customUI?.nativeRoot){const video=sites.findVideo();if(video)customUI.enhanceLocal(video);}
+    if(customUI?.nativeRoot || customUI?.localPresentation?.()){const video=sites.findVideo();if(video)customUI.enhanceLocal(video);else customUI.clearLocal?.();}
   });
   document.addEventListener('mc-reveal-controls', () => {
     const video = sites.findVideo();
@@ -5136,12 +5360,13 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     },
     async activate(candidate,_target,{signal}){
       if(!current(candidate) || key()!==candidate.sourceKey)throw new Error('Nguồn chuẩn bị đã đổi');
-      rollback={media:currentMedia,muted:!!currentMedia?.muted,paused:!!currentMedia && currentMedia.paused!==false};
+      const persistent=!!(currentMedia?.state.localPresentation && currentMedia?.state.nativeEnhanced && currentMedia?.state.playlist);
+      rollback={media:currentMedia,muted:!!currentMedia?.muted,paused:!!currentMedia && currentMedia.paused!==false,persistent};
       // The visible mobile engine loads/seeks/confirms this playlist during
       // commit. Starting the disposable iframe first triggers the provider's
       // captured native resume handler and can undo seek-zero. Keep this
       // descriptor paused/silent; never claim that it has started at zero.
-      if(currentMedia?.state.localPresentation)return {deferred:'persistent'};
+      if(persistent)return {deferred:'persistent'};
       bridge.setRole(candidate.frame,'current');candidate.remote.command('start-zero');
       // The child verifies seek-zero and its first actual Play before setting
       // startedAtZero. A delayed parent poll may observe >3s; requiring that
@@ -5154,12 +5379,12 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       }
       return {playing:true,startedAt:0};
     },
-    async commit(candidate,target,_result,operation){
+    async commit(candidate,target,result,operation){
       if(operation.signal.aborted || !operation.isCurrent() || !current(candidate) || key()!==candidate.sourceKey)throw new Error('Tác vụ không còn hiện hành');
       const old=state()?.frame;if(!old)throw new Error('Khung cũ đã đổi');
-      if(currentMedia?.state.localPresentation){
-        const original=currentMedia,previousFile=original.state.playlist?.file,provider=candidate.remote.state.provider,playlist=candidate.remote.state.playlist;
-        if(!playlist || !provider || provider.movieId!==original.state.provider?.movieId || provider.season!==original.state.provider?.season || provider.id!==String(candidate.episode.id) || provider.server!==candidate.episode.server)throw new Error('Nguồn không cùng phim/mùa/server');
+      if(result?.deferred==='persistent'){
+        const original=currentMedia,previousFile=original?.state.playlist?.file,provider=candidate.remote.state.provider,playlist=candidate.remote.state.playlist;
+        if(!original?.state.localPresentation || !original.state.nativeEnhanced || !previousFile || !playlist || !provider || provider.movieId!==original.state.provider?.movieId || provider.season!==original.state.provider?.season || provider.id!==String(candidate.episode.id) || provider.server!==candidate.episode.server)throw new Error('Nguồn không cùng phim/mùa/server');
         document.dispatchEvent(new Event('mc-before-server-change'));
         // History must not bind a new media URL to the previous route during
         // an asynchronous engine load. The same visible document stays full.
@@ -5203,7 +5428,7 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     },
     // A persistent child owns its rollback, including Pause/audio. Parent
     // commands here could unmute or resume an unconfirmed intermediate source.
-    rollback(){if(rollback?.media && !rollback.media.state.localPresentation){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
+    rollback(){if(rollback?.media && !rollback.persistent){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
     discard(candidate){if(!candidate.activated)candidate.frame.remove();},
   },{commitTimeoutMs:45000,activateInCommit:true});
   const style=document.createElement('style');style.dataset.mcNativeNavigation='1';style.textContent='.mc-native-prepared{position:fixed!important;left:-10000px!important;top:0!important;width:640px!important;height:360px!important;opacity:0!important;pointer-events:none!important}.player-frame-stable:fullscreen{width:100vw!important;height:100vh!important;padding:0!important;background:#000}';
@@ -5431,16 +5656,18 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
-  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null,preservePause=false;
+  let localFullscreen=null,localRoot=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null,preservePause=false;
   const mobile=()=>window.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const localPresentation=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
+  const persistentProvider=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
+  const presentationRoot=found=>found?SharedPlayer.mediaPresentationRoot(window,found.video,enhancementRoot() || found.root || document.body):null;
+  const localPresentation=()=>{if(window.top===window || !mobile())return false;const found=candidate();return !!found && !!presentationRoot(found);};
   const waiting=new Map();
   let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
   const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');
   function guardedFrames(){
     // These extra slots receive status UI only. They do not authorize a new
     // origin, open a bridge session or infer an engine from the server label.
-    const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,.mc-player-stage>iframe')]
+    const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#embed-player,.player-ratio iframe,.mc-player-stage>iframe')]
       .filter(frame=>frame.tagName==='IFRAME' && sites.visible(frame) && !sites.isPrepared(frame) && sites.url(frame.getAttribute('src')));
     const providerFrame=sites.nextProviderState?.()?.frame;
     return [...new Set([...sites.playerFrames(),...slots,...(providerFrame?[providerFrame]:[])])];
@@ -5473,12 +5700,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     // Only known engine contracts are hidden. Ad/challenge UI is independent.
     guardOff=SharedPlayer.playerStartupGuard(window);
     const style=document.createElement('style');style.dataset.mcCustomGuard='1';
-    style.textContent='iframe[data-mc-display="loading"],html[data-mc-custom-owner] #player iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #videoFrame:not([data-mc-display="custom"]),html[data-mc-custom-owner] #player-wrapper iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .mc-player-stage>iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .player-frame-stable>iframe:not([data-mc-display="custom"]){opacity:0!important;pointer-events:none!important}html[data-rp-controls-boot] #player-wrap>#controls,html[data-rp-controls-boot] #rp-player .custom-control,html[data-rp-controls-boot] #rp-player #player_top,html[data-rp-controls-boot] #rp-player #video_eps,html[data-rp-controls-boot] #rp-player #video_pop,html[data-rp-controls-boot] #rp-player #video_mask{display:none!important;pointer-events:none!important}';
+    style.textContent='iframe[data-mc-display="loading"],html[data-mc-custom-owner] #player iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #videoFrame:not([data-mc-display="custom"]),html[data-mc-custom-owner] #player-wrapper iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #embed-player:not([data-mc-display="custom"]),html[data-mc-custom-owner] .player-ratio iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .mc-player-stage>iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .player-frame-stable>iframe:not([data-mc-display="custom"]){opacity:0!important;pointer-events:none!important}html[data-rp-controls-boot] #player-wrap>#controls,html[data-rp-controls-boot] #rp-player .custom-control,html[data-rp-controls-boot] #rp-player #player_top,html[data-rp-controls-boot] #rp-player #video_eps,html[data-rp-controls-boot] #rp-player #video_pop,html[data-rp-controls-boot] #rp-player #video_mask{display:none!important;pointer-events:none!important}';
     (document.head || document.documentElement).append(style);
     if(window.top===window){document.documentElement.dataset.mcCustomOwner='1';observer=new MutationObserver(prepareFrames);observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['src','data-mc-role']});prepareFrames();}
   }
   if(!document.documentElement){rootObserver=new MutationObserver(()=>{if(document.documentElement){rootObserver.disconnect();guard();}});rootObserver.observe(document,{childList:true});}
   function detach(){mounted?.ui.dispose();mounted?.player.dispose?.();mounted=null;}
+  function clearLocalPresentation(){detach();statusPanel?.dispose();statusPanel=null;if(localRoot){delete localRoot.dataset.mcLocalFsRoot;localRoot=null;}}
   function localState(video){
     const found=candidate();
     const fingerprint=found?SharedPlayer.playerFingerprint(found):'';
@@ -5486,35 +5714,43 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
     const own=found?.video===video,state=own?probe.state():null;
     const transfer=own && !!enhancementRoot() && found.kind==='jw' && typeof found.api.load==='function';
+    const localPres=own && localPresentation() && !!bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared';
     const provider=providerIdentity || (transfer && window.episode && {id:String(window.episode.id),movieId:String(window.episode.movieId),server:window.episode.server,season:window.episode.season_number});
-    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:transfer && localPresentation(),playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,load:state.load,...probe.audio()}: {})};
+    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:localPres,playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,initializable:state.initializable===true,load:state.load,...probe.audio()}: {})};
   }
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return !changing && state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
   function playAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
+  function initializePlayAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('initialize-play-audible');}
   function restoreAudio(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function enhanceLocal(video){
     guard();
-    if(localPresentation() && bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared'){
-      const root=SharedPlayer.mediaPresentationRoot(window,video,enhancementRoot());
+    const found=candidate();
+    if(localPresentation() && found?.video===video && bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared'){
+      const root=presentationRoot(found);
       if(root){
+        if(localRoot && localRoot!==root)delete localRoot.dataset.mcLocalFsRoot;
+        localRoot=root;
+        if(root.dataset.mcLocalFsRoot!=='1')root.dataset.mcLocalFsRoot='1';
         if(!localFullscreen)localFullscreen=SharedPlayer.fullscreenController(window,{onChange:()=>mounted?.ui.update()});
         const style=document.querySelector('[data-mc-local-fullscreen]') || document.createElement('style');
-        if(!style.isConnected){style.dataset.mcLocalFullscreen='1';style.textContent='#rp-player:fullscreen{width:100vw!important;height:100vh!important;margin:0!important;background:#000}#rp-player:fullscreen>.main-player,#rp-player:fullscreen>.main-player>#player{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}';document.documentElement.append(style);}
+        if(!style.isConnected){style.dataset.mcLocalFullscreen='1';style.textContent='#rp-player:fullscreen{width:100vw!important;height:100vh!important;margin:0!important;background:#000}#rp-player:fullscreen>.main-player,#rp-player:fullscreen>.main-player>#player{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}[data-mc-local-fs-root="1"]:fullscreen{width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;background:#000!important}[data-mc-local-fs-root="1"]:fullscreen video{width:100%!important;height:100%!important;max-width:100%!important;max-height:100%!important;object-fit:contain!important}[data-mc-local-fs-root="1"].jwplayer:fullscreen .jw-wrapper,[data-mc-local-fs-root="1"].jwplayer:fullscreen .jw-media{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}';document.documentElement.append(style);}
         update(video,root,bridge.parentContext);
         const state=mounted?.player.state();
         if(state && !state.ready && !state.initializable){
-          if(!statusPanel)statusPanel=SharedPlayer.loadingPanel(window,root,{onRetry:()=>{const found=candidate(),item=found?.kind==='jw' && SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.());if(item && !found.video.closest('.jw-flag-ads,[data-ad]')){found.api.setMute(false);found.api.load(item);found.api.play(true)?.catch?.(()=>{});}}});
+          if(!statusPanel)statusPanel=SharedPlayer.loadingPanel(window,root,{onRetry:()=>{const current=candidate();if(!current || current.video.closest('.jw-flag-ads,[data-ad]'))return;if(current.kind==='jw'){const item=SharedPlayer.mediaPlaylist(current.api.getPlaylistItem?.());if(item){current.api.setMute(false);current.api.load(item);current.api.play(true)?.catch?.(()=>{});}}else{current.video.load?.();current.video.play?.()?.catch?.(()=>{});}}});
           if(state.failed)statusPanel.fail();
           statusPanel.update(state.load);
         }else{statusPanel?.dispose();statusPanel=null;}
+        return true;
       }
     }
-    return !!enhancementRoot() && candidate()?.video===video;
+    clearLocalPresentation();
+    return !!enhancementRoot() && found?.video===video;
   }
   function replaceMedia(video,value,signal){
     const found=candidate(),provider=value?.provider,playlist=SharedPlayer.mediaPlaylist(value?.playlist);
     const original=providerIdentity || window.episode && {movieId:String(window.episode.movieId),season:window.episode.season_number};
-    if(!localPresentation() || found?.video!==video || !playlist || !provider || !/^[1-9]\d*$/.test(provider.id) || provider.movieId!==original?.movieId || provider.season!==original?.season || !sites.translationKey(provider.server))return Promise.reject(new Error('Không xác minh được tập mới'));
+    if(!persistentProvider() || found?.video!==video || !playlist || !provider || !/^[1-9]\d*$/.test(provider.id) || provider.movieId!==original?.movieId || provider.season!==original?.season || !sites.translationKey(provider.server))return Promise.reject(new Error('Không xác minh được tập mới'));
     // This provider captures resumeData once at ready. Reusing its engine must
     // not save episode 3 into episode 2's native key, including onunload's
     // bracket assignment. Only that captured key is redirected; other storage
@@ -5554,9 +5790,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
       if(remote){
         const current=()=>media.isConnected && media.state?.customCapable===true && bridge.getFrame(media.frame)===media && signature===[media.session?.token,media.frame.src,media.state.mediaId].join('|');
         const state=()=>{const value=media.state || {},ad=value.ad===true,duration=media.duration,time=media.currentTime;
-          return {kind:'remote',failed:!!value.error,ready:current() && !ad && !value.error && Number.isFinite(duration) && duration>0 && Number.isFinite(time) && media.readyState>=1,ad,time,duration,rate:media.playbackRate,paused:media.paused,ended:media.ended,played:value.played===true,load:SharedPlayer.validLoadMetrics(value.load)?value.load:null};};
+          const ready=current() && !ad && !value.error && Number.isFinite(duration) && duration>0 && Number.isFinite(time) && media.readyState>=1;
+          const initializable=current() && !ad && !value.error && !ready && value.initializable===true;
+          return {kind:'remote',failed:!!value.error,initializable,ready,ad,time,duration,rate:media.playbackRate,paused:media.paused,ended:media.ended,played:value.played===true,load:SharedPlayer.validLoadMetrics(value.load)?value.load:null};};
         const command=(action,value)=>{
-          if(!state().ready)return false;
+          const currentState=state();
+          if(action==='initialize-play-audible')return currentState.initializable ? media.command('initialize-play-audible') : false;
+          if(!currentState.ready)return false;
           switch(action){
             case 'seek':if(!Number.isFinite(value))return false;media.currentTime=Math.max(0,Math.min(value,media.duration-.25));break;
             case 'rate':if(!Number.isFinite(value) || value<.25 || value>4)return false;media.playbackRate=value;break;
@@ -5587,13 +5827,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     mounted.ui.setContext({url:page.url,episodeID:page.episodeKey,lane:page.language,server:localPresentation()?page.server:hooks.serverKey(),next:page.next});
     if(remote){
-      const record=waiting.get(media.frame),ready=mounted.player.state().ready && !mounted.ui.shell.hidden;
+      const record=waiting.get(media.frame),currentState=mounted.player.state(),ready=(currentState.ready || currentState.initializable) && !mounted.ui.shell.hidden;
       if(ready){media.frame.dataset.mcDisplay='custom';record?.panel?.dispose();if(record)record.panel=null;}
-      else{if(media.frame.dataset.mcDisplay==='custom')record?.reset();if(mounted.player.state().failed)record?.panel?.fail();record?.panel?.update(mounted.player.state().load);}
+      else{if(media.frame.dataset.mcDisplay==='custom')record?.reset();if(currentState.failed)record?.panel?.fail();record?.panel?.update(currentState.load);}
     }
     return true;
   }
-  return {guard,enhanceLocal,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,enhanceLocal,clearLocal:clearLocalPresentation,localPresentation,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,initializePlayAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;clearLocalPresentation();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }
 
 // END MOTCHILL SITES

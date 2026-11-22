@@ -95,7 +95,8 @@ function startMotchillPlayerController(sites) {
     introSeconds:()=>learning?.introEnd(),userSeek: () => learning?.userSeek, beforeSeek: (position) => learning?.ignoreSeek(position),
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
     onIntro:()=>{if(media?.isConnected)learning.skipIntro(media,contextKey());},
-    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
+    onHello:()=>{if(window.top!==window)childMode();},
+    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),initializePlayAudible:video=>customUI?.initializePlayAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -104,19 +105,25 @@ function startMotchillPlayerController(sites) {
       case sites.families.NEXT: // https://motchille.com.mx/
       case sites.families.NEXT_REVIVE: // https://motchill68.tv/xem-phim/thuong-cong-chua
       case sites.families.APIPHIM: // https://motchill.garden/
-      case sites.families.DOO: // https://motchillkd.net/
+      case sites.families.DOO: // https://motchillkd.net/, https://motchillsc.mom/
       case sites.families.MYUI: // https://motchillv.fun/
+      case sites.families.CHIBIFLIX: // https://motchillfv.help/
       case sites.families.WRAPPER: return true;
       default: {
         if (window.top === window) return false;
         if (sites.embedHosts.has(location.hostname)) return true;
-        // Captured Revive source: a.motchill68.tv/embed/4/274183. Accept a
-        // video-bearing Motchill embed only under a Motchill parent. Its
-        // strict-origin-when-cross-origin policy can redact the watch path.
+        // Captured Revive source: a.motchill68.tv/embed/4/274183.
+        // Captured DooPlay same-origin embeds: motchillsc.mom/tp?source=... (JW)
+        // and motchillkd.online/tvc-embed.html?embed=... (#movie-frame relay).
+        // Accept a verified Motchill player/relay embed only under a Motchill parent.
         const parent = sites.url(document.referrer);
-        return sites.isMotchill(location.hostname) && /^\/embed\/[^/]+\/[^/]+/.test(location.pathname)
-          && !!document.querySelector('video,.jwplayer') && parent && sites.isMotchill(parent.hostname)
-          && (parent.pathname === '/' || /^\/(?:xem-phim|phim|play)\//.test(parent.pathname));
+        const directPlayer = (/^\/embed\/[^/]+\/[^/]+/.test(location.pathname) || /^\/tp\/?$/.test(location.pathname))
+          && !!document.querySelector('video,.jwplayer');
+        const tvcRelay = /^\/tvc-embed\.html$/i.test(location.pathname)
+          && !!document.querySelector('#movie-container > iframe#movie-frame');
+        return sites.isMotchill(location.hostname) && (directPlayer || tvcRelay)
+          && !!parent && sites.isMotchill(parent.hostname)
+          && (parent.pathname === '/' || /^\/(?:xem-phim|tap-phim|phim-le|phim|play)\//.test(parent.pathname));
       }
     }
   };
@@ -360,7 +367,8 @@ function startMotchillPlayerController(sites) {
     const local = sites.findVideo();
     if(customUI?.nativeRoot){
       if(local && bridge.role==='prepared')players.prepareMedia(local);
-      if(local)customUI.enhanceLocal(local);bridge.setNativeGestures?.(false);return;
+      if(local)customUI.enhanceLocal(local);else customUI.clearLocal?.();
+      bridge.setNativeGestures?.(false);return;
     }
     const frame = bridge.remote?.frame || sites.playerFrames()[0];
     if (bridge.managed) {
@@ -380,6 +388,12 @@ function startMotchillPlayerController(sites) {
         document.documentElement.classList.add('mc-managed-page');
       }
     }
+    if(customUI?.localPresentation?.()){
+      if(local && bridge.role==='prepared')players.prepareMedia(local);
+      if(local)customUI.enhanceLocal(local);else customUI.clearLocal?.();
+      bridge.setNativeGestures?.(false);return;
+    }
+    customUI?.clearLocal?.();
     // The child's real DOM owns its controls and coordinates. Parent overlays
     // cannot know where a letterboxed iframe puts its controls in fullscreen.
     // Delegate gestures here, including managed episodes, and tell the parent
@@ -689,6 +703,7 @@ function startMotchillPlayerController(sites) {
       previous?.remove();
       rollbackMedia = null;
       transitionTarget = null; autoSuppressed = false;
+      bridge.poll();
     },
     rollback: () => {
       if (rollbackMedia) { rollbackMedia.muted = rollbackMuted; if (!rollbackPaused) rollbackMedia.play()?.catch(() => {}); }
@@ -827,7 +842,7 @@ function startMotchillPlayerController(sites) {
   for (const event of ['play', 'playing', 'volumechange', 'loadedmetadata', 'loadeddata', 'canplay', 'timeupdate']) document.addEventListener(event, guardPreparedPlayback, true);
   document.addEventListener('mc-player-role', event=>{
     guardPreparedPlayback(event);
-    if(customUI?.nativeRoot){const video=sites.findVideo();if(video)customUI.enhanceLocal(video);}
+    if(customUI?.nativeRoot || customUI?.localPresentation?.()){const video=sites.findVideo();if(video)customUI.enhanceLocal(video);else customUI.clearLocal?.();}
   });
   document.addEventListener('mc-reveal-controls', () => {
     const video = sites.findVideo();

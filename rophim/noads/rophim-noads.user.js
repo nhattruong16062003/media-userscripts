@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Chặn quảng cáo
 // @namespace    rophim-userscripts.local
-// @version      0.4.18
+// @version      0.4.19
 // @author       zic
 // @description  Chặn quảng cáo cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -225,8 +225,8 @@
 
   // shared/bridge/ownership.js
   function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin = () => false }, start) {
-    const tag = "media-userscripts-owner-v1", doc = win.document;
-    let active = false, disposed = false, timer = 0;
+    const tag = "media-userscripts-owner-v1";
+    let active = false, disposed = false, timer = 0, blankTimer = 0, blankTicks = 0;
     const challenge = Array.from(win.crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
     const allowed = (value) => {
       try {
@@ -235,34 +235,64 @@
         return false;
       }
     };
-    const parentOrigin = (() => {
+    const parentOrigin = () => {
       try {
-        return doc.referrer ? new URL(doc.referrer).origin : null;
+        return win.document.referrer ? new URL(win.document.referrer).origin : null;
       } catch {
         return null;
       }
-    })();
+    };
     const ask = () => {
-      if (!active && !disposed) win.parent.postMessage({ tag, type: "ready", family, feature, challenge }, parentOrigin || "*");
+      if (!active && !disposed) win.parent.postMessage({ tag, type: "ready", family, feature, challenge }, parentOrigin() || "*");
+    };
+    const stopBlank = () => {
+      if (blankTimer) {
+        win.clearInterval(blankTimer);
+        blankTimer = 0;
+      }
+      win.removeEventListener("DOMContentLoaded", checkLocation);
+      win.removeEventListener("load", checkLocation);
     };
     const activate = () => {
       if (active || disposed) return;
       active = true;
+      stopBlank();
       win.clearInterval(timer);
-      for (const frame of doc.querySelectorAll("iframe[src]")) if (allowed(frame.src)) frame.contentWindow?.postMessage({ tag, type: "probe", family, feature }, new URL(frame.src).origin);
+      for (const frame of win.document.querySelectorAll("iframe[src]")) if (allowed(frame.src)) frame.contentWindow?.postMessage({ tag, type: "probe", family, feature }, new URL(frame.src).origin);
       start();
+    };
+    const checkLocation = () => {
+      if (active || disposed) return stopBlank();
+      let detached = false;
+      try {
+        detached = !!(win.closed || win.frameElement && !win.frameElement.isConnected);
+      } catch {
+      }
+      if (detached) return dispose();
+      const href = win.location.href;
+      if (href === "about:blank") {
+        if (++blankTicks >= 200) dispose();
+        return;
+      }
+      stopBlank();
+      if (isSiteURL(href)) activate();
+      else if (win.parent !== win && isFrameURL2(href) && !timer) {
+        timer = win.setInterval(ask, 1e3);
+        ask();
+      }
     };
     const receive = (event) => {
       const data = event.data;
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
-      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!parentOrigin || parentOrigin === event.origin);
+      const expectedParent = parentOrigin();
+      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
       if (data.type === "probe" && !active && fromParent) {
         ask();
         return;
       }
       if (typeof data.challenge !== "string" || !/^[a-f0-9]{32}$/.test(data.challenge)) return;
       if (data.type === "ready" && active) {
-        const frame = [...doc.querySelectorAll("iframe[src]")].find((node) => node.isConnected && node.contentWindow === event.source);
+        const frame = [...win.document.querySelectorAll("iframe[src]")].find((node) => node.isConnected && node.contentWindow === event.source);
         if (!frame || !allowed(frame.src)) return;
         let origin;
         try {
@@ -281,15 +311,25 @@
     else if (win.parent !== win && isFrameURL2(win.location.href)) {
       timer = win.setInterval(ask, 1e3);
       ask();
+    } else if (win.parent !== win && win.location.href === "about:blank") {
+      win.addEventListener("DOMContentLoaded", checkLocation);
+      win.addEventListener("load", checkLocation);
+      blankTimer = win.setInterval(checkLocation, 50);
     }
     const dispose = () => {
       disposed = true;
+      stopBlank();
       win.clearInterval(timer);
       win.removeEventListener("message", receive);
       win.removeEventListener("pagehide", hide);
     };
     const hide = (event) => {
-      if (!event.persisted) dispose();
+      if (event.persisted) return;
+      if (!active && blankTimer && win.location.href === "about:blank") {
+        queueMicrotask(checkLocation);
+        return;
+      }
+      dispose();
     };
     win.addEventListener("pagehide", hide);
     return { get active() {
@@ -332,24 +372,36 @@
     if (frame.getAttribute("sandbox") !== sandbox) frame.setAttribute("sandbox", sandbox);
     return true;
   }
+  function isNewWindowTarget(target) {
+    const normalized = String(target || "").trim().toLowerCase();
+    return !!normalized && !["_self", "_parent", "_top"].includes(normalized);
+  }
+  function isBlankFrame(frame) {
+    if (!frame || frame.tagName !== "IFRAME") return false;
+    if (frame.hasAttribute("srcdoc")) return true;
+    if (!frame.hasAttribute("src")) return true;
+    const raw = (frame.getAttribute("src") || "").trim();
+    return !raw || /^about:blank(?:[?#]|$)/i.test(raw);
+  }
   function installNavigationGuard(win, page = win, { isMediaFrame = () => false } = {}) {
     const doc = win.document;
     const originalOpen = page.open, originalConfirm = page.confirm;
     let disposed = false, approved = null;
-    const expose = (fn) => {
+    const restores = [];
+    const exposeTo = (fn, target = page) => {
       try {
-        return typeof exportFunction === "function" ? exportFunction(fn, page) : fn;
+        return typeof exportFunction === "function" ? exportFunction(fn, target) : fn;
       } catch {
         return fn;
       }
     };
     const open = () => null;
-    const exposedOpen = expose(open);
+    const exposedOpen = exposeTo(open, page);
     let openDescriptor;
     try {
       openDescriptor = Object.getOwnPropertyDescriptor(page, "open");
-      Object.defineProperty(page, "open", { configurable: true, enumerable: openDescriptor?.enumerable ?? true, get: expose(() => exposedOpen), set: expose(() => {
-      }) });
+      Object.defineProperty(page, "open", { configurable: true, enumerable: openDescriptor?.enumerable ?? true, get: exposeTo(() => exposedOpen, page), set: exposeTo(() => {
+      }, page) });
     } catch {
     }
     const stop = (event) => {
@@ -357,51 +409,262 @@
       event.stopImmediatePropagation();
     };
     const allowed = (url, trusted) => confirmExternal(win, url, trusted, (message) => Reflect.apply(originalConfirm, page, [message]));
-    function click(event) {
+    const resolveBase = (targetWin) => {
+      try {
+        const href = targetWin?.location?.href;
+        if (href && /^https?:/i.test(href)) return href;
+      } catch {
+      }
+      return win.location.href;
+    };
+    const baseTargetOf = (node) => {
+      try {
+        return node?.ownerDocument?.querySelector?.("base[target]")?.getAttribute?.("target") || "";
+      } catch {
+        return "";
+      }
+    };
+    function shouldBlockProgrammaticAnchor(anchor, targetWin) {
+      const target = anchor?.getAttribute?.("target") || anchor?.target || "" || baseTargetOf(anchor);
+      if (isNewWindowTarget(target)) return true;
+      const hasHref = anchor?.hasAttribute ? anchor.hasAttribute("href") : Boolean(anchor?.href);
+      if (!hasHref) return false;
+      const raw = anchor?.getAttribute ? anchor.getAttribute("href") || "" : anchor?.href || "";
+      const trimmed = raw.trim();
+      if (!trimmed || trimmed.startsWith("#")) return false;
+      if (/^\s*javascript:/i.test(raw)) return false;
+      if (/^about:/i.test(trimmed)) return true;
+      const baseHref = resolveBase(targetWin);
+      const docBase = anchor?.baseURI && /^https?:/i.test(anchor.baseURI) ? anchor.baseURI : baseHref;
+      let url;
+      try {
+        url = new URL(raw, docBase);
+      } catch {
+        return true;
+      }
+      return navigationKind(url.href, baseHref) !== "internal";
+    }
+    function shouldBlockForm(form, submitter, targetWin, trusted = false) {
+      const baseHref = resolveBase(targetWin);
+      const target = submitter?.getAttribute?.("formtarget") || submitter?.formTarget || form?.getAttribute?.("target") || form?.target || baseTargetOf(form);
+      if (!trusted && isNewWindowTarget(target)) return true;
+      const rawAction = submitter?.getAttribute?.("formaction") || (form?.getAttribute ? form.getAttribute("action") : form?.action) || "";
+      const trimmed = rawAction.trim();
+      if (!trimmed) {
+        const ownHref = form?.ownerDocument?.location?.href || targetWin?.location?.href || "";
+        return navigationKind(ownHref, baseHref) !== "internal";
+      }
+      if (/^about:/i.test(trimmed)) return true;
+      const docBase = form?.baseURI && /^https?:/i.test(form.baseURI) ? form.baseURI : baseHref;
+      let url;
+      try {
+        url = new URL(trimmed, docBase);
+      } catch {
+        return true;
+      }
+      return navigationKind(url.href, baseHref) !== "internal";
+    }
+    function handleClick(event, targetWin, allowConfirm) {
+      if (disposed) return;
       if (event.type === "auxclick" && event.button !== 1) return;
       const anchor = event.composedPath?.().find((node) => node?.matches?.("a[href],area[href]")) || event.target?.closest?.("a[href],area[href]");
       if (!anchor) return;
       const raw = anchor.getAttribute("href") || "";
+      const effectiveTarget = anchor.target || baseTargetOf(anchor);
       if (/^\s*javascript:/i.test(raw)) {
+        if (!event.isTrusted && isNewWindowTarget(effectiveTarget)) {
+          stop(event);
+          return;
+        }
         event.preventDefault();
         return;
       }
+      const baseHref = resolveBase(targetWin);
+      const docBase = anchor.baseURI && /^https?:/i.test(anchor.baseURI) ? anchor.baseURI : baseHref;
       let url;
       try {
-        url = new URL(raw, anchor.baseURI || win.location.href);
+        url = new URL(raw, docBase);
       } catch {
         stop(event);
         return;
       }
-      if (navigationKind(url.href, win.location.href) === "internal") {
-        if (!event.isTrusted && anchor.target && !["_self", "_parent", "_top"].includes(anchor.target.toLowerCase())) stop(event);
+      if (navigationKind(url.href, baseHref) === "internal") {
+        if (!event.isTrusted && isNewWindowTarget(effectiveTarget)) stop(event);
         return;
       }
       stop(event);
-      if (!allowed(url.href, event.isTrusted)) return;
+      if (!allowConfirm || !allowed(url.href, event.isTrusted)) return;
       approved = url.href;
       try {
-        if (anchor.target && anchor.target !== "_self") Reflect.apply(originalOpen, page, [url.href, "_blank", "noopener,noreferrer"]);
+        if (effectiveTarget && effectiveTarget.toLowerCase() !== "_self") Reflect.apply(originalOpen, page, [url.href, "_blank", "noopener,noreferrer"]);
         else page.location.assign(url.href);
       } finally {
         approved = null;
       }
     }
+    function patchMethod(targetWin, proto, key, makeWrapper, trackRestore) {
+      if (!proto) return;
+      let orig, ownDesc;
+      try {
+        orig = proto[key];
+        ownDesc = Object.getOwnPropertyDescriptor(proto, key);
+      } catch {
+        return;
+      }
+      if (typeof orig !== "function") return;
+      if (ownDesc && !ownDesc.configurable && !ownDesc.writable) return;
+      const wrapped = exposeTo(makeWrapper(orig), targetWin);
+      try {
+        if (!ownDesc || ownDesc.configurable) {
+          Object.defineProperty(proto, key, { configurable: true, enumerable: ownDesc ? ownDesc.enumerable : false, writable: true, value: wrapped });
+        } else {
+          proto[key] = wrapped;
+        }
+        if (trackRestore) {
+          restores.push(() => {
+            try {
+              if (proto[key] !== wrapped) return;
+              if (ownDesc) Object.defineProperty(proto, key, ownDesc);
+              else delete proto[key];
+            } catch {
+            }
+          });
+        }
+      } catch {
+      }
+    }
+    const guardedOpens = /* @__PURE__ */ new WeakSet();
+    const guardedProtos = /* @__PURE__ */ new WeakSet();
+    const guardedDocs = /* @__PURE__ */ new WeakSet();
+    function installProtoGuards(targetWin, trackRestore) {
+      const htmlElemProto = targetWin.HTMLElement?.prototype;
+      const anchorProto = targetWin.HTMLAnchorElement?.prototype;
+      const areaProto = targetWin.HTMLAreaElement?.prototype;
+      const formProto = targetWin.HTMLFormElement?.prototype;
+      const makeClick = (orig) => function(...args) {
+        if (!disposed && (this?.tagName === "A" || this?.tagName === "AREA") && shouldBlockProgrammaticAnchor(this, targetWin)) return;
+        return Reflect.apply(orig, this, args);
+      };
+      if (htmlElemProto && typeof htmlElemProto.click === "function") {
+        patchMethod(targetWin, htmlElemProto, "click", makeClick, trackRestore);
+        if (anchorProto && Object.prototype.hasOwnProperty.call(anchorProto, "click")) {
+          patchMethod(targetWin, anchorProto, "click", makeClick, trackRestore);
+        }
+      } else if (anchorProto) {
+        patchMethod(targetWin, anchorProto, "click", makeClick, trackRestore);
+      }
+      const makeAnchorDispatch = (orig) => function(...args) {
+        const event = args[0];
+        if (!disposed && (event?.type === "click" || event?.type === "auxclick") && shouldBlockProgrammaticAnchor(this, targetWin)) return false;
+        return Reflect.apply(orig, this, args);
+      };
+      patchMethod(targetWin, anchorProto, "dispatchEvent", makeAnchorDispatch, trackRestore);
+      patchMethod(targetWin, areaProto, "dispatchEvent", makeAnchorDispatch, trackRestore);
+      patchMethod(targetWin, formProto, "submit", (orig) => function(...args) {
+        if (!disposed && shouldBlockForm(this, null, targetWin, false)) return;
+        return Reflect.apply(orig, this, args);
+      }, trackRestore);
+      patchMethod(targetWin, formProto, "requestSubmit", (orig) => function(...args) {
+        if (!disposed && shouldBlockForm(this, args[0], targetWin, false)) return;
+        return Reflect.apply(orig, this, args);
+      }, trackRestore);
+      patchMethod(targetWin, formProto, "dispatchEvent", (orig) => function(...args) {
+        const event = args[0];
+        if (!disposed && event?.type === "submit" && shouldBlockForm(this, event?.submitter, targetWin, false)) return false;
+        return Reflect.apply(orig, this, args);
+      }, trackRestore);
+      const iframeProto = targetWin.HTMLIFrameElement?.prototype;
+      if (iframeProto) {
+        for (const prop of ["contentWindow", "contentDocument"]) {
+          let desc;
+          try {
+            desc = Object.getOwnPropertyDescriptor(iframeProto, prop);
+          } catch {
+            continue;
+          }
+          if (!desc || typeof desc.get !== "function" || !desc.configurable) continue;
+          const origGet = desc.get;
+          const wrappedGet = exposeTo(function() {
+            const val = Reflect.apply(origGet, this, []);
+            if (!disposed && val) {
+              const child = prop === "contentDocument" ? val.defaultView : val;
+              if (child) guardChildWindow(child);
+            }
+            return val;
+          }, targetWin);
+          try {
+            Object.defineProperty(iframeProto, prop, { configurable: true, enumerable: desc.enumerable, get: wrappedGet, set: desc.set });
+            if (trackRestore) {
+              restores.push(() => {
+                try {
+                  if (Object.getOwnPropertyDescriptor(iframeProto, prop)?.get === wrappedGet) Object.defineProperty(iframeProto, prop, desc);
+                } catch {
+                }
+              });
+            }
+          } catch {
+          }
+        }
+      }
+    }
+    function guardChildWindow(candidate) {
+      if (disposed || !candidate) return;
+      let raw;
+      try {
+        raw = candidate.wrappedJSObject || candidate;
+      } catch {
+        raw = candidate;
+      }
+      if (!raw || raw === win || raw === page) return;
+      let currentOpen, childDoc, protoKey;
+      try {
+        childDoc = raw.document;
+        void raw.location.href;
+        currentOpen = raw.open;
+        protoKey = raw.HTMLElement?.prototype || raw.HTMLAnchorElement?.prototype || raw.Window;
+      } catch {
+        return;
+      }
+      if (!currentOpen || !guardedOpens.has(currentOpen)) {
+        const origChildOpen = currentOpen;
+        const childOpen = exposeTo((...args) => {
+          if (disposed && typeof origChildOpen === "function") return Reflect.apply(origChildOpen, raw, args);
+          return null;
+        }, raw);
+        guardedOpens.add(childOpen);
+        try {
+          const desc = Object.getOwnPropertyDescriptor(raw, "open");
+          Object.defineProperty(raw, "open", { configurable: true, enumerable: desc?.enumerable ?? true, get: exposeTo(() => childOpen, raw), set: exposeTo(() => {
+          }, raw) });
+        } catch {
+        }
+      }
+      if (protoKey && !guardedProtos.has(protoKey)) {
+        guardedProtos.add(protoKey);
+        installProtoGuards(raw, false);
+      }
+      if (childDoc && !guardedDocs.has(childDoc)) {
+        guardedDocs.add(childDoc);
+        const childClick = exposeTo((event) => handleClick(event, raw, false), raw);
+        const childSubmit = exposeTo((event) => {
+          if (!disposed && shouldBlockForm(event.target, event.submitter, raw, false)) stop(event);
+        }, raw);
+        try {
+          raw.addEventListener("click", childClick, true);
+          raw.addEventListener("auxclick", childClick, true);
+          raw.addEventListener("submit", childSubmit, true);
+        } catch {
+        }
+      }
+    }
+    const click = (event) => handleClick(event, win, true);
     const submit = (event) => {
-      if (navigationKind(event.target?.action || win.location.href, win.location.href) !== "internal") stop(event);
+      if (!disposed && shouldBlockForm(event.target, event.submitter, win, event.isTrusted)) stop(event);
     };
     win.addEventListener("click", click, true);
     win.addEventListener("auxclick", click, true);
     win.addEventListener("submit", submit, true);
-    const proto = page.HTMLFormElement?.prototype, originalSubmit = proto?.submit;
-    const guardedSubmit = expose(function(...args) {
-      if (navigationKind(this.action || win.location.href, win.location.href) !== "internal") return;
-      return Reflect.apply(originalSubmit, this, args);
-    });
-    try {
-      if (originalSubmit) proto.submit = guardedSubmit;
-    } catch {
-    }
+    installProtoGuards(page, true);
     const navigate = (event) => {
       if (event.navigationType === "traverse" || !event.cancelable || !event.destination?.url) return;
       const url = event.destination.url;
@@ -411,13 +674,25 @@
     page.navigation?.addEventListener?.("navigate", navigate);
     const scan = () => {
       if (disposed) return;
-      for (const frame of doc.querySelectorAll("iframe[src]")) try {
-        if (isMediaFrame(frame)) protectMediaFrame(frame);
-      } catch {
+      for (const frame of doc.querySelectorAll("iframe")) {
+        if (isBlankFrame(frame)) {
+          try {
+            const child = frame.contentWindow;
+            if (child) guardChildWindow(child);
+          } catch {
+          }
+          continue;
+        }
+        if (frame.hasAttribute("src")) {
+          try {
+            if (isMediaFrame(frame)) protectMediaFrame(frame);
+          } catch {
+          }
+        }
       }
     };
     const observer = new win.MutationObserver(scan);
-    observer.observe(doc, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "sandbox"] });
+    observer.observe(doc, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "srcdoc", "sandbox"] });
     scan();
     const dispose = () => {
       if (disposed) return;
@@ -437,10 +712,7 @@
         }
       } catch {
       }
-      try {
-        if (proto?.submit === guardedSubmit) proto.submit = originalSubmit;
-      } catch {
-      }
+      while (restores.length) restores.pop()();
     };
     win.addEventListener("pagehide", (event) => {
       if (!event.persisted) dispose();

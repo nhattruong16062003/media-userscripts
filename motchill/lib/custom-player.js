@@ -8,16 +8,18 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const enhancementRoot=()=>document.querySelector('#rp-player:has(.main-player > #player):has(#video_eps):has(#player_top)');
   const candidate=()=>SharedPlayer.playerCandidate(window,window,{nativeContract});
   let mounted=null,probe=null,probeSource='',guardOff=null,disposed=false,observer=null,rootObserver=null;
-  let localFullscreen=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null,preservePause=false;
+  let localFullscreen=null,localRoot=null,persistent=null,changing=false,providerIdentity=null,resumeAlias=null,statusPanel=null,preservePause=false;
   const mobile=()=>window.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const localPresentation=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
+  const persistentProvider=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
+  const presentationRoot=found=>found?SharedPlayer.mediaPresentationRoot(window,found.video,enhancementRoot() || found.root || document.body):null;
+  const localPresentation=()=>{if(window.top===window || !mobile())return false;const found=candidate();return !!found && !!presentationRoot(found);};
   const waiting=new Map();
   let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
   const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');
   function guardedFrames(){
     // These extra slots receive status UI only. They do not authorize a new
     // origin, open a bridge session or infer an engine from the server label.
-    const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,.mc-player-stage>iframe')]
+    const slots=[...document.querySelectorAll('#player iframe,#videoFrame,#player-wrapper iframe,#embed-player,.player-ratio iframe,.mc-player-stage>iframe')]
       .filter(frame=>frame.tagName==='IFRAME' && sites.visible(frame) && !sites.isPrepared(frame) && sites.url(frame.getAttribute('src')));
     const providerFrame=sites.nextProviderState?.()?.frame;
     return [...new Set([...sites.playerFrames(),...slots,...(providerFrame?[providerFrame]:[])])];
@@ -50,12 +52,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     // Only known engine contracts are hidden. Ad/challenge UI is independent.
     guardOff=SharedPlayer.playerStartupGuard(window);
     const style=document.createElement('style');style.dataset.mcCustomGuard='1';
-    style.textContent='iframe[data-mc-display="loading"],html[data-mc-custom-owner] #player iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #videoFrame:not([data-mc-display="custom"]),html[data-mc-custom-owner] #player-wrapper iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .mc-player-stage>iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .player-frame-stable>iframe:not([data-mc-display="custom"]){opacity:0!important;pointer-events:none!important}html[data-rp-controls-boot] #player-wrap>#controls,html[data-rp-controls-boot] #rp-player .custom-control,html[data-rp-controls-boot] #rp-player #player_top,html[data-rp-controls-boot] #rp-player #video_eps,html[data-rp-controls-boot] #rp-player #video_pop,html[data-rp-controls-boot] #rp-player #video_mask{display:none!important;pointer-events:none!important}';
+    style.textContent='iframe[data-mc-display="loading"],html[data-mc-custom-owner] #player iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #videoFrame:not([data-mc-display="custom"]),html[data-mc-custom-owner] #player-wrapper iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] #embed-player:not([data-mc-display="custom"]),html[data-mc-custom-owner] .player-ratio iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .mc-player-stage>iframe:not([data-mc-display="custom"]),html[data-mc-custom-owner] .player-frame-stable>iframe:not([data-mc-display="custom"]){opacity:0!important;pointer-events:none!important}html[data-rp-controls-boot] #player-wrap>#controls,html[data-rp-controls-boot] #rp-player .custom-control,html[data-rp-controls-boot] #rp-player #player_top,html[data-rp-controls-boot] #rp-player #video_eps,html[data-rp-controls-boot] #rp-player #video_pop,html[data-rp-controls-boot] #rp-player #video_mask{display:none!important;pointer-events:none!important}';
     (document.head || document.documentElement).append(style);
     if(window.top===window){document.documentElement.dataset.mcCustomOwner='1';observer=new MutationObserver(prepareFrames);observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['src','data-mc-role']});prepareFrames();}
   }
   if(!document.documentElement){rootObserver=new MutationObserver(()=>{if(document.documentElement){rootObserver.disconnect();guard();}});rootObserver.observe(document,{childList:true});}
   function detach(){mounted?.ui.dispose();mounted?.player.dispose?.();mounted=null;}
+  function clearLocalPresentation(){detach();statusPanel?.dispose();statusPanel=null;if(localRoot){delete localRoot.dataset.mcLocalFsRoot;localRoot=null;}}
   function localState(video){
     const found=candidate();
     const fingerprint=found?SharedPlayer.playerFingerprint(found):'';
@@ -63,35 +66,43 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     if(found && !probe){probe=SharedPlayer.attachPlayer(found,{canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(found.video)});probeSource=fingerprint;}
     const own=found?.video===video,state=own?probe.state():null;
     const transfer=own && !!enhancementRoot() && found.kind==='jw' && typeof found.api.load==='function';
+    const localPres=own && localPresentation() && !!bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared';
     const provider=providerIdentity || (transfer && window.episode && {id:String(window.episode.id),movieId:String(window.episode.movieId),server:window.episode.server,season:window.episode.season_number});
-    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:transfer && localPresentation(),playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,load:state.load,...probe.audio()}: {})};
+    return {nativeEnhanced:!!own && !!enhancementRoot(),customCapable:!!own,localPresentation:localPres,playlist:transfer && state?.ready?SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.()):null,provider,changing,tracks:own?SharedPlayer.playerTracks(found):{},...(state?{ad:state.ad,initializable:state.initializable===true,load:state.load,...probe.audio()}: {})};
   }
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return !changing && state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
   function playAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
+  function initializePlayAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('initialize-play-audible');}
   function restoreAudio(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function enhanceLocal(video){
     guard();
-    if(localPresentation() && bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared'){
-      const root=SharedPlayer.mediaPresentationRoot(window,video,enhancementRoot());
+    const found=candidate();
+    if(localPresentation() && found?.video===video && bridge.parentContext && bridge.parentPresented && bridge.role!=='prepared'){
+      const root=presentationRoot(found);
       if(root){
+        if(localRoot && localRoot!==root)delete localRoot.dataset.mcLocalFsRoot;
+        localRoot=root;
+        if(root.dataset.mcLocalFsRoot!=='1')root.dataset.mcLocalFsRoot='1';
         if(!localFullscreen)localFullscreen=SharedPlayer.fullscreenController(window,{onChange:()=>mounted?.ui.update()});
         const style=document.querySelector('[data-mc-local-fullscreen]') || document.createElement('style');
-        if(!style.isConnected){style.dataset.mcLocalFullscreen='1';style.textContent='#rp-player:fullscreen{width:100vw!important;height:100vh!important;margin:0!important;background:#000}#rp-player:fullscreen>.main-player,#rp-player:fullscreen>.main-player>#player{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}';document.documentElement.append(style);}
+        if(!style.isConnected){style.dataset.mcLocalFullscreen='1';style.textContent='#rp-player:fullscreen{width:100vw!important;height:100vh!important;margin:0!important;background:#000}#rp-player:fullscreen>.main-player,#rp-player:fullscreen>.main-player>#player{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}[data-mc-local-fs-root="1"]:fullscreen{width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;background:#000!important}[data-mc-local-fs-root="1"]:fullscreen video{width:100%!important;height:100%!important;max-width:100%!important;max-height:100%!important;object-fit:contain!important}[data-mc-local-fs-root="1"].jwplayer:fullscreen .jw-wrapper,[data-mc-local-fs-root="1"].jwplayer:fullscreen .jw-media{width:100%!important;height:100%!important;position:absolute!important;inset:0!important}';document.documentElement.append(style);}
         update(video,root,bridge.parentContext);
         const state=mounted?.player.state();
         if(state && !state.ready && !state.initializable){
-          if(!statusPanel)statusPanel=SharedPlayer.loadingPanel(window,root,{onRetry:()=>{const found=candidate(),item=found?.kind==='jw' && SharedPlayer.mediaPlaylist(found.api.getPlaylistItem?.());if(item && !found.video.closest('.jw-flag-ads,[data-ad]')){found.api.setMute(false);found.api.load(item);found.api.play(true)?.catch?.(()=>{});}}});
+          if(!statusPanel)statusPanel=SharedPlayer.loadingPanel(window,root,{onRetry:()=>{const current=candidate();if(!current || current.video.closest('.jw-flag-ads,[data-ad]'))return;if(current.kind==='jw'){const item=SharedPlayer.mediaPlaylist(current.api.getPlaylistItem?.());if(item){current.api.setMute(false);current.api.load(item);current.api.play(true)?.catch?.(()=>{});}}else{current.video.load?.();current.video.play?.()?.catch?.(()=>{});}}});
           if(state.failed)statusPanel.fail();
           statusPanel.update(state.load);
         }else{statusPanel?.dispose();statusPanel=null;}
+        return true;
       }
     }
-    return !!enhancementRoot() && candidate()?.video===video;
+    clearLocalPresentation();
+    return !!enhancementRoot() && found?.video===video;
   }
   function replaceMedia(video,value,signal){
     const found=candidate(),provider=value?.provider,playlist=SharedPlayer.mediaPlaylist(value?.playlist);
     const original=providerIdentity || window.episode && {movieId:String(window.episode.movieId),season:window.episode.season_number};
-    if(!localPresentation() || found?.video!==video || !playlist || !provider || !/^[1-9]\d*$/.test(provider.id) || provider.movieId!==original?.movieId || provider.season!==original?.season || !sites.translationKey(provider.server))return Promise.reject(new Error('Không xác minh được tập mới'));
+    if(!persistentProvider() || found?.video!==video || !playlist || !provider || !/^[1-9]\d*$/.test(provider.id) || provider.movieId!==original?.movieId || provider.season!==original?.season || !sites.translationKey(provider.server))return Promise.reject(new Error('Không xác minh được tập mới'));
     // This provider captures resumeData once at ready. Reusing its engine must
     // not save episode 3 into episode 2's native key, including onunload's
     // bracket assignment. Only that captured key is redirected; other storage
@@ -131,9 +142,13 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
       if(remote){
         const current=()=>media.isConnected && media.state?.customCapable===true && bridge.getFrame(media.frame)===media && signature===[media.session?.token,media.frame.src,media.state.mediaId].join('|');
         const state=()=>{const value=media.state || {},ad=value.ad===true,duration=media.duration,time=media.currentTime;
-          return {kind:'remote',failed:!!value.error,ready:current() && !ad && !value.error && Number.isFinite(duration) && duration>0 && Number.isFinite(time) && media.readyState>=1,ad,time,duration,rate:media.playbackRate,paused:media.paused,ended:media.ended,played:value.played===true,load:SharedPlayer.validLoadMetrics(value.load)?value.load:null};};
+          const ready=current() && !ad && !value.error && Number.isFinite(duration) && duration>0 && Number.isFinite(time) && media.readyState>=1;
+          const initializable=current() && !ad && !value.error && !ready && value.initializable===true;
+          return {kind:'remote',failed:!!value.error,initializable,ready,ad,time,duration,rate:media.playbackRate,paused:media.paused,ended:media.ended,played:value.played===true,load:SharedPlayer.validLoadMetrics(value.load)?value.load:null};};
         const command=(action,value)=>{
-          if(!state().ready)return false;
+          const currentState=state();
+          if(action==='initialize-play-audible')return currentState.initializable ? media.command('initialize-play-audible') : false;
+          if(!currentState.ready)return false;
           switch(action){
             case 'seek':if(!Number.isFinite(value))return false;media.currentTime=Math.max(0,Math.min(value,media.duration-.25));break;
             case 'rate':if(!Number.isFinite(value) || value<.25 || value>4)return false;media.playbackRate=value;break;
@@ -164,11 +179,11 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     mounted.ui.setContext({url:page.url,episodeID:page.episodeKey,lane:page.language,server:localPresentation()?page.server:hooks.serverKey(),next:page.next});
     if(remote){
-      const record=waiting.get(media.frame),ready=mounted.player.state().ready && !mounted.ui.shell.hidden;
+      const record=waiting.get(media.frame),currentState=mounted.player.state(),ready=(currentState.ready || currentState.initializable) && !mounted.ui.shell.hidden;
       if(ready){media.frame.dataset.mcDisplay='custom';record?.panel?.dispose();if(record)record.panel=null;}
-      else{if(media.frame.dataset.mcDisplay==='custom')record?.reset();if(mounted.player.state().failed)record?.panel?.fail();record?.panel?.update(mounted.player.state().load);}
+      else{if(media.frame.dataset.mcDisplay==='custom')record?.reset();if(currentState.failed)record?.panel?.fail();record?.panel?.update(currentState.load);}
     }
     return true;
   }
-  return {guard,enhanceLocal,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;detach();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,enhanceLocal,clearLocal:clearLocalPresentation,localPresentation,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,initializePlayAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;clearLocalPresentation();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }

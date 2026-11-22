@@ -15,6 +15,8 @@ function createMotchillPlayerAdapters(sites) {
         return { buttons: '.dooplay_player_option', containers: '#playeroptions' };
       case sites.families.MYUI: // https://motchillv.fun/
         return { buttons: '.streaming-server', containers: '.tip-change-server,.myui-player__item .player-box,.player-controls' };
+      case sites.families.CHIBIFLIX: // https://motchillfv.help/ (each translation has its own ?sv= episode route)
+        return { buttons: ':not(*)', containers: '#episodes-list .v-tabs-min,#episodes-list .de-type,.v-tabs-min' };
       default: return { buttons: ':not(*)', containers: '' };
     }
   }
@@ -87,6 +89,7 @@ function createMotchillPlayerAdapters(sites) {
   }
   function serverContainer(doc = document, family = sites.detect(doc)) {
     if (family === sites.families.NEXT_REVIVE) return reviveServerContainer(doc);
+    if (family === sites.families.CHIBIFLIX) return doc.querySelector('#episodes-list .v-tabs-min,#episodes-list .de-type,.v-tabs-min');
     const config = selectors(family);
     const choices = serverChoices(doc, family);
     if (config.containers) {

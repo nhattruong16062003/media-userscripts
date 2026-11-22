@@ -61,12 +61,13 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     },
     async activate(candidate,_target,{signal}){
       if(!current(candidate) || key()!==candidate.sourceKey)throw new Error('Nguồn chuẩn bị đã đổi');
-      rollback={media:currentMedia,muted:!!currentMedia?.muted,paused:!!currentMedia && currentMedia.paused!==false};
+      const persistent=!!(currentMedia?.state.localPresentation && currentMedia?.state.nativeEnhanced && currentMedia?.state.playlist);
+      rollback={media:currentMedia,muted:!!currentMedia?.muted,paused:!!currentMedia && currentMedia.paused!==false,persistent};
       // The visible mobile engine loads/seeks/confirms this playlist during
       // commit. Starting the disposable iframe first triggers the provider's
       // captured native resume handler and can undo seek-zero. Keep this
       // descriptor paused/silent; never claim that it has started at zero.
-      if(currentMedia?.state.localPresentation)return {deferred:'persistent'};
+      if(persistent)return {deferred:'persistent'};
       bridge.setRole(candidate.frame,'current');candidate.remote.command('start-zero');
       // The child verifies seek-zero and its first actual Play before setting
       // startedAtZero. A delayed parent poll may observe >3s; requiring that
@@ -79,12 +80,12 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
       }
       return {playing:true,startedAt:0};
     },
-    async commit(candidate,target,_result,operation){
+    async commit(candidate,target,result,operation){
       if(operation.signal.aborted || !operation.isCurrent() || !current(candidate) || key()!==candidate.sourceKey)throw new Error('Tác vụ không còn hiện hành');
       const old=state()?.frame;if(!old)throw new Error('Khung cũ đã đổi');
-      if(currentMedia?.state.localPresentation){
-        const original=currentMedia,previousFile=original.state.playlist?.file,provider=candidate.remote.state.provider,playlist=candidate.remote.state.playlist;
-        if(!playlist || !provider || provider.movieId!==original.state.provider?.movieId || provider.season!==original.state.provider?.season || provider.id!==String(candidate.episode.id) || provider.server!==candidate.episode.server)throw new Error('Nguồn không cùng phim/mùa/server');
+      if(result?.deferred==='persistent'){
+        const original=currentMedia,previousFile=original?.state.playlist?.file,provider=candidate.remote.state.provider,playlist=candidate.remote.state.playlist;
+        if(!original?.state.localPresentation || !original.state.nativeEnhanced || !previousFile || !playlist || !provider || provider.movieId!==original.state.provider?.movieId || provider.season!==original.state.provider?.season || provider.id!==String(candidate.episode.id) || provider.server!==candidate.episode.server)throw new Error('Nguồn không cùng phim/mùa/server');
         document.dispatchEvent(new Event('mc-before-server-change'));
         // History must not bind a new media URL to the previous route during
         // an asynchronous engine load. The same visible document stays full.
@@ -128,7 +129,7 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     },
     // A persistent child owns its rollback, including Pause/audio. Parent
     // commands here could unmute or resume an unconfirmed intermediate source.
-    rollback(){if(rollback?.media && !rollback.media.state.localPresentation){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
+    rollback(){if(rollback?.media && !rollback.persistent){rollback.media.muted=rollback.muted;if(!rollback.paused)rollback.media.play()?.catch(()=>{});}rollback=null;},
     discard(candidate){if(!candidate.activated)candidate.frame.remove();},
   },{commitTimeoutMs:45000,activateInCommit:true});
   const style=document.createElement('style');style.dataset.mcNativeNavigation='1';style.textContent='.mc-native-prepared{position:fixed!important;left:-10000px!important;top:0!important;width:640px!important;height:360px!important;opacity:0!important;pointer-events:none!important}.player-frame-stable:fullscreen{width:100vw!important;height:100vh!important;padding:0!important;background:#000}';

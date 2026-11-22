@@ -15,12 +15,16 @@
 // @match        https://player.phimapi.com/player/*
 // @match        https://maztoycdn.xyz/watch/*
 // @match        https://player.cbplay.cc/embed/*
+// @match        https://player.cloudbeta.win/embed/*
 // @match        https://cdn.loadvid.com/videos/play/*
 // @match        https://embed13.streamc.xyz/*
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
+// @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed15.streamc.xyz/embed.php*
+// @match        https://embed18.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @include      /^https?:\/\/[^\/?#]*motchill[^\/?#]*\//
@@ -83,6 +87,7 @@
         blockDooPlay(); break;
       case sites.families.MYUI: // https://motchillv.fun/phim/thuong-cong-chua/tap-1 — Yii/MyUI.
         blockMyUI(); break;
+      case sites.families.CHIBIFLIX: // https://motchillfv.help/ — popups/streamc handled by primeAdState & NavigationGuard.
       case sites.families.WRAPPER:
       default:
         // Wrapper/player/loại mới: chỉ dùng hook video/cờ đã biết; không ẩn DOM theo phỏng đoán.
@@ -109,10 +114,28 @@
     for (const key of ['plp_windowStart', 'lastPopupTime', 'shopeeLastShown']) set('localStorage', key, FUTURE);
     set('localStorage', 'plp_windowCount', '999');
     set('localStorage', 'popupShown', 'true');
+    // Stream Panel R25 (/assets/ads.*.js on embed*.streamc.xyz) exits on line 1 when streamAdsLoaded is truthy.
+    try { window.streamAdsLoaded = true; } catch (e) {}
     try { document.cookie = 'popup_last_shown=' + FUTURE + '; path=/'; } catch (e) {}
   }
 
   function blockKnownEmbedAds() {
+    // DooPlay /tvc-embed.html wrapper (https://motchillkd.online/tvc-embed.html?embed=...):
+    // plays #tvc-container > video#tvc-video[src*="/wp-content/ADS/"] before loading #movie-frame in closeTVC().
+    if (BLOCK_VIDEO_ADS && /^\/tvc-embed\.html$/i.test(location.pathname)) {
+      const skipTvc = () => {
+        const embed = sites.url(new URLSearchParams(location.search).get('embed'));
+        const tvc = document.querySelector('#tvc-container > video#tvc-video[src*="/wp-content/ADS/"]');
+        const movieFrame = document.querySelector('#movie-container > iframe#movie-frame');
+        if (!embed || !(sites.embedHosts.has(embed.hostname) || sites.isMotchill(embed.hostname)) || !tvc || !movieFrame) return;
+        tvc.muted = true;
+        tvc.pause();
+        tvc.dispatchEvent(new Event('ended'));
+        tvc.addEventListener('play', () => { tvc.muted = true; tvc.pause(); });
+      };
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', skipTvc, { once: true });
+      else skipTvc();
+    }
     // Player source đã đọc 2026-11-13: https://a.motchill68.tv/embed/4/274183.
     // Nhận diện bằng route + schema __EMBED_DATA__ + API pathname, không domain.
     // Player bỏ riêng ads IIFE nếu endpoint rỗng; video/token/availability vẫn nguyên.
@@ -303,8 +326,8 @@
   }
 
   function blockDooPlay() {
-    // https://motchillkd.net/phim-le/allen/: banner #bottom-sticky-ad, ảnh /wp-content/ADS/.
-    addStyle('#bottom-sticky-ad, a:has(img[src*="/wp-content/ADS/"]) { display: none !important; }');
+    // https://motchillkd.net/phim-le/allen/, https://motchillkd.online/: banner #bottom-sticky-ad, .ads-728x90-container, ảnh /wp-content/ADS/.
+    addStyle('#bottom-sticky-ad, .ads-728x90-container, a:has(img[src*="/wp-content/ADS/"]) { display: none !important; }');
   }
 
   function blockMyUI() {

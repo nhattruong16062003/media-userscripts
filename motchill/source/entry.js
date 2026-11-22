@@ -11,6 +11,9 @@
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
+// @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed15.streamc.xyz/embed.php*
+// @match        https://embed18.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @include      /^https?:\/\/[^\/?#]*motchill[^\/?#]*\//
@@ -36,8 +39,9 @@
       case sites.families.NEXT: // https://motchille.com.mx/ — có iframe chưa có nghĩa là web cũ.
       case sites.families.NEXT_REVIVE: // https://motchill68.tv/ — player embed khác trang phim gốc.
       case sites.families.APIPHIM: // https://motchill.garden/
-      case sites.families.DOO: // https://motchillkd.net/
+      case sites.families.DOO: // https://motchillkd.net/, https://motchillsc.mom/
       case sites.families.MYUI: // https://motchillv.fun/
+      case sites.families.CHIBIFLIX: // https://motchillfv.help/
       case sites.families.WRAPPER: return sites.adapter(); // Case tổng hợp cho wrapper Motchill, cần handshake.
       default: return null;
     }

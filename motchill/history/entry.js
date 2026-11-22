@@ -13,12 +13,16 @@
 // @match        https://player.phimapi.com/player/*
 // @match        https://maztoycdn.xyz/watch/*
 // @match        https://player.cbplay.cc/embed/*
+// @match        https://player.cloudbeta.win/embed/*
 // @match        https://cdn.loadvid.com/videos/play/*
 // @match        https://embed13.streamc.xyz/*
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
+// @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed15.streamc.xyz/embed.php*
+// @match        https://embed18.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @include      /^https?:\/\/[^\/?#]*motchill[^\/?#]*\//
@@ -187,13 +191,16 @@
     // Claim before any asynchronous storage work, including a failed/slow DB.
     // Gestures can then distinguish an absent history script from a read error.
     event.preventDefault();
+    const replyError = () => document.dispatchEvent(new CustomEvent('mc-history-resume-response', {
+      detail: JSON.stringify({ id: request.id, error: true }),
+    }));
     loaded.then(async () => {
-      if (storageError) return;
+      if (storageError) { replyError(); return; }
       poll();
       // The server-change event saves the outgoing progress asynchronously.
       // Wait for that journal write before reading a target-language position.
       await queue;
-      const active = currentInfo;
+      const active = currentInfo || selectHistoryAdapter()?.read();
       const requestPageUrl = location.href;
       const target = request.info;
       if (!active || !target || !sites.sameFilm(active, target) || target.episodeKey !== active.episodeKey) return;
@@ -208,15 +215,16 @@
       const detail = sites.readDetail(doc, pageUrl);
       if (!detail || !sites.sameFilm(active, detail) || !detail.episodes.some((ep) =>
         ep.episodeKey === target.episodeKey && ep.language === target.language)) return;
-      try { db = await readDB() || db; } catch (_) { return; }
-      if (location.href !== requestPageUrl || !currentInfo || !sites.sameEpisode(currentInfo, active)) return;
+      try { db = await readDB() || db; } catch (_) { replyError(); return; }
+      const latest = currentInfo || selectHistoryAdapter()?.read();
+      if (location.href !== requestPageUrl || !latest || !sites.sameEpisode(latest, active)) return;
       const saved = find(active)?.episodes?.[episodeSlot(target)];
       const value = saved && Number.isFinite(saved.position) && Number.isFinite(saved.duration)
         ? { position: saved.position, duration: saved.duration } : null;
       document.dispatchEvent(new CustomEvent('mc-history-resume-response', {
         detail: JSON.stringify({ id: request.id, value }),
       }));
-    }).catch(() => {});
+    }).catch(replyError);
   });
 
   let attached = null;
@@ -241,8 +249,9 @@
       case sites.families.NEXT: return sites.adapter(family); // https://motchille.com.mx/
       case sites.families.NEXT_REVIVE: return sites.adapter(family); // https://motchill68.tv/xem-phim/thuong-cong-chua?tap=1
       case sites.families.APIPHIM: return sites.adapter(family); // https://motchill.garden/
-      case sites.families.DOO: return sites.adapter(family); // https://motchillkd.net/
+      case sites.families.DOO: return sites.adapter(family); // https://motchillkd.net/, https://motchillsc.mom/
       case sites.families.MYUI: return sites.adapter(family); // https://motchillv.fun/
+      case sites.families.CHIBIFLIX: return sites.adapter(family); // https://motchillfv.help/
       case sites.families.WRAPPER: return sites.adapter(family); // Chờ iframe gửi metadata phim đã xác minh.
       default: return null; // Không tạo lịch sử từ iframe QC hoặc trang chưa biết.
     }
@@ -788,9 +797,10 @@
     }
     rendered = signature;
   }
+  const menuNav = () => document.querySelector('.phoneContent .main-menu,.apx-primary-nav,.head-main-nav ul,.myui-header__menu,header nav,.main-menu,#main_header,.main-header ul');
   function addMenu() {
     if (window.top !== window || document.querySelector('.mh-menu')) return;
-    const nav = document.querySelector('.phoneContent .main-menu,.apx-primary-nav,.head-main-nav ul,.myui-header__menu,header nav,.main-menu');
+    const nav = menuNav();
     if (!nav) return;
     const link = document.createElement('a'); link.className = 'mh-menu'; link.href = '/?lich-su#dang-xem-do'; link.textContent = 'LỊCH SỬ XEM';
     if (/^(UL|OL)$/.test(nav.tagName)) { const li = document.createElement('li'); li.append(link); nav.append(li); } else nav.append(link);
@@ -819,7 +829,7 @@
         new MutationObserver(() => {
           const needsMount = location.pathname === '/' && db.shows.some((s) => !s.finished)
             && (!section?.isConnected || !isMountedAt(section, sites.homeMount()));
-          const needsMenu = !document.querySelector('.mh-menu');
+          const needsMenu = !document.querySelector('.mh-menu') && !!menuNav();
           if (!style.isConnected || needsMount || needsMenu || sessionStorage.getItem(PENDING_KEY)) scheduleRecover();
         }).observe(document.documentElement, { childList: true, subtree: true });
       }

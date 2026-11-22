@@ -14,12 +14,16 @@
 // @match        https://player.phimapi.com/player/*
 // @match        https://maztoycdn.xyz/watch/*
 // @match        https://player.cbplay.cc/embed/*
+// @match        https://player.cloudbeta.win/embed/*
 // @match        https://cdn.loadvid.com/videos/play/*
 // @match        https://embed13.streamc.xyz/*
 // @match        https://embed1.streamc.xyz/embed.php*
 // @match        https://embed12.streamc.xyz/embed.php*
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
+// @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed15.streamc.xyz/embed.php*
+// @match        https://embed18.streamc.xyz/embed.php*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
 // @match        https://api.clubc.live/embed/*
