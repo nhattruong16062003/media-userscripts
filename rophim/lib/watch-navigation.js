@@ -6,12 +6,12 @@ import {fullscreenController} from './fullscreen.js';
 
 // The iframe element and its fullscreen ancestor survive an episode change.
 // New HTML is read as data; no fetched scripts or React tree are executed.
-export function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
+export function watchNavigation(win,{page,onChange=()=>{},ownsPlayer=()=>false}={}){
   const doc=win.document;let serial=0,controller=null,disposed=false;
   const loading=frameLoading(win),fullscreen=fullscreenController(win,{onChange});
   const href=()=>win.location.origin+win.location.pathname;
   function host(site){const node=site?.frame?.parentElement;if(node)node.dataset.rpFrameHost='1';return node;}
-  async function navigate(value,{site=detectSite(doc,win.location.href),keepLane=false,isCurrent=()=>true,pop=false}={}){
+  async function navigate(value,{site=detectSite(doc,win.location.href,page),keepLane=false,isCurrent=()=>true,pop=false}={}){
     const target=safeURL(value,win.location.href),current=readContext(site,doc),frame=site?.frame;
     if(disposed || !current || !target || target.origin!==win.location.origin || !target.pathname.startsWith('/xem-phim/') || !frame?.isConnected)return 'unavailable';
     if(!pop && target.origin+target.pathname===href())return 'navigating';
@@ -47,14 +47,28 @@ export function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
       commitWatchSite(doc,nextSite);doc.title=parsed.title;
       for(const a of doc.querySelectorAll('a[href].on-air'))if(safeURL(a.href)?.pathname.startsWith('/xem-phim/'))a.classList.remove('on-air');
       for(const a of doc.querySelectorAll('.de-eps a[href],.playlist a[href],a.btn-episode[href]'))if(safeURL(a.href)?.origin===target.origin && safeURL(a.href)?.pathname===target.pathname)a.classList.add('on-air');
+      if(nextSite.kind==='legacy-panels'){
+        const livePanels=[...doc.querySelectorAll('.server-picker[data-panel]')];
+        for(const srcPanel of parsed.querySelectorAll('.server-picker[data-panel]')){
+          const dstPanel=livePanels.find(p=>p.dataset.panel===srcPanel.dataset.panel);if(!dstPanel)continue;
+          const dstButtons=[...dstPanel.querySelectorAll('[data-server]')];
+          for(const srcBtn of srcPanel.querySelectorAll('[data-server]')){
+            const dstBtn=dstButtons.find(n=>n.dataset.server===srcBtn.dataset.server);if(!dstBtn)continue;
+            if(srcBtn.dataset.value && isFrameURL(srcBtn.dataset.value))dstBtn.dataset.value=srcBtn.dataset.value;
+            const srcHref=safeURL(srcBtn.getAttribute('href'),target.href);
+            if(srcHref?.origin===target.origin && srcHref.pathname.startsWith('/xem-phim/'))dstBtn.setAttribute('href',srcHref.pathname+srcHref.search);
+          }
+        }
+      }
       frame.src=embed.href;onChange();return 'navigating';
     }catch{return id===serial?'error':'unavailable';}finally{win.clearTimeout(timer);if(controller===active)controller=null;}
   }
   const click=event=>{
     if(event.defaultPrevented || event.button!==0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)return;
-    const link=event.target.closest?.('a[href]');if(!link || link.closest('[data-rp-ui]') || link.target && link.target!=='_self' || link.hasAttribute('download'))return;
-    const site=detectSite(doc,win.location.href),context=readContext(site,doc),url=safeURL(link.href);
+    const link=event.target.closest?.('a[href]');if(!link || link.closest('[data-rp-ui],.server-picker') || link.hasAttribute('data-server') || link.target && link.target!=='_self' || link.hasAttribute('download'))return;
+    const site=detectSite(doc,win.location.href,page),context=readContext(site,doc),url=safeURL(link.href);
     if(!context || url?.origin!==win.location.origin || !url.pathname.startsWith('/xem-phim/'))return;
+    if(site.kind==='legacy-panels' && (link.classList.contains('chaptertm') && context.lane!=='tm' || link.classList.contains('chaptervs') && context.lane!=='vs'))return;
     const slug=url.pathname.slice('/xem-phim/'.length).replace(/\.\d+$/,'').replace(/-tap-\d+$/,'');
     if(slug!==context.movie)return;
     event.preventDefault();event.stopImmediatePropagation();
@@ -68,7 +82,7 @@ export function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
   // our bridge actually owns a ready content player.
   const nativeNext=event=>{
     if(event.data?.type!=='CHANGE_EPISODE' || !ownsPlayer())return;
-    const site=detectSite(doc,win.location.href),origin=safeURL(site?.frame?.src)?.origin;
+    const site=detectSite(doc,win.location.href,page),origin=safeURL(site?.frame?.src)?.origin;
     if(!site || !FRAME_ORIGINS.has(origin) || event.origin!==origin || event.source!==site.frame.contentWindow)return;
     event.stopImmediatePropagation();
   };
@@ -79,7 +93,7 @@ export function watchNavigation(win,{onChange=()=>{},ownsPlayer=()=>false}={}){
     const previousURL=safeURL(previous.href),target=safeURL(win.location.href);
     if(!previousURL || !target || target.origin!==previousURL.origin || !target.pathname.startsWith('/xem-phim/'))return;
     // Use the last committed descriptor until the new entry has loaded.
-    const previousSite=detectSite(doc,previousURL.href),current=readContext(previousSite,doc);
+    const previousSite=detectSite(doc,previousURL.href,page),current=readContext(previousSite,doc);
     const slug=target.pathname.slice('/xem-phim/'.length).replace(/\.\d+$/,'').replace(/-tap-\d+$/,'');
     if(!current || slug!==current.movie)return;
     event.stopImmediatePropagation();navigate(target.href,{site:previousSite,pop:true}).then(status=>{if(status!=='navigating' && win.location.href===target.href){win.History.prototype.replaceState.call(win.history,win.history.state,'',previousURL.href);onChange();}});

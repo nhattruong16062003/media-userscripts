@@ -5,6 +5,7 @@ export function isFrameURL(value) {
   return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin!=='https://api.rophim10.ink' || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
 }
 export function safeURL(value, base) {
+  if (typeof value !== 'string' || !value.trim()) return null;
   try { const u = new URL(value, base); return u.protocol === 'https:' && !u.username && !u.password ? u : null; } catch { return null; }
 }
 export function isSiteOrigin(value) {

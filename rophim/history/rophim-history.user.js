@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.4.19
+// @version      0.4.20
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -38,6 +38,7 @@
     return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
   }
   function safeURL(value, base) {
+    if (typeof value !== "string" || !value.trim()) return null;
     try {
       const u = new URL(value, base);
       return u.protocol === "https:" && !u.username && !u.password ? u : null;
@@ -150,7 +151,8 @@
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
       const expectedParent = parentOrigin();
       const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
-      if (data.type === "probe" && !active && fromParent) {
+      const frameReady = isFrameURL2(win.location.href);
+      if (data.type === "probe" && !active && fromParent && frameReady) {
         ask();
         return;
       }
@@ -168,7 +170,7 @@
         frame.contentWindow.postMessage({ tag, type: "owner", family, feature, challenge: data.challenge }, origin);
         return;
       }
-      if (data.type === "owner" && !active && data.challenge === challenge && fromParent) activate();
+      if (data.type === "owner" && !active && data.challenge === challenge && fromParent && frameReady) activate();
     };
     win.addEventListener("message", receive);
     if (isSiteURL(win.location.href)) activate();
@@ -277,7 +279,7 @@
   }
   var rscCache = /* @__PURE__ */ new WeakMap();
   function rscObjects(doc, page = {}) {
-    const texts = [];
+    const scriptTexts = [], pageTexts = [];
     for (const script of doc.querySelectorAll("script:not([src])")) {
       const raw = script.textContent || "";
       if (!raw.includes("__next_f.push")) continue;
@@ -291,16 +293,19 @@
         }
         rscCache.set(script, cached);
       }
-      texts.push(...cached.texts);
+      scriptTexts.push(...cached.texts);
     }
     try {
-      for (const item of (page.__next_f || []).slice(-100)) if (Array.isArray(item) && item[0] === 1 && typeof item[1] === "string") texts.push(item[1]);
+      for (const item of (page.__next_f || []).slice(-100)) if (Array.isArray(item) && item[0] === 1 && typeof item[1] === "string") pageTexts.push(item[1]);
     } catch {
     }
     const result = { episodes: [], movies: [] };
-    for (const text of texts) for (const m of text.matchAll(/"(episode|movie)":\s*(?=\{)/g)) {
-      const value = jsonFragment(text, m.index + m[0].length);
-      if (value && value.id && value.slug && value.name) result[m[1] === "episode" ? "episodes" : "movies"].push(value);
+    for (const text of [scriptTexts.join(""), pageTexts.join("")]) {
+      if (!text) continue;
+      for (const m of text.matchAll(/"(episode|movie)":\s*(?=\{)/g)) {
+        const value = jsonFragment(text, m.index + m[0].length);
+        if (value && value.id && value.slug && value.name) result[m[1] === "episode" ? "episodes" : "movies"].push(value);
+      }
     }
     return result;
   }
@@ -314,8 +319,19 @@
     }
     return null;
   }
+  function parseCookies(raw) {
+    const out = {};
+    for (const part of String(raw || "").split(";")) {
+      const eq = part.indexOf("=");
+      if (eq <= 0) continue;
+      const key = part.slice(0, eq).trim();
+      if (!key || Object.hasOwn(out, key)) continue;
+      out[key] = part.slice(eq + 1).trim();
+    }
+    return out;
+  }
   function legacyContext(site, doc) {
-    const cookies = site.preferences || Object.fromEntries(doc.cookie.split(";").map((v) => v.trim().split("=")));
+    const cookies = site.preferences || parseCookies(doc.cookie);
     const lane = cookies.selectedVidTypeRophim === "tm" ? "tm" : "vs";
     const links = [...doc.querySelectorAll(lane === "tm" ? ".chaptertm" : ".chaptervs")];
     const active = links.find((n) => safeURL(n.getAttribute("href"), site.url)?.pathname === site.url.pathname) || links.find((n) => n.classList.contains("on-air"));
@@ -326,12 +342,14 @@
     const movie = site.url.pathname.split("/").at(-1).replace(/-tap-\d+(?:\.[^/]*)?$/, "");
     const rawTitle = doc.querySelector('meta[property="og:title"]')?.content || doc.title;
     const original = rawTitle.split("|")[1]?.trim() || "";
+    const episode = bounded(active.querySelector(".v-title,.info")?.textContent?.trim() || active.textContent?.trim());
+    const mediaType = links.length === 1 && /^(?:full|hd|sd|cam|fhd)$/i.test(episode) && !/-tap-\d+(?:\.[^/]*)?$/i.test(site.url.pathname) ? "movie" : "tv";
     return {
       source: site.kind,
       movie,
       movieID: movie,
       title: bounded(title.replace(/\s*-\s*Tập\s*\d+.*$/i, "")),
-      episode: bounded(active.querySelector(".v-title,.info")?.textContent?.trim() || active.textContent?.trim()),
+      episode,
       episodeID: site.url.pathname,
       season: title.match(/phần\s*(\d+)/i)?.[1] || "1",
       lane,
@@ -339,7 +357,7 @@
       url: site.url.origin + site.url.pathname,
       originalTitle: bounded(original.replace(/\s+(?:season|phần)\s*\d+/ig, "").replace(/\s+(?:19|20)\d{2}\s*$/, "")),
       year: original.match(/\b((?:19|20)\d{2})\s*$/)?.[1] || "",
-      mediaType: "tv",
+      mediaType,
       externalImdb: "",
       externalTmdb: "",
       poster: bounded(doc.querySelector('meta[property="og:image"]')?.content || "", 2048)
@@ -347,8 +365,9 @@
   }
   function legacyNextRoute(site, context, win) {
     const nodes = [...win.document.querySelectorAll(context.lane === "tm" ? ".btn-episode.chaptertm" : ".btn-episode.chaptervs")];
-    const index = nodes.findIndex((n) => n.classList.contains("on-air"));
-    const url = safeURL(nodes[index + 1]?.href);
+    let index = nodes.findIndex((n) => safeURL(n.getAttribute("href"), site.url)?.pathname === site.url.pathname);
+    if (index < 0) index = nodes.findIndex((n) => n.classList.contains("on-air"));
+    const url = safeURL(nodes[index + 1]?.getAttribute("href") || nodes[index + 1]?.href, site.url);
     return index >= 0 && url?.origin === site.url.origin ? url.href : null;
   }
 
@@ -413,7 +432,7 @@
     if (!frame) return null;
     const data = transition?.frameSrc === frame.src && ["next-ordered", "next-basic"].includes(transition.kind) && transition.episode && transition.movie ? { episodes: [transition.episode], movies: [transition.movie] } : rscObjects(doc, page);
     const suffix = url.pathname.match(/\.(\d+)$/)?.[1];
-    const embedID = safeURL(frame.src)?.pathname.match(/^\/embed\/(\d+)$/)?.[1];
+    const embedID = safeURL(frame.src)?.pathname.match(/^\/embed\/(\d+)\/?$/)?.[1];
     const candidates = data.episodes.filter((e) => suffix ? String(e.id) === suffix : embedID ? String(e.id) === embedID : e.link === frame.src);
     const episode = candidates.at(-1);
     if (!episode || typeof episode.server !== "string" || !["embed", "m3u8"].includes(episode.type)) return null;
@@ -423,7 +442,6 @@
     if (!movie) return null;
     const candidate = { frame, url, episode, movie };
     return detectNextOrdered(candidate) || detectNextBasic(doc, candidate);
-    return null;
   }
   function commitWatchSite(doc, site) {
     let node = doc.getElementById("rp-watch-descriptor");
@@ -695,26 +713,45 @@
       registries.set(win, existing);
       return existing;
     }
-    const owners = /* @__PURE__ */ new WeakMap(), jwOwners = /* @__PURE__ */ new Set(), doc = win.document, ObjectAPI = win.Object, original = ObjectAPI.defineProperty, originalAssign = ObjectAPI.assign;
-    let observing = true, timer;
+    const owners = /* @__PURE__ */ new WeakMap(), jwOwners = /* @__PURE__ */ new Set(), ObjectAPI = win.Object, original = ObjectAPI.defineProperty, originalAssign = ObjectAPI.assign;
+    const exposeTo = (fn, target = win) => {
+      try {
+        return typeof exportFunction === "function" ? exportFunction(fn, target) : fn;
+      } catch {
+        return fn;
+      }
+    };
+    const hostWin = typeof window !== "undefined" && (window === win || window.wrappedJSObject === win) ? window : win;
+    const liveDoc = () => win.document;
+    const unwrap = (v) => v?.wrappedJSObject || v;
+    const sameDoc = (node) => {
+      const d = liveDoc();
+      return !!node && (node.ownerDocument === d || unwrap(node.ownerDocument) === unwrap(d));
+    };
+    let observing = true, timer, exposedObserve = null, exposedAssign = null;
     function releaseGlobal() {
       try {
-        if (ObjectAPI.defineProperty === observe) ObjectAPI.defineProperty = original;
+        const cur = ObjectAPI.defineProperty;
+        if (cur === exposedObserve || cur === observe || exposedObserve && unwrap(cur) === unwrap(exposedObserve)) ObjectAPI.defineProperty = original;
       } catch {
       }
       try {
-        if (ObjectAPI.assign === observeAssign) ObjectAPI.assign = originalAssign;
+        const cur = ObjectAPI.assign;
+        if (cur === exposedAssign || cur === observeAssign || exposedAssign && unwrap(cur) === unwrap(exposedAssign)) ObjectAPI.assign = originalAssign;
       } catch {
       }
     }
     function stop(event) {
-      releaseGlobal();
-      win.clearTimeout(timer);
       if (event?.persisted) return;
+      if (event?.type === "pagehide" && win.location?.href === "about:blank") return;
+      releaseGlobal();
+      hostWin.clearTimeout(timer);
       observing = false;
-      win.removeEventListener("pagehide", stop);
+      hostWin.removeEventListener("pagehide", stop);
+      registries.delete(win);
       try {
-        if (win[registryKey] === registry) delete win[registryKey];
+        const cur = win[registryKey];
+        if (cur === registry || unwrap(cur) === unwrap(registry)) delete win[registryKey];
       } catch {
       }
     }
@@ -722,14 +759,15 @@
       const result = Reflect.apply(original, this, arguments);
       if (observing && key === "url") {
         try {
-          if (typeof ObjectAPI.getOwnPropertyDescriptor(descriptor, "get")?.value !== "function" || typeof ObjectAPI.getOwnPropertyDescriptor(descriptor, "set")?.value !== "function") return result;
-          const template = ObjectAPI.getOwnPropertyDescriptor(target, "template")?.value;
-          if (!template || ObjectAPI.getOwnPropertyDescriptor(template, "art")?.value !== target) return result;
+          const rawTarget = unwrap(target), rawDesc = unwrap(descriptor);
+          if (typeof ObjectAPI.getOwnPropertyDescriptor(rawDesc, "get")?.value !== "function" || typeof ObjectAPI.getOwnPropertyDescriptor(rawDesc, "set")?.value !== "function") return result;
+          const template = unwrap(ObjectAPI.getOwnPropertyDescriptor(rawTarget, "template")?.value);
+          if (!template || unwrap(ObjectAPI.getOwnPropertyDescriptor(template, "art")?.value) !== rawTarget) return result;
           const video = ObjectAPI.getOwnPropertyDescriptor(template, "$video")?.value, root = ObjectAPI.getOwnPropertyDescriptor(template, "$player")?.value;
-          if (video?.ownerDocument === doc && video.matches("video.art-video") && root?.classList.contains("art-video-player") && root.contains(video) && typeof target.on === "function") {
-            owners.set(video, target);
+          if (sameDoc(video) && video.matches("video.art-video") && root?.classList.contains("art-video-player") && root.contains(video) && typeof rawTarget.on === "function") {
+            owners.set(unwrap(video), rawTarget);
             releaseGlobal();
-            win.clearTimeout(timer);
+            hostWin.clearTimeout(timer);
           }
         } catch {
         }
@@ -739,36 +777,47 @@
     function observeAssign(target, ...sources) {
       const result = Reflect.apply(originalAssign, this, [target, ...sources]);
       if (observing && target && jwOwners.size < 8) try {
-        for (const value of sources) {
+        const rawTarget = unwrap(target);
+        for (const source of sources) {
+          const value = unwrap(source);
           if (!value || ObjectAPI.getOwnPropertyDescriptor(value, "isSetup")?.value !== false) continue;
-          const model = ObjectAPI.getOwnPropertyDescriptor(value, "model")?.value, api = ObjectAPI.getOwnPropertyDescriptor(value, "api")?.value;
-          if (!model || !api || ObjectAPI.getOwnPropertyDescriptor(target, "model")?.value !== model || ObjectAPI.getOwnPropertyDescriptor(target, "api")?.value !== api) continue;
-          if (typeof model.getVideo !== "function" || typeof model.get !== "function" || typeof api.getContainer !== "function" || api.getContainer()?.ownerDocument !== doc || model.get("id") !== api.id) continue;
+          const model = unwrap(ObjectAPI.getOwnPropertyDescriptor(value, "model")?.value), api = unwrap(ObjectAPI.getOwnPropertyDescriptor(value, "api")?.value);
+          if (!model || !api || unwrap(ObjectAPI.getOwnPropertyDescriptor(rawTarget, "model")?.value) !== model || unwrap(ObjectAPI.getOwnPropertyDescriptor(rawTarget, "api")?.value) !== api) continue;
+          if (typeof model.getVideo !== "function" || typeof model.get !== "function" || typeof api.getContainer !== "function" || !sameDoc(api.getContainer()) || model.get("id") !== api.id) continue;
           jwOwners.add({ model, api });
           releaseGlobal();
-          win.clearTimeout(timer);
+          hostWin.clearTimeout(timer);
           break;
         }
       } catch {
       }
       return result;
     }
-    const registry = { version: 1, get(video) {
-      const owner = owners.get(video);
-      if (owner?.template?.$video === video && !owner.isDestroy) return owner.hls;
+    const registry = new ObjectAPI();
+    registry.version = 1;
+    registry.get = exposeTo(function(video) {
+      const rawVideo = unwrap(video);
+      const owner = owners.get(rawVideo) || owners.get(video);
+      if (owner && unwrap(owner.template?.$video) === rawVideo && !owner.isDestroy) return owner.hls;
       for (const { model, api } of jwOwners) {
         const provider = model.getVideo(), root = api.getContainer();
-        if (provider?.video === video && video.ownerDocument === doc && video.closest(".jwplayer") === root && root.contains(video)) return provider.hlsjs;
+        if (unwrap(provider?.video) === rawVideo && sameDoc(rawVideo) && unwrap(rawVideo.closest(".jwplayer")) === unwrap(root) && root?.contains(rawVideo)) return provider.hlsjs;
       }
       return null;
-    }, stop };
+    }, win);
+    registry.stop = exposeTo(stop, win);
     registries.set(win, registry);
     try {
-      Reflect.apply(original, ObjectAPI, [win, registryKey, { value: registry, configurable: true }]);
-      ObjectAPI.defineProperty = observe;
-      ObjectAPI.assign = observeAssign;
-      timer = win.setTimeout(releaseGlobal, 9e4);
-      win.addEventListener("pagehide", stop);
+      exposedObserve = exposeTo(observe, win);
+      exposedAssign = exposeTo(observeAssign, win);
+      const desc = new ObjectAPI();
+      desc.value = registry;
+      desc.configurable = true;
+      Reflect.apply(original, ObjectAPI, [win, registryKey, desc]);
+      ObjectAPI.defineProperty = exposedObserve;
+      ObjectAPI.assign = exposedAssign;
+      timer = hostWin.setTimeout(releaseGlobal, 9e4);
+      hostWin.addEventListener("pagehide", stop);
     } catch {
       releaseGlobal();
       observing = false;
@@ -777,11 +826,19 @@
   }
   function accessibleHls(candidate) {
     const { video, kind, api } = candidate, win = video.ownerDocument.defaultView;
+    const pageWin = win?.wrappedJSObject || null, rawVideo = video.wrappedJSObject || video;
     const provider = kind === "jw" ? api?.getProvider?.() : null;
-    const registry = registries.get(win) || win[registryKey];
-    const captured = registry?.version === 1 ? registry.get(video) : null;
-    for (const h of [captured, provider?.hlsjs, provider?.hls, win.hls, win.art?.hls])
-      if (h?.media === video && h.config && typeof h.on === "function" && typeof h.off === "function") return h;
+    const views = [win, pageWin].filter((v, i, a) => v && a.indexOf(v) === i);
+    const captured = [];
+    for (const view of views) {
+      const registry = registries.get(view) || view[registryKey];
+      if (registry?.version === 1) {
+        const item = registry.get(rawVideo) || registry.get(video);
+        if (item) captured.push(item);
+      }
+    }
+    for (const h of [...captured, provider?.hlsjs, provider?.hls, ...views.flatMap((view) => [view.hls, view.art?.hls])])
+      if (h && (h.media === video || h.media === rawVideo) && h.config && typeof h.on === "function" && typeof h.off === "function") return h;
     return null;
   }
 
@@ -846,6 +903,7 @@
       } else if (["waiting", "stalled", "seeking"].includes(event.type)) {
         waiting = true;
         stableSince = null;
+        if (tuning && event.type !== "seeking") limited = true;
         restore();
         qualityBaseline = null;
         healthyFrames = false;
@@ -917,18 +975,27 @@
       lastPolicyCheck = -Infinity;
       policy = engine ? "observed" : "native";
       if (engine) {
-        const fragment = (_event, data) => {
-          const stats = data?.stats || data?.frag?.stats, s = stats?.loading;
+        const pageWin = win?.wrappedJSObject || win;
+        const exposeTo = (fn) => {
+          try {
+            return typeof exportFunction === "function" ? exportFunction(fn, pageWin) : fn;
+          } catch {
+            return fn;
+          }
+        };
+        const fragment = exposeTo((_event, raw) => {
+          const data = raw?.wrappedJSObject || raw, stats = data?.stats || data?.frag?.stats, s = stats?.loading;
           if (!active() || data?.frag?.type && data.frag.type !== "main" || !s || !nonnegative(stats.loaded) || !(s.end > s.start) || s.start < since) return;
           fragments.push({ bytes: stats.loaded, start: s.start, end: s.end, duration: data.part ? null : data.frag?.duration });
           if (fragments.length > 32) fragments.shift();
-        };
-        const error = (_event, data) => {
+        });
+        const error = exposeTo((_event, raw) => {
+          const data = raw?.wrappedJSObject || raw;
           if (data?.fatal || data?.details === "bufferFullError" || data?.error?.name === "QuotaExceededError") {
             limited = true;
             restore();
           }
-        };
+        });
         const bound = engine;
         bound.on("hlsFragLoaded", fragment);
         bound.on("hlsError", error);
@@ -944,10 +1011,10 @@
     }
     function snapshot(state) {
       const now = clock(), time = state.time;
-      const current = kind === "jw" ? api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file : video.currentSrc || video.src;
+      const current = (kind === "jw" ? api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file : video.currentSrc || video.src) || "";
       if (current !== source) {
         reset();
-        source = current || "";
+        source = current;
         waiting = false;
       }
       bindEngine();
@@ -989,7 +1056,7 @@
         if (stableSince !== null && quality && Number.isFinite(quality.totalVideoFrames) && Number.isFinite(quality.droppedVideoFrames)) {
           if (!qualityBaseline) qualityBaseline = { total: quality.totalVideoFrames, dropped: quality.droppedVideoFrames, at: now };
           const total = quality.totalVideoFrames - qualityBaseline.total, dropped = quality.droppedVideoFrames - qualityBaseline.dropped;
-          if (total < 0 || dropped < 0 || total >= 100 && dropped / total > 0.01 || dropped >= 3 && total < 30 || tuning && delayed) {
+          if (total < 0 || dropped < 0 || total >= 100 && dropped / total > 0.01 || total < 100 && dropped >= 3 && (total < 30 || dropped / total > 0.02) || tuning && delayed) {
             if (tuning) limited = true;
             cooldownUntil = now + 15e3;
             stableSince = null;
@@ -1092,7 +1159,8 @@
     if (jwRoot) {
       try {
         const api = typeof page.jwplayer === "function" && page.jwplayer(jwRoot.id);
-        if (api?.getContainer?.() === jwRoot && typeof api.seek === "function" && typeof api.getPosition === "function") return { kind: "jw", video, root: jwRoot, api };
+        const container = api?.getContainer?.();
+        if ((container?.wrappedJSObject || container) === (jwRoot.wrappedJSObject || jwRoot) && typeof api.seek === "function" && typeof api.getPosition === "function") return { kind: "jw", video, root: jwRoot, api };
       } catch {
       }
       return null;
@@ -1148,6 +1216,16 @@
         return { muted: !!video.muted, volume: finite(video.volume) ? video.volume : 1 };
       }
     };
+    const pageWin = video.ownerDocument.defaultView?.wrappedJSObject || video.ownerDocument.defaultView;
+    const exposeTo = (fn) => {
+      try {
+        return typeof exportFunction === "function" ? exportFunction(fn, pageWin) : fn;
+      } catch {
+        return fn;
+      }
+    };
+    const noop = exposeTo(() => {
+    });
     const setMute = (value) => kind === "jw" && typeof api.setMute === "function" ? api.setMute(value) : video.muted = value;
     const setVolume = (value) => kind === "jw" && typeof api.setVolume === "function" ? api.setVolume(value * 100) : video.volume = value;
     function restoreAudio(value) {
@@ -1161,19 +1239,17 @@
         }
       }
       const previous = audio(), generation = ++audioGeneration;
-      const rollback = () => {
+      const rollback = exposeTo(() => {
         if (generation !== audioGeneration || playerFingerprint(candidate) !== initialSource || !video.isConnected || !canRestoreAudio() || !state().ready) return;
         try {
-          setVolume(previous.volume)?.catch?.(() => {
-          });
+          setVolume(previous.volume)?.catch?.(noop);
         } catch {
         }
         try {
-          setMute(previous.muted)?.catch?.(() => {
-          });
+          setMute(previous.muted)?.catch?.(noop);
         } catch {
         }
-      };
+      });
       try {
         setVolume(wanted.volume)?.catch?.(rollback);
         setMute(wanted.muted)?.catch?.(rollback);
@@ -1186,10 +1262,10 @@
     let adActive = false;
     const handlers = [], subscribers = /* @__PURE__ */ new Set();
     if (kind === "jw") for (const [event, value] of [["adRequest", true], ["adPlay", true], ["adComplete", false], ["adSkipped", false], ["adError", false]]) {
-      const handler = () => {
+      const handler = exposeTo(() => {
         adActive = value;
         for (const notify of subscribers) notify();
-      };
+      });
       api.on?.(event, handler);
       handlers.push([event, handler]);
     }
@@ -1215,8 +1291,7 @@
         api.setMute(false);
         const volume = api.getVolume?.();
         if (!finite(volume) || volume <= 0) api.setVolume?.(100);
-        api.play(true)?.catch?.(() => {
-        });
+        api.play(true)?.catch?.(noop);
         return true;
       }
       if (!s.ready || s.ad) return false;
@@ -1250,8 +1325,7 @@
         }
         // Fall through so sound and playback are changed in the same handler.
         case "play":
-          if (kind === "jw" && typeof api.play === "function") api.play(true)?.catch?.(() => {
-          });
+          if (kind === "jw" && typeof api.play === "function") api.play(true)?.catch?.(noop);
           else video.play()?.catch(() => {
           });
           break;
@@ -1285,7 +1359,7 @@
 
   // rophim/lib/bridge.js
   function validState(s) {
-    return s && ["jw", "art-native", "native-cdn"].includes(s.kind) && typeof s.ready === "boolean" && (s.failed === void 0 || typeof s.failed === "boolean") && typeof s.ad === "boolean" && typeof s.played === "boolean" && typeof s.paused === "boolean" && typeof s.ended === "boolean" && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
+    return s && ["jw", "art-native", "native-cdn"].includes(s.kind) && typeof s.ready === "boolean" && (s.initializable === void 0 || typeof s.initializable === "boolean") && (s.failed === void 0 || typeof s.failed === "boolean") && typeof s.ad === "boolean" && typeof s.played === "boolean" && typeof s.paused === "boolean" && typeof s.ended === "boolean" && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
   }
   function acceptsPacket(event, session, channel) {
     const d = event.data;
@@ -1303,11 +1377,12 @@
   function createBridge(win, page, feature, callbacks = {}) {
     const channel = "rophim." + feature + ".v1";
     const top = win.parent === win;
+    const doc = win.document;
     if (top ? !isSiteOrigin(win.location.origin) : !isFrameURL(win.location.href)) return { dispose() {
     }, state: () => null, command: () => false };
     let session = null, site = null, context = null, local = null, media = "", lastSource = "", remote = null, generation = 0, sequence = 0, disposed = false;
-    let boundFrame = null, frameFullscreen = false, controlsReady = false;
-    let knownSource = false, snapshot = null, pending = "", retryAfter = 0;
+    let boundFrame = null, frameFullscreen = false, frameLocked = false, controlsReady = false;
+    let snapshot = null, pending = "", retryAfter = 0, fetchKey = "", fetchAttempts = 0;
     const requests = /* @__PURE__ */ new Map();
     const resultStatuses = (action) => action === "fullscreen" ? ["fullscreen", "windowed", "error", "unavailable"] : ["missing", "error", "navigating", "unavailable"];
     const clearRequests = () => {
@@ -1318,7 +1393,7 @@
       requests.clear();
     };
     const referrer = safeURL(win.document.referrer)?.origin;
-    const emit = () => callbacks.update?.({ site, context, player: local, state: top ? remote : local?.state(), media, fullscreen: frameFullscreen, controlsReady: top ? controlsReady : false });
+    const emit = () => callbacks.update?.({ site, context, player: local, state: top ? remote : local?.state(), media, fullscreen: frameFullscreen, locked: frameLocked, controlsReady: top ? controlsReady : false });
     const resetRemote = () => {
       remote = null;
       controlsReady = false;
@@ -1345,7 +1420,7 @@
         if (!Number.isSafeInteger(d.seq) || d.seq < 0) return;
         if (session?.token !== d.token || session?.generation !== d.generation) {
           clearRequests();
-          session = { source: event.source, origin: event.origin, token: d.token, generation: d.generation, seq: -1 };
+          session = { source: event.source, origin: event.origin, token: d.token, generation: d.generation, seq: -1, lockSynced: false };
           sequence = 0;
         }
         if (d.seq <= session.seq) return;
@@ -1354,6 +1429,11 @@
         if (contextKey(nextContext2) !== contextKey(context)) clearRequests();
         context = nextContext2;
         frameFullscreen = d.fullscreen === true;
+        if (!frameFullscreen) frameLocked = false;
+        else if (!session.lockSynced) {
+          session.lockSynced = true;
+          frameLocked = d.locked === true;
+        }
         emit();
         report();
         return;
@@ -1368,6 +1448,10 @@
           remote = { ...d.state, load: validLoadMetrics(d.state.load) ? Object.fromEntries(["ahead", "status", "bytesPerSecond", "online", "bufferPolicy"].map((key) => [key, d.state.load[key]])) : null };
           controlsReady = d.controlsReady === true;
           emit();
+        } else if (d.type === "lock" && typeof d.locked === "boolean" && (!media || d.media === media)) {
+          session.seq = d.seq;
+          frameFullscreen = !!win.document.fullscreenElement?.contains(boundFrame);
+          frameLocked = frameFullscreen && d.locked;
         } else if (d.type === "request" && ["next", "fullscreen"].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media === media && remote?.ready && !remote.ad && Date.now() - session.seen <= 4e3) {
           session.seq = d.seq;
           if (session.requesting && Date.now() <= session.requesting.until) return;
@@ -1401,21 +1485,28 @@
       if (disposed) return;
       if (top) {
         let nextSite = detectSite(win.document, win.location.href, page);
-        if (nextSite) knownSource = true;
         const liveFrame = win.document.querySelector(".player-ratio iframe#embed-player");
         const currentHref = win.location.href;
         if (!nextSite && snapshot?.href === currentHref && snapshot.src === liveFrame?.src) {
           nextSite = { ...snapshot.site, frame: liveFrame };
         }
-        if (!nextSite && knownSource && liveFrame && typeof win.fetch === "function" && currentHref !== pending && Date.now() > retryAfter && win.location.pathname.startsWith("/xem-phim/")) {
+        const nextFetchKey = liveFrame ? currentHref + "|" + liveFrame.src : "";
+        if (nextFetchKey !== fetchKey) {
+          fetchKey = nextFetchKey;
+          fetchAttempts = 0;
+          retryAfter = 0;
+        }
+        if (!nextSite && liveFrame && typeof win.fetch === "function" && currentHref !== pending && fetchAttempts < 3 && Date.now() > retryAfter && win.location.pathname.startsWith("/xem-phim/")) {
           pending = currentHref;
-          retryAfter = Date.now() + 5e3;
+          fetchAttempts++;
+          retryAfter = Date.now() + 5e3 * fetchAttempts;
           win.fetch(currentHref, { credentials: "same-origin" }).then((r) => r.ok ? r.text() : "").then((html) => {
-            if (!html || html.length > 2e6 || disposed || win.location.href !== currentHref) return;
+            if (!html || html.length > 2e6 || disposed || win.location.href !== currentHref || !liveFrame.isConnected) return;
             const parsed = new win.DOMParser().parseFromString(html, "text/html");
             const found = detectSite(parsed, currentHref);
             if (found && found.frame.src === liveFrame.src) {
               snapshot = { href: currentHref, src: liveFrame.src, site: found };
+              commitWatchSite(win.document, found);
               tick();
             }
           }).catch(() => {
@@ -1443,7 +1534,8 @@
           sequence = 0;
         }
         frameFullscreen = !!win.document.fullscreenElement?.contains(frame);
-        send({ type: "hello", context, fullscreen: frameFullscreen });
+        if (!frameFullscreen) frameLocked = false;
+        send({ type: "hello", context, fullscreen: frameFullscreen, locked: frameLocked });
         if (session.seen && Date.now() - session.seen > 4e3) {
           remote = null;
           controlsReady = false;
@@ -1474,7 +1566,14 @@
         diagnostic(win.document, feature, local ? local.kind + "/" + (local.state().ready ? "ready" : "ch\u1EDD metadata/n\u1ED9i dung") : "player ch\u01B0a nh\u1EADn di\u1EC7n");
       }
     };
+    const onFullscreenChange = () => {
+      if (!top || disposed) return;
+      frameFullscreen = !!boundFrame && !!doc.fullscreenElement?.contains(boundFrame);
+      if (!frameFullscreen) frameLocked = false;
+      if (session) send({ type: "hello", context, fullscreen: frameFullscreen, locked: frameLocked });
+    };
     win.addEventListener("message", onMessage);
+    if (top) doc.addEventListener("fullscreenchange", onFullscreenChange);
     const offDOM = watchDOM(win, tick), timer = win.setInterval(tick, 1e3);
     tick();
     const bridge = {
@@ -1484,6 +1583,13 @@
         if (!top) return local?.command(action, value) || false;
         if (!remote?.ready || remote.ad || !media || !session || Date.now() - session.seen > 4e3) return false;
         send({ type: "command", action, value, media });
+        return true;
+      },
+      setLocked(value) {
+        if (top || !session || !media) return false;
+        frameLocked = frameFullscreen && !!value;
+        if (session) session.lockSynced = true;
+        send({ type: "lock", locked: frameLocked, media });
         return true;
       },
       request(action) {
@@ -1507,6 +1613,7 @@
         win.clearInterval(timer);
         offDOM();
         win.removeEventListener("message", onMessage);
+        if (top) doc.removeEventListener("fullscreenchange", onFullscreenChange);
         boundFrame?.removeEventListener("load", loaded);
         callbacks.unbind?.(local);
         local?.dispose();
@@ -1561,22 +1668,38 @@
     if (!isSiteOrigin(win.location.origin)) return null;
     const original = safeURL(row.url);
     if (original?.origin === win.location.origin && original.pathname.startsWith("/xem-phim/")) return { url: original.href, source: row.source, lane: row.lane };
-    const candidates = [];
+    const watchCandidates = [], detailCandidates = [];
     for (const a of win.document.querySelectorAll("a[href]")) {
       const url = safeURL(a.href, win.location.href);
-      if (url?.origin === win.location.origin && /^\/(?:phim|xem-phim)\//.test(url.pathname) && (url.pathname.includes("/" + row.movie) || identityText(a.textContent) === identityText(row.title))) candidates.push(url.href);
+      if (url?.origin === win.location.origin && /^\/(?:phim|xem-phim)\//.test(url.pathname) && (url.pathname.includes("/" + row.movie) || identityText(a.textContent) === identityText(row.title))) {
+        (url.pathname.startsWith("/xem-phim/") ? watchCandidates : detailCandidates).push(url.href);
+      }
     }
+    const candidates = [...watchCandidates, ...detailCandidates];
     if (/^[a-z0-9-]{1,200}$/i.test(row.movie)) candidates.push(new URL("/xem-phim/" + row.movie, win.location.href).href);
     const load = async (url) => {
       const response = await win.fetch(url, { credentials: "same-origin" });
       if (!response.ok || response.url && safeURL(response.url)?.origin !== win.location.origin) return null;
       const html = await response.text();
-      return html.length <= 2e6 ? new win.DOMParser().parseFromString(html, "text/html") : null;
+      return html.length <= 2e6 ? { doc: new win.DOMParser().parseFromString(html, "text/html"), url: response.url || url } : null;
     };
-    for (const url of [...new Set(candidates)].slice(0, 5)) {
-      const doc = await load(url);
-      if (!doc) continue;
-      const site = detectSite(doc, url), context = readContext(site, doc);
+    for (const rawUrl of [...new Set(candidates)].slice(0, 5)) {
+      let loaded = await load(rawUrl);
+      if (!loaded) continue;
+      let { doc, url } = loaded;
+      let site = detectSite(doc, url);
+      if (!site && safeURL(url)?.pathname.startsWith("/phim/")) {
+        const slug = safeURL(url).pathname.slice("/phim/".length).replace(/\/.*$/, "");
+        const watchLinks = [...doc.querySelectorAll("a[href]")].map((a) => safeURL(a.getAttribute("href"), url)).filter((u) => u?.origin === win.location.origin && u.pathname.startsWith("/xem-phim/"));
+        const watchLink = watchLinks.find((u) => slug && u.pathname.includes("/" + slug) || u.pathname.includes("/" + row.movie)) || watchLinks[0];
+        if (watchLink) {
+          loaded = await load(watchLink.href);
+          if (!loaded) continue;
+          ({ doc, url } = loaded);
+          site = detectSite(doc, url);
+        }
+      }
+      const context = readContext(site, doc);
       if (!context || !sameFilm(row, context)) continue;
       switch (site.kind) {
         case "next-ordered":
@@ -1591,6 +1714,7 @@
           return { url: new URL("/xem-phim/" + encodeURIComponent(context.movie) + "." + found[0].id, win.location.href).href, source: site.kind, lane: found[0].server_type || found[0].server };
         }
         case "legacy-panels": {
+          if (String(context.season || "1") !== String(row.season || "1")) continue;
           const lane = laneKey(row.lane);
           if (!["subtitle", "voiceover"].includes(lane)) return null;
           const nodes = [...doc.querySelectorAll(lane === "voiceover" ? ".btn-episode.chaptertm" : ".btn-episode.chaptervs")];
@@ -1842,7 +1966,7 @@
   // rophim/history/entry.js
   function startHistory(win, page) {
     const doc = win.document, top = win.parent === win, db = createHistoryStore(storageAPI(win));
-    let active = null, progress = null, media = "", savedAt = 0, lastKey = "", bar = null, resume = null, panel = null, bridge = null, snapshot = null, continuing = null, cardSignature = "", savedSignature = "";
+    let active = null, progress = null, media = "", savedAt = 0, lastKey = "", bar = null, resume = null, panel = null, bridge = null, snapshot = null, awaitingSeek = null, continuing = null, cardSignature = "", savedSignature = "";
     const artworkRequests = /* @__PURE__ */ new Set();
     let stopped = false;
     const format = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -1881,7 +2005,7 @@
       if (!rows.length) emptyHistory(dialog, "L\u1ECBch s\u1EED xem c\u1EE7a b\u1EA1n s\u1EBD xu\u1EA5t hi\u1EC7n \u1EDF \u0111\xE2y.");
       for (const row of rows) cards.append(historyCard(doc, row, { onContinue: navigate, onRemove: (value, card) => {
         db.remove(value);
-        if (contextKey(active) === contextKey(value)) {
+        if (active && sameEpisode(active, value)) {
           snapshot = null;
           if (resume) resume.hidden = true;
         }
@@ -1921,7 +2045,9 @@
       bar.className = "rp-history-toolbar";
       resume = makeButton(doc, "Ti\u1EBFp t\u1EE5c", () => {
         if (snapshot && bridge?.state()?.ready && snapshot.time < bridge.state().duration - 5) {
-          if (bridge.command("seek", snapshot.time)) {
+          const target = snapshot.time;
+          if (bridge.command("seek", target)) {
+            awaitingSeek = { target, until: Date.now() + 8e3 };
             snapshot = null;
             resume.hidden = true;
           }
@@ -1935,12 +2061,18 @@
     }
     function persist() {
       if (!top || !active || !progress || !media) return;
+      if (awaitingSeek && Date.now() < awaitingSeek.until) return;
+      if (snapshot && !snapshot.completed && snapshot.time >= 5 && progress.ready && progress.time < 10 && Math.abs(snapshot.duration - progress.duration) <= Math.max(5, snapshot.duration * 0.02)) return;
       const row = historyRow(active, progress);
       const signature = row ? [contextKey(row), Math.floor(row.time), row.completed].join("|") : "";
       if (row && signature !== savedSignature) {
         try {
           db.save(row);
           savedSignature = signature;
+          if (snapshot) {
+            snapshot = null;
+            if (resume) resume.hidden = true;
+          }
         } catch {
           if (bar) toast(bar, "Kh\xF4ng l\u01B0u \u0111\u01B0\u1EE3c l\u1ECBch s\u1EED: ki\u1EC3m tra quy\u1EC1n userscript");
         }
@@ -1975,7 +2107,10 @@
           status("Ch\u01B0a t\xECm th\u1EA5y b\u1EA3n phim n\xE0y tr\xEAn trang hi\u1EC7n t\u1EA1i. D\xF9ng bi\u1EC3u t\u01B0\u1EE3ng m\u1EDF trang \u0111\xE3 xem tr\xEAn \u1EA3nh b\xECa.");
           return;
         }
-        if (destination.source === "legacy-panels") doc.cookie = `selectedVidTypeRophim=${laneKey(destination.lane) === "voiceover" ? "tm" : "vs"}; path=/; SameSite=Lax`;
+        if (destination.source === "legacy-panels") {
+          const val = laneKey(destination.lane) === "voiceover" ? "tm" : "vs";
+          for (const p of ["/", "/xem-phim"]) doc.cookie = `selectedVidTypeRophim=${val}; path=${p}; SameSite=Lax`;
+        }
         win.location.assign(destination.url);
       } catch {
         status("Ch\u01B0a m\u1EDF \u0111\u01B0\u1EE3c phim. B\u1EA1n c\xF3 th\u1EC3 th\u1EED l\u1EA1i.");
@@ -2060,14 +2195,17 @@
           persist();
           lastKey = nextKey;
           snapshot = info.context ? db.read(info.context) : null;
+          awaitingSeek = null;
           active = info.context;
           progress = null;
           media = "";
           savedAt = 0;
           savedSignature = "";
+          bar?.querySelector(".rp-toast")?.remove();
         } else active = info.context;
         progress = info.state;
         media = info.media;
+        if (awaitingSeek && progress?.ready && (Math.abs(progress.time - awaitingSeek.target) <= 12 || Date.now() >= awaitingSeek.until)) awaitingSeek = null;
         if (active) {
           ensureUI();
           bar.hidden = false;

@@ -19,7 +19,7 @@ export function jsonFragment(text, offset) {
 }
 const rscCache = new WeakMap();
 export function rscObjects(doc, page = {}) {
-  const texts = [];
+  const scriptTexts = [], pageTexts = [];
   for (const script of doc.querySelectorAll('script:not([src])')) {
     const raw = script.textContent || '';
     if (!raw.includes('__next_f.push')) continue;
@@ -33,14 +33,17 @@ export function rscObjects(doc, page = {}) {
       }
       rscCache.set(script, cached);
     }
-    texts.push(...cached.texts);
+    scriptTexts.push(...cached.texts);
   }
   // App-router transitions can append RSC data without adding inline script nodes.
-  try { for (const item of (page.__next_f || []).slice(-100)) if (Array.isArray(item) && item[0] === 1 && typeof item[1] === 'string') texts.push(item[1]); } catch { /* sandbox */ }
+  try { for (const item of (page.__next_f || []).slice(-100)) if (Array.isArray(item) && item[0] === 1 && typeof item[1] === 'string') pageTexts.push(item[1]); } catch { /* sandbox */ }
   const result = {episodes:[], movies:[]};
-  for (const text of texts) for (const m of text.matchAll(/"(episode|movie)":\s*(?=\{)/g)) {
-    const value = jsonFragment(text, m.index + m[0].length);
-    if (value && value.id && value.slug && value.name) result[m[1] === 'episode' ? 'episodes' : 'movies'].push(value);
+  for (const text of [scriptTexts.join(''), pageTexts.join('')]) {
+    if (!text) continue;
+    for (const m of text.matchAll(/"(episode|movie)":\s*(?=\{)/g)) {
+      const value = jsonFragment(text, m.index + m[0].length);
+      if (value && value.id && value.slug && value.name) result[m[1] === 'episode' ? 'episodes' : 'movies'].push(value);
+    }
   }
   return result;
 }

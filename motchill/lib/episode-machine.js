@@ -180,11 +180,11 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
     // not lose most of its content to the fixed ninety-second credits skip.
     // Actual ended remains a separate fallback below.
     const valid = Number.isFinite(duration) && duration >= 600 && Number.isFinite(time) && time > 0 && remaining >= 0;
-    if (valid && remaining <= 240 && !warmAttempted) warmup();
+    if (valid && remaining <= 240 && !warmAttempted && state.phase !== 'error') warmup();
     // Ended là dự phòng, kể cả nguồn không báo duration hợp lệ. Tách guard để
     // một lần thất bại ở mốc 90s còn có thể thử lại khi thực sự ended.
     if (media.ended && !attemptedEnd) { attemptedEnd = true; go('ended'); }
-    else if (valid && !media.paused && remaining <= 90 && time >= 30 && !attemptedAuto) {
+    else if (valid && !media.paused && remaining <= 90 && time >= 30 && !attemptedAuto && state.phase !== 'error') {
       attemptedAuto = true;
       go('auto');
     }

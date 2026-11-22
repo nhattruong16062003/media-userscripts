@@ -1,6 +1,6 @@
 import {storageAPI,isSiteOrigin,watchDOM,FRAME_ORIGINS,isFrameURL,safeURL} from '../lib/core.js';
 import {runFamily} from '../../shared/bridge/ownership.js';
-import {laneKey} from '../lib/identity.js';
+import {laneKey,sameEpisode} from '../lib/identity.js';
 import {contextKey} from '../lib/sites.js';
 import {createBridge} from '../lib/bridge.js';
 import {createHistoryStore,historyRow} from '../lib/history.js';
@@ -11,7 +11,7 @@ import {historyUIStyle,historyCard,historyIcon,historyArtwork,loadHistoryArtwork
 
 function startHistory(win,page) {
   const doc=win.document,top=win.parent===win,db=createHistoryStore(storageAPI(win));
-  let active=null,progress=null,media='',savedAt=0,lastKey='',bar=null,resume=null,panel=null,bridge=null,snapshot=null,continuing=null,cardSignature='',savedSignature='';
+  let active=null,progress=null,media='',savedAt=0,lastKey='',bar=null,resume=null,panel=null,bridge=null,snapshot=null,awaitingSeek=null,continuing=null,cardSignature='',savedSignature='';
   const artworkRequests=new Set();let stopped=false;
   const format=t=>`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')}`;
   function showList(){
@@ -23,7 +23,7 @@ function startHistory(win,page) {
     const cards=doc.createElement('div');cards.className='rp-history-cards';dialog.append(cards);
     const rows=db.list().slice(0,300);
     if(!rows.length)emptyHistory(dialog,'Lịch sử xem của bạn sẽ xuất hiện ở đây.');
-    for(const row of rows)cards.append(historyCard(doc,row,{onContinue:navigate,onRemove:(value,card)=>{db.remove(value);if(contextKey(active)===contextKey(value)){snapshot=null;if(resume)resume.hidden=true;}card.remove();cardSignature='';home();if(!cards.children.length)emptyHistory(dialog,'Bạn chưa có phim trong lịch sử.');}}));
+    for(const row of rows)cards.append(historyCard(doc,row,{onContinue:navigate,onRemove:(value,card)=>{db.remove(value);if(active && sameEpisode(active,value)){snapshot=null;if(resume)resume.hidden=true;}card.remove();cardSignature='';home();if(!cards.children.length)emptyHistory(dialog,'Bạn chưa có phim trong lịch sử.');}}));
     dialog.addEventListener('close',()=>{dialog.remove();if(panel===dialog)panel=null;});
     dialog.addEventListener('click',event=>{if(event.target===dialog){const box=dialog.getBoundingClientRect();if(event.clientX<box.left || event.clientX>box.right || event.clientY<box.top || event.clientY>box.bottom)close.click();}});
     doc.body.append(dialog);if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');
@@ -32,14 +32,16 @@ function startHistory(win,page) {
   function ensureUI(){
     if(!doc.body || bar)return;
     historyUIStyle(doc);bar=doc.createElement('div');bar.dataset.rpUi='history';bar.className='rp-history-toolbar';
-    resume=makeButton(doc,'Tiếp tục',()=>{if(snapshot && bridge?.state()?.ready && snapshot.time<bridge.state().duration-5){if(bridge.command('seek',snapshot.time)){snapshot=null;resume.hidden=true;}}},bar);resume.className='rp-resume-prompt';resume.hidden=true;
+    resume=makeButton(doc,'Tiếp tục',()=>{if(snapshot && bridge?.state()?.ready && snapshot.time<bridge.state().duration-5){const target=snapshot.time;if(bridge.command('seek',target)){awaitingSeek={target,until:Date.now()+8000};snapshot=null;resume.hidden=true;}}},bar);resume.className='rp-resume-prompt';resume.hidden=true;
     const all=makeButton(doc,'',showList,bar);all.className='rp-history-all';all.innerHTML=historyIcon('history')+'<span>Lịch sử</span>';
   }
   function persist(){
     if(!top || !active || !progress || !media)return;
+    if(awaitingSeek && Date.now()<awaitingSeek.until)return;
+    if(snapshot && !snapshot.completed && snapshot.time>=5 && progress.ready && progress.time<10 && Math.abs(snapshot.duration-progress.duration)<=Math.max(5,snapshot.duration*.02))return;
     const row=historyRow(active,progress);
     const signature=row?[contextKey(row),Math.floor(row.time),row.completed].join('|'):'';
-    if(row && signature!==savedSignature){try{db.save(row);savedSignature=signature;}catch{if(bar)toast(bar,'Không lưu được lịch sử: kiểm tra quyền userscript');}}
+    if(row && signature!==savedSignature){try{db.save(row);savedSignature=signature;if(snapshot){snapshot=null;if(resume)resume.hidden=true;}}catch{if(bar)toast(bar,'Không lưu được lịch sử: kiểm tra quyền userscript');}}
     savedAt=Date.now();
   }
   async function navigate(row,host,trigger){
@@ -53,7 +55,10 @@ function startHistory(win,page) {
       const destination=await historyDestination(row,win);
       if(win.location.href!==href)return;
       if(!destination){status('Chưa tìm thấy bản phim này trên trang hiện tại. Dùng biểu tượng mở trang đã xem trên ảnh bìa.');return;}
-      if(destination.source==='legacy-panels')doc.cookie=`selectedVidTypeRophim=${laneKey(destination.lane)==='voiceover'?'tm':'vs'}; path=/; SameSite=Lax`;
+      if(destination.source==='legacy-panels'){
+        const val=laneKey(destination.lane)==='voiceover'?'tm':'vs';
+        for(const p of ['/','/xem-phim'])doc.cookie=`selectedVidTypeRophim=${val}; path=${p}; SameSite=Lax`;
+      }
       win.location.assign(destination.url);
     }catch{status('Chưa mở được phim. Bạn có thể thử lại.');}finally{delete host.dataset.rpNavigating;for(const button of buttons)button.disabled=false;if(trigger){trigger.innerHTML=original;trigger.removeAttribute('aria-busy');}}
   }
@@ -86,9 +91,10 @@ function startHistory(win,page) {
       if(!top)return;
       const nextKey=contextKey(info.context);
       // Flush the immutable old context/progress pair before accepting a new one.
-      if(nextKey!==lastKey){persist();lastKey=nextKey;snapshot=info.context ? db.read(info.context) : null;active=info.context;progress=null;media='';savedAt=0;savedSignature='';}
+      if(nextKey!==lastKey){persist();lastKey=nextKey;snapshot=info.context ? db.read(info.context) : null;awaitingSeek=null;active=info.context;progress=null;media='';savedAt=0;savedSignature='';bar?.querySelector('.rp-toast')?.remove();}
       else active=info.context;
       progress=info.state;media=info.media;
+      if(awaitingSeek && progress?.ready && (Math.abs(progress.time-awaitingSeek.target)<=12 || Date.now()>=awaitingSeek.until))awaitingSeek=null;
       if(active){ensureUI();bar.hidden=false;placeHistory(bar,historyPlacement(doc,true));}else if(bar)bar.hidden=win.location.pathname.startsWith('/xem-phim/');
       const compatible=snapshot && info.state?.ready && Math.abs(snapshot.duration-info.state.duration)<=Math.max(5,snapshot.duration*.02);
       if(resume){resume.hidden=!(compatible && snapshot.time>=5 && !snapshot.completed && snapshot.time<info.state.duration-5);resume.textContent=snapshot?`Tiếp tục ${format(snapshot.time)}`:'Tiếp tục';}

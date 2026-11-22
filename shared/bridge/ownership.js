@@ -24,7 +24,8 @@ export function runFamily(win,{family,feature,isSiteURL,isFrameURL,isFrameOrigin
     if(disposed || data?.tag!==tag || data.family!==family || data.feature!==feature)return;
     const expectedParent=parentOrigin();
     const fromParent=win.parent!==win && event.source===win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent===event.origin);
-    if(data.type==='probe' && !active && fromParent){ask();return;}
+    const frameReady=isFrameURL(win.location.href);
+    if(data.type==='probe' && !active && fromParent && frameReady){ask();return;}
     if(typeof data.challenge!=='string' || !/^[a-f0-9]{32}$/.test(data.challenge))return;
     if(data.type==='ready' && active){
       const frame=[...win.document.querySelectorAll('iframe[src]')].find(node=>node.isConnected && node.contentWindow===event.source);
@@ -33,7 +34,7 @@ export function runFamily(win,{family,feature,isSiteURL,isFrameURL,isFrameOrigin
       if(event.origin!==origin)return;
       frame.contentWindow.postMessage({tag,type:'owner',family,feature,challenge:data.challenge},origin);return;
     }
-    if(data.type==='owner' && !active && data.challenge===challenge && fromParent)activate();
+    if(data.type==='owner' && !active && data.challenge===challenge && fromParent && frameReady)activate();
   };
   win.addEventListener('message',receive);
   // Register the responder first: a synchronous child request must not race it.

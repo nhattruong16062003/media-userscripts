@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - lịch sử xem
 // @namespace    motchill-history
-// @version      6.0.19
+// @version      6.0.20
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js
@@ -21,10 +21,20 @@
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
 // @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed14.streamc.xyz/embed.php*
 // @match        https://embed15.streamc.xyz/embed.php*
 // @match        https://embed18.streamc.xyz/embed.php*
+// @match        https://v2.streamvsmov.com/video/*
+// @match        https://v3.streamvsmov.com/video/*
+// @match        https://v4.streamvsmov.com/video/*
+// @match        https://v6.streamvsmov.com/video/*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
+// @match        https://v10.streamvsmov.com/video/*
+// @match        https://v11.streamvsmov.com/video/*
+// @match        https://v12.streamvsmov.com/video/*
+// @match        https://v14.streamvsmov.com/video/*
+// @match        https://v15.streamvsmov.com/video/*
 // @include      /^https?:\/\/[^\/?#]*motchill[^\/?#]*\//
 // @match        https://api.clubc.live/embed/*
 // @run-at       document-start
@@ -122,7 +132,8 @@
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
       const expectedParent = parentOrigin();
       const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
-      if (data.type === "probe" && !active && fromParent) {
+      const frameReady = isFrameURL(win.location.href);
+      if (data.type === "probe" && !active && fromParent && frameReady) {
         ask();
         return;
       }
@@ -140,7 +151,7 @@
         frame.contentWindow.postMessage({ tag, type: "owner", family, feature, challenge: data.challenge }, origin);
         return;
       }
-      if (data.type === "owner" && !active && data.challenge === challenge && fromParent) activate();
+      if (data.type === "owner" && !active && data.challenge === challenge && fromParent && frameReady) activate();
     };
     win.addEventListener("message", receive);
     if (isSiteURL(win.location.href)) activate();
@@ -192,8 +203,11 @@ function createMotchillSites() {
   // Tập 35 sv-1 do người dùng cung cấp (2026-11-14) khai báo embed11.
   // motchillv.online sv-2 (2026-11-21): player.cloudbeta.win/embed/... (JW 8.38.8).
   // motchillfv.help (2026-11-21): embed10/15/18.streamc.xyz/embed.php (Stream Panel R25 JW 8.51.3).
+  // motchillkd.online / motchillkd.net / motchillv.online / motchillfv.help (2026-11-22):
+  // live HTTP 200 verified shards: embed14.streamc.xyz (Stream Panel R25 JW)
+  // and v2/v3/v4/v6/v10/v11/v12/v14/v15.streamvsmov.com/video/* (JW + origin.js).
   // Quyền origin riêng; không coi hostname là bằng chứng về engine bên trong.
-  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'player.cloudbeta.win', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'embed10.streamc.xyz', 'embed15.streamc.xyz', 'embed18.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'player.cloudbeta.win', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'embed10.streamc.xyz', 'embed14.streamc.xyz', 'embed15.streamc.xyz', 'embed18.streamc.xyz', 'v2.streamvsmov.com', 'v3.streamvsmov.com', 'v4.streamvsmov.com', 'v6.streamvsmov.com', 'v8.streamvsmov.com', 'v9.streamvsmov.com', 'v10.streamvsmov.com', 'v11.streamvsmov.com', 'v12.streamvsmov.com', 'v14.streamvsmov.com', 'v15.streamvsmov.com']);
   const ROLE_ATTR = 'data-mc-role';
   const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
   // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
@@ -215,8 +229,9 @@ function createMotchillSites() {
   };
   const extractSeason = (...values) => {
     const joined = normalize(values.filter(Boolean).join(' '));
-    return joined.match(/(?:phan|season|part)-(\d+)/)?.[1] || '';
+    return joined.match(/(?:^|-)(?:phan|season|part)-(\d{1,3})(?:-|$)/)?.[1] || '';
   };
+  const safeDecode = (value) => { try { return decodeURIComponent(value); } catch (_) { return value; } };
   function isPrepared(el) {
     if (!el) return false;
     if (el.state?.prepared || el.state?.role === ROLES.PREPARED) return true;
@@ -245,8 +260,10 @@ function createMotchillSites() {
       'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//, 'player.cloudbeta.win': /^\/embed\//,
       'cdn.loadvid.com': /^\/videos\/play\//, 'embed13.streamc.xyz': /^\/.+/,
       'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
-      'embed11.streamc.xyz': /^\/embed\.php$/, 'embed10.streamc.xyz': /^\/embed\.php$/, 'embed15.streamc.xyz': /^\/embed\.php$/, 'embed18.streamc.xyz': /^\/embed\.php$/,
-      'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
+      'embed11.streamc.xyz': /^\/embed\.php$/, 'embed10.streamc.xyz': /^\/embed\.php$/, 'embed14.streamc.xyz': /^\/embed\.php$/, 'embed15.streamc.xyz': /^\/embed\.php$/, 'embed18.streamc.xyz': /^\/embed\.php$/,
+      'v2.streamvsmov.com': /^\/video\//, 'v3.streamvsmov.com': /^\/video\//, 'v4.streamvsmov.com': /^\/video\//, 'v6.streamvsmov.com': /^\/video\//,
+      'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//, 'v10.streamvsmov.com': /^\/video\//, 'v11.streamvsmov.com': /^\/video\//,
+      'v12.streamvsmov.com': /^\/video\//, 'v14.streamvsmov.com': /^\/video\//, 'v15.streamvsmov.com': /^\/video\//,
       'api.clubc.live': /^\/embed\/[1-9]\d*\/?$/,
     };
     return !!paths[parsed.hostname]?.test(parsed.pathname);
@@ -569,7 +586,7 @@ function createMotchillSites() {
     const target = url(pageUrl);
     const match = target?.pathname.match(/^\/(?:phim|xem-phim)\/([^/]+)\/?$/);
     if (!match) return null;
-    const slug = decodeURIComponent(match[1]);
+    const slug = safeDecode(match[1]);
     const data = nextData(doc, pageUrl).filter((entry) => entry.slug === slug);
     const identity = data.find((entry) => entry.name && entry.initialDigits != null) || {};
     const episodes = data.find((entry) => Array.isArray(entry.episodes)) || {};
@@ -783,7 +800,7 @@ function createMotchillSites() {
         match = path.match(/^\/xem-phim\/([^/]+)\/?$/);
         const number = target.searchParams.has('tap') ? target.searchParams.get('tap') : '1';
         if (!match || !/^\d{1,5}$/.test(number) || Number(number) < 1 || /\.trailer$/i.test(match[1])) return null;
-        return { slug: decodeURIComponent(match[1]), episode: 'tap-' + Number(number), path: path + target.search };
+        return { slug: safeDecode(match[1]), episode: 'tap-' + Number(number), path: path + target.search };
       }
       case families.CLASSIC:
         match = path.match(/^\/xem-phim\/([^/]+)\/([^/]+)\/?$/); break;
@@ -874,7 +891,7 @@ function createMotchillSites() {
   }
   function episodeKey(value) {
     const normalized = normalize(value);
-    if (/^(?:[a-z]-)?(?:full|full-hd|hoan-tat|movie)(?:-(?:sv|src)-.*)?$/.test(normalized)) return 'full';
+    if (/^(?:(?:[a-z]+-)?(?:tap|episode|ep)-|[a-z]-)?(?:full|full-hd|hoan-tat|movie)(?:-(?:sv|src)-.*)?$/.test(normalized)) return 'full';
     const match = normalized.match(/^(?:(?:[a-z]+-)?(?:tap|episode|ep)-|[a-z]-)?0*(\d+)(?:-(?:sv|src)-.*)?$/);
     return match ? 'ep:' + Number(match[1]) : 'special:' + normalized;
   }
@@ -932,8 +949,8 @@ function createMotchillSites() {
     const chibiflixYear = family === families.CHIBIFLIX ? [...doc.querySelectorAll('.detail-more .hl-tags .tag-classic span,.hl-tags .tag-classic span')].map(text)
       .find((value) => /^(?:19|20)\d{2}$/.test(value)) : '';
     const yearText = data.publish_year || data.year || text(doc.querySelector('.origyear,.movie-year,.movie-identity__year,.apx-hero-fact--year,.publish-year,.sheader .date')) || nextProductionYear || chibiflixYear;
-    const year = String(yearText || '').match(/\b(?:19|20)\d{2}\b/)?.[0] || extractTitleYear(rawTitle, rawOriginal);
-    const season = extractSeason(cleanedTitle, rawOriginal, slug);
+    const year = String(yearText || '').match(/\b(?:19|20)\d{2}\b/)?.[0] || extractTitleYear(rawTitle, rawOriginal, doc.title);
+    const season = extractSeason(cleanedTitle, originalTitle, slug);
     const externalIds = {};
     const refs = [movie.sameAs, movie.identifier,
       data.tmdb?.id && `https://www.themoviedb.org/${data.tmdb.type || 'tv'}/${data.tmdb.id}`,
@@ -965,17 +982,18 @@ function createMotchillSites() {
     return candidates.map(translationKey).find(Boolean) || '';
   }
   function translationServers(doc, family, pageUrl) {
-    if (family === families.CHIBIFLIX) return chibiflixServers(doc, pageUrl || url(doc.URL)?.href || location.href);
+    const resolvedUrl = pageUrl || url(doc.URL)?.href || url(doc.location?.href)?.href || location.href;
+    if (family === families.CHIBIFLIX) return chibiflixServers(doc, resolvedUrl);
     if(family===families.NEXT){
-      const state=nextProviderState(doc,doc.URL);
-      if(state)return nextProviderButtons(doc,doc.URL).map(node=>{
+      const state=nextProviderState(doc,resolvedUrl);
+      if(state)return nextProviderButtons(doc,resolvedUrl).map(node=>{
         const label=node.dataset.mcNativeLabel || text(node),matches=state.data.movie.episodes.filter(ep=>ep && ep.slug===state.episode.slug && ep.server===label && ep.type==='m3u8');
         return {node,label,language:translationKey(label),selected:label===state.episode.server,
           source:matches.length===1?new URL('/embed/'+matches[0].id,state.source).href:''};
-      });
+      }).filter((entry) => entry.language);
     }
     if (family === families.NEXT_REVIVE) {
-      const page = url(doc.URL, location.href);
+      const page = url(resolvedUrl, location.href);
       const data = reviveData(doc, page?.href || location.href);
       const number = Number(page?.searchParams.get('tap') || data?.initialDigits || 1);
       return reviveServerNodes(doc).map((node) => {
@@ -1005,12 +1023,11 @@ function createMotchillSites() {
         || ['btn-success', 'btn-active', 'active', 'is-active', 'on'].some((name) => node.classList.contains(name));
       let source = '';
       if (family === families.NEXT) {
-        const pageUrl = url(doc.location?.href)?.href || location.href;
-        const parsed = route(pageUrl, family);
-        const data = parsed && nextData(doc, pageUrl).find((entry) => entry.movie?.slug === parsed.slug);
+        const parsed = route(resolvedUrl, family);
+        const data = parsed && nextData(doc, resolvedUrl).find((entry) => entry.movie?.slug === parsed.slug);
         const matches = [...(data?.episodeVariants || []), ...(data?.movie?.episodes || [])].filter((ep) => ep && episodeKey(ep.slug) === episodeKey(parsed?.episode)
           && normalize(ep.server) === normalize(label.replace(/^server\s+/i, '')));
-        const candidates = [...new Set(matches.filter((ep) => (ep.type || 'm3u8') === 'm3u8').map((ep) => url(ep.link, pageUrl)?.href).filter(Boolean))];
+        const candidates = [...new Set(matches.filter((ep) => (ep.type || 'm3u8') === 'm3u8').map((ep) => url(ep.link, resolvedUrl)?.href).filter(Boolean))];
         if (candidates.length === 1) source = candidates[0];
       }
       return { language, label, selected, node, source };
@@ -1087,10 +1104,14 @@ function createMotchillSites() {
       seen.add(key);
       episodes.push(entry);
     };
+    const isSamePageHash = (raw, target) => raw.trim().startsWith('#')
+      || (!!target.hash && target.origin === page.origin && target.pathname === page.pathname && target.search === page.search);
     const scanLinks = (sel) => [...doc.querySelectorAll(sel || ':not(*)')].filter((a) => {
       if (a.closest('.mh-continue')) return false;
-      const target = url(a.getAttribute('href'), page.href);
-      const other = target && target.origin === page.origin && route(target.href, resolvedFamily, page.href);
+      const raw = a.getAttribute('href') || '';
+      const target = url(raw, page.href);
+      if (!target || isSamePageHash(raw, target)) return false;
+      const other = target.origin === page.origin && route(target.href, resolvedFamily, page.href);
       return other && other.slug === parsed.slug;
     });
     // Read all language tabs of this film, not just the currently active server.
@@ -1100,6 +1121,7 @@ function createMotchillSites() {
     if (!domLinks.length) domLinks = scanLinks('a[href]');
     for (const a of domLinks) {
       const target = url(a.getAttribute('href'), page.href);
+      target.hash = '';
       const other = route(target.href, resolvedFamily, page.href);
       const epText = text(a.querySelector?.('.ep-sort,.media-title')) || text(a) || other.episode;
       pushEp({ url: target.href, path: other.path, episode: epText, episodeKey: episodeKey(other.episode),
@@ -1113,7 +1135,7 @@ function createMotchillSites() {
           episodeKey: episodeKey(ep.slug), language: linkLanguage(null, doc, ep, meta.data, ep.name || ep.slug) });
       }
     }
-    if (watch && resolvedFamily !== families.CHIBIFLIX) for (const entry of translationServers(doc, resolvedFamily)) {
+    if (watch && resolvedFamily !== families.CHIBIFLIX) for (const entry of translationServers(doc, resolvedFamily, page.href)) {
       // Server options are bound to this loaded episode. Their labels are
       // evidence for a translation, unlike a generic film-level description.
       pushEp({ url: page.href, path: watch.path, episode: watch.episode,
@@ -1134,8 +1156,12 @@ function createMotchillSites() {
     const items = new Map();
     for (const a of doc.querySelectorAll('a[href]')) {
       if (a.closest('.mh-continue')) continue;
-      const target = url(a.getAttribute('href'), page.href);
+      const rawHref = a.getAttribute('href') || '';
+      if (rawHref.trim().startsWith('#')) continue;
+      const target = url(rawHref, page.href);
       if (!target || target.origin !== page.origin) continue;
+      if (target.hash && target.pathname === page.pathname && target.search === page.search) continue;
+      target.hash = '';
       const watch = route(target.href, resolvedFamily, page.href);
       const detail = !watch && detailRoute(target.href, resolvedFamily, page.href);
       const parsed = watch || detail;
@@ -1282,12 +1308,16 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   const providerIdentity=value=>value && typeof value.id==='string' && /^[1-9]\d*$/.test(value.id) && typeof value.movieId==='string' && /^[1-9]\d*$/.test(value.movieId) && Number.isSafeInteger(value.season) && value.season>=1 && value.season<=1000 && typeof value.server==='string' && value.server.length<200 && sites.translationKey(value.server) ? {id:value.id,movieId:value.movieId,season:value.season,server:value.server}:null;
   function readParentContext(value,origin){
     const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
+    const originHost=sites.url(origin)?.hostname || '';
+    const originMatches=!!target && (target.origin===origin || sites.embedHosts.has(originHost));
+    const routeEp=route && sites.episodeKey(route.episode);
+    const validEpisode=routeEp===value?.episodeKey || (value?.family===sites.families.NEXT_REVIVE && routeEp==='ep:1' && value?.episodeKey==='full');
     const validLanguage=value?.language==='' || !!sites.translationKey(value?.language);
-    if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !validLanguage)return null;
+    if(!target || !originMatches || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || !validEpisode || !validLanguage)return null;
     const result=Object.fromEntries(['url','family','slug','film','episode','episodeKey','language','server'].map(key=>[key,String(value[key] || '').slice(0,2048)]));
     if(Number.isFinite(value.introSeconds) && value.introSeconds>=0 && value.introSeconds<=300)result.introSeconds=value.introSeconds;
     const next=sites.url(value.next?.url),nextRoute=next && sites.route(next.href,result.family);
-    if(next?.origin===origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
+    if(next?.origin===target.origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
     return result;
   }
   const remotes = new Map();
@@ -1319,7 +1349,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   function hello(frame, session) {
     const currentRole = documentRole();
     const ownContext = sites.adapter().read();
-    const context = ownContext ? { ...ownContext, introSeconds: options.introSeconds?.() } : parentContext;
+    const introSeconds = window.top === window ? options.introSeconds?.() : (parentContext?.introSeconds ?? options.introSeconds?.());
+    const context = ownContext ? { ...ownContext, introSeconds } : parentContext;
     frame.contentWindow?.postMessage({ tag: channel, type: 'hello', token: session.token,
       managed: ['episode','provider'].includes(frame.dataset.mcManaged) || managed,
       role: session.assignedRole || frame.dataset.mcRole || currentRole,
@@ -1509,7 +1540,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         if (data.action === 'play') video.play()?.catch(() => {});
         if (data.action === 'pause') video.pause();
         if (data.action === 'reveal-controls') document.dispatchEvent(new CustomEvent('mc-reveal-controls'));
-        if (data.action === 'mute' && typeof data.value === 'boolean') video.muted = data.value;
+        if (data.action === 'mute' && typeof data.value === 'boolean') { if (!options.setMute?.(video, data.value)) video.muted = data.value; }
         if (data.action === 'rate' && Number.isFinite(data.value) && data.value >= .25 && data.value <= 4) video.playbackRate = data.value;
         if (data.action === 'start-zero') {
           const operation = ++startGeneration;
@@ -1558,7 +1589,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const currentSession=session;session.nextPending=true;
       Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
         if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId && ok!==true && ok!=='navigating')return;
-        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
+        const status=ok===true || ok==='navigating'?'navigating':ok==='error' || ok==='timeout'?'error':'missing';
+        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status},session.origin);
       }).catch(()=>{
         if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:'error'},session.origin);
       }).finally(()=>{currentSession.nextPending=false;});return;
@@ -1901,10 +1933,14 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
     const remoteUrl = sites.url(remoteInfo?.url);
     const remoteRoute = remoteUrl && remoteInfo && sites.route(remoteUrl.href, remoteInfo.family);
     const outerRoute = remoteInfo && sites.route(location.href, remoteInfo.family);
+    const epMatch = (infoKey, parsedRoute, family) => {
+      const routeKey = parsedRoute && sites.episodeKey(parsedRoute.episode);
+      return infoKey === routeKey || (family === sites.families.NEXT_REVIVE && infoKey === 'full' && routeKey === 'ep:1');
+    };
     if (media?.frame?.dataset.mcManaged === 'episode' && media.frame.dataset.mcRole === 'current'
       && remoteUrl?.origin === location.origin && remoteUrl.pathname === location.pathname
-      && remoteRoute && outerRoute && remoteInfo.episodeKey === sites.episodeKey(remoteRoute.episode)
-      && remoteInfo.episodeKey === sites.episodeKey(outerRoute.episode)) info = { ...remoteInfo, url: location.href };
+      && remoteRoute && outerRoute && epMatch(remoteInfo.episodeKey, remoteRoute, remoteInfo.family)
+      && epMatch(remoteInfo.episodeKey, outerRoute, remoteInfo.family)) info = { ...remoteInfo, url: location.href };
     if (!info && sites.detect() === sites.families.WRAPPER && bridge.state()?.direct) info = bridge.state().page;
     if (info && media?.state?.page && !sites.sameEpisode(info, media.state.page)) info = null;
     if (!info || !media || !sites.url(info.url) || !sites.isMotchill(sites.url(info.url).hostname)) {
@@ -1955,7 +1991,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const similarDuration = !saved?.duration || Math.abs(saved.duration - video.duration) <= Math.max(30, video.duration * .03);
       if (!startsFromZero() && saved && similarDuration && saved.position > MIN_SECONDS && saved.position < video.duration * .95) {
         restored = true;
-        if (video.state) awaitingSeek = saved.position;
+        if (video.state) awaitingSeek = { target: saved.position, until: Date.now() + 8000 };
         video.currentTime = saved.position;
         // Restoring a position must preserve an explicit Pause. The engine or
         // custom Play owns playback/autoplay; history only owns the seek.
@@ -1967,8 +2003,11 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const position = Math.floor(video.currentTime);
       if (!Number.isFinite(position)) return;
       // Chờ iframe xác nhận đã tua; bản tin cũ có thể vẫn mang vị trí trước seek.
+      // Cho phép lệch nhẹ theo keyframe HLS (±12s) hoặc hết cửa sổ chờ nếu đã qua MIN_SECONDS.
       if (awaitingSeek !== null) {
-        if (Math.abs(position - awaitingSeek) > 5) return;
+        const matched = Math.abs(position - awaitingSeek.target) <= 12;
+        const expired = Date.now() > awaitingSeek.until && position > MIN_SECONDS;
+        if (!matched && !expired) return;
         awaitingSeek = null;
       }
       // Remote iframe xác nhận seek ở bản tin sau; không ghi vị trí 0 đè dữ liệu trước đó.
@@ -2085,8 +2124,9 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   }
   function hasFilmConflict(a, b) {
     if (!a || !b) return true;
-    const sa = a.season || sites.normalize(a.title || a.originalTitle || a.slug).match(/(?:phan|season|part)-(\d+)/)?.[1] || '';
-    const sb = b.season || sites.normalize(b.title || b.originalTitle || b.slug).match(/(?:phan|season|part)-(\d+)/)?.[1] || '';
+    const seasonOf = (item) => item.season || sites.normalize([item.title, item.originalTitle, item.slug].filter(Boolean).join(' ')).match(/(?:^|-)(?:phan|season|part)-(\d{1,3})(?:-|$)/)?.[1] || '';
+    const sa = seasonOf(a);
+    const sb = seasonOf(b);
     if (sa && sb && String(sa) !== String(sb)) return true;
     if (a.year && b.year && String(a.year) !== String(b.year)) return true;
     return ['imdb', 'tmdb'].some((k) => a.externalIds?.[k] && b.externalIds?.[k] && a.externalIds[k] !== b.externalIds[k]);
@@ -2171,8 +2211,9 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       matchedDetail = detail;
       let episode = pickEpisode(detail.episodes, show);
       if (!episode && !detail.isWatch && detail.episodes.length > 0) {
-        const watchDoc = await fetchDoc(detail.episodes[0].url, signal);
-        const watchDetail = sites.readDetail(watchDoc, detail.episodes[0].url);
+        const probeEp = detail.episodes.find((ep) => ep.episodeKey === show.episodeKey) || detail.episodes[0];
+        const watchDoc = await fetchDoc(probeEp.url, signal);
+        const watchDetail = sites.readDetail(watchDoc, probeEp.url);
         if (verifiedSameFilm(show, watchDetail)) {
           episode = pickEpisode(watchDetail.episodes, show);
           if (episode) return { status: 'found', url: episode.url, detailUrl: detail.url, detail: watchDetail };
@@ -2457,7 +2498,9 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
           const needsMount = location.pathname === '/' && db.shows.some((s) => !s.finished)
             && (!section?.isConnected || !isMountedAt(section, sites.homeMount()));
           const needsMenu = !document.querySelector('.mh-menu') && !!menuNav();
-          if (!style.isConnected || needsMount || needsMenu || sessionStorage.getItem(PENDING_KEY)) scheduleRecover();
+          let hasPending = false;
+          try { hasPending = !!sessionStorage.getItem(PENDING_KEY); } catch (_) {}
+          if (!style.isConnected || needsMount || needsMenu || hasPending) scheduleRecover();
         }).observe(document.documentElement, { childList: true, subtree: true });
       }
       window.addEventListener('popstate', scheduleRecover);

@@ -14,7 +14,7 @@ function startMotchillTranslations(sites, controller, options = {}) {
   style.textContent = '.mc-translations{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px 12px;border:1px solid #444;border-radius:7px;background:#181818;color:#eee;font:14px/1.4 sans-serif}.mc-translations button{padding:8px 12px;min-height:38px;border:1px solid #777;border-radius:6px;background:#303030;color:#fff;font:inherit;cursor:pointer}.mc-translations button:disabled{opacity:.6;cursor:wait}.mc-translation-status{flex-basis:100%;font-size:13px}.mc-translations[hidden]{display:none!important}';
   // Provider identity comes from the actual server label after removing only
   // its translation and the generic Server prefix, never from DOM position.
-  const provider = (label) => sites.normalize(label).replace(/(?:^|-)(?:vietsub|long-tieng|thuyet-minh)(?=-|$)/g, '-')
+  const provider = (label) => sites.normalize(label).replace(/(?:^|-)(?:vietsub|phu-de|long-tieng|thuyet-minh)(?=-|$)/g, '-')
     .replace(/^server-/, '').replace(/^-+|-+$/g, '');
   function snapshot() {
     const doc = controller.getDocument?.() || document;

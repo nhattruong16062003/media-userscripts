@@ -151,10 +151,15 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     }
     const source=state();if(!source){if(active){machine.cancel();identity='';active=false;}return false;}
     active=true;shell=source.frame.parentElement;if(!style.isConnected)(document.head || document.documentElement).append(style);
-    const newKey=key();if(identity && identity!==newKey){machine.cancel();override=null;}identity=newKey;lastURL=location.href;syncButtons();
+    const newKey=key();
+    const sameEpisode=identity && identity.split('|').slice(0,3).join('|')===newKey.split('|').slice(0,3).join('|');
+    const keepError=!!sameEpisode && machine.state.phase==='error';
+    if(identity && identity!==newKey && !keepError){machine.cancel();override=null;}
+    if(!keepError)identity=newKey;
+    lastURL=location.href;syncButtons();
     currentMedia=bridge.getFrame(source.frame) || null;
     if(currentMedia)hooks.poll?.(currentMedia,newKey);
-    if(!machine.busy){const info=page(),target=override || info?.next;machine.tick({currentTime:currentMedia?.currentTime,duration:currentMedia?.duration,paused:currentMedia?.paused!==false,ended:currentMedia?.ended,ad:currentMedia?.state.ad},newKey,target);}
+    if(!machine.busy && (!keepError || currentMedia?.ended)){const info=page(),target=override || info?.next;machine.tick({currentTime:currentMedia?.currentTime,duration:currentMedia?.duration,paused:currentMedia?.paused!==false,ended:currentMedia?.ended,ad:currentMedia?.state.ad},keepError?identity:newKey,target);}
     return true;
   }
   async function transitionTo(target,reason='manual'){

@@ -25,7 +25,8 @@ export function audioPreferenceSession(win,player,store){
       if(value && (!saved && !value.muted && value.volume>0 || saved && value.muted===saved.muted))store.write(value);
     },
     intent(muted){
-      if(!current() || !player.state().ready || player.state().ad)return;
+      const currentState=player.state();
+      if(!current() || (!currentState.ready && !currentState.initializable) || currentState.ad)return;
       attempted=true;learning=false;const value=sound(),volume=Number.isFinite(value.volume)?value.volume:1;
       store.write({muted,volume:!muted && volume<=0?1:volume});
     },

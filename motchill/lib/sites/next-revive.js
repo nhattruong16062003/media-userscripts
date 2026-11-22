@@ -17,7 +17,7 @@
     const target = url(pageUrl);
     const match = target?.pathname.match(/^\/(?:phim|xem-phim)\/([^/]+)\/?$/);
     if (!match) return null;
-    const slug = decodeURIComponent(match[1]);
+    const slug = safeDecode(match[1]);
     const data = nextData(doc, pageUrl).filter((entry) => entry.slug === slug);
     const identity = data.find((entry) => entry.name && entry.initialDigits != null) || {};
     const episodes = data.find((entry) => Array.isArray(entry.episodes)) || {};

@@ -25,7 +25,7 @@ export function protectMediaFrame(frame){
   const had=frame.hasAttribute('sandbox');
   const tokens=had?(frame.getAttribute('sandbox') || '').split(/\s+/).filter(Boolean):['allow-scripts','allow-same-origin','allow-forms','allow-presentation','allow-orientation-lock'];
   const forbidden=new Set(['allow-popups','allow-popups-to-escape-sandbox','allow-top-navigation','allow-top-navigation-by-user-activation','allow-top-navigation-to-custom-protocols']);
-  const sandbox=tokens.filter(t=>!forbidden.has(t)).join(' ');
+  const sandbox=tokens.filter(t=>!forbidden.has(t.toLowerCase())).join(' ');
   if(frame.getAttribute('sandbox')!==sandbox)frame.setAttribute('sandbox',sandbox);
   return true;
 }
@@ -81,8 +81,9 @@ export function installNavigationGuard(win,page=win,{isMediaFrame=()=>false}={})
   }
   function shouldBlockForm(form,submitter,targetWin,trusted=false){
     const baseHref=resolveBase(targetWin);
-    const target=submitter?.getAttribute?.('formtarget') || submitter?.formTarget
-      || form?.getAttribute?.('target') || form?.target || baseTargetOf(form);
+    const subTarget=submitter?.getAttribute?.('formtarget') || (typeof submitter?.formTarget==='string'?submitter.formTarget:'');
+    const formTarget=form?.getAttribute?(form.getAttribute('target') || ''):(typeof form?.target==='string'?form.target:'');
+    const target=subTarget || formTarget || baseTargetOf(form);
     if(!trusted && isNewWindowTarget(target))return true;
     const rawAction=submitter?.getAttribute?.('formaction')
       || (form?.getAttribute?form.getAttribute('action'):form?.action) || '';
@@ -120,7 +121,7 @@ export function installNavigationGuard(win,page=win,{isMediaFrame=()=>false}={})
     if(!allowConfirm || !allowed(url.href,event.isTrusted))return;
     approved=url.href;
     try{
-      if(effectiveTarget && effectiveTarget.toLowerCase()!=='_self')Reflect.apply(originalOpen,page,[url.href,'_blank','noopener,noreferrer']);
+      if(event.type==='auxclick' || (effectiveTarget && effectiveTarget.toLowerCase()!=='_self'))Reflect.apply(originalOpen,page,[url.href,'_blank','noopener,noreferrer']);
       else page.location.assign(url.href);
     }finally{approved=null;}
   }
@@ -162,7 +163,8 @@ export function installNavigationGuard(win,page=win,{isMediaFrame=()=>false}={})
     const areaProto=targetWin.HTMLAreaElement?.prototype;
     const formProto=targetWin.HTMLFormElement?.prototype;
     const makeClick=orig=>function(...args){
-      if(!disposed && (this?.tagName==='A' || this?.tagName==='AREA') && shouldBlockProgrammaticAnchor(this,targetWin))return;
+      const anchor=!disposed && (this?.tagName==='A' || this?.tagName==='AREA'?this:this?.closest?.('a,area'));
+      if(anchor && shouldBlockProgrammaticAnchor(anchor,targetWin))return;
       return Reflect.apply(orig,this,args);
     };
     if(htmlElemProto && typeof htmlElemProto.click==='function'){
@@ -175,9 +177,13 @@ export function installNavigationGuard(win,page=win,{isMediaFrame=()=>false}={})
     }
     const makeAnchorDispatch=orig=>function(...args){
       const event=args[0];
-      if(!disposed && (event?.type==='click' || event?.type==='auxclick') && shouldBlockProgrammaticAnchor(this,targetWin))return false;
+      if(!disposed && (event?.type==='click' || event?.type==='auxclick')){
+        const anchor=this?.tagName==='A' || this?.tagName==='AREA'?this:this?.closest?.('a,area');
+        if(anchor && shouldBlockProgrammaticAnchor(anchor,targetWin))return false;
+      }
       return Reflect.apply(orig,this,args);
     };
+    patchMethod(targetWin,htmlElemProto,'dispatchEvent',makeAnchorDispatch,trackRestore);
     patchMethod(targetWin,anchorProto,'dispatchEvent',makeAnchorDispatch,trackRestore);
     patchMethod(targetWin,areaProto,'dispatchEvent',makeAnchorDispatch,trackRestore);
 
@@ -193,6 +199,50 @@ export function installNavigationGuard(win,page=win,{isMediaFrame=()=>false}={})
       const event=args[0];
       if(!disposed && event?.type==='submit' && shouldBlockForm(this,event?.submitter,targetWin,false))return false;
       return Reflect.apply(orig,this,args);
+    },trackRestore);
+
+    // Guard newly inserted blank/srcdoc iframes synchronously so window.frames[]
+    // cannot bypass before MutationObserver runs, without ever touching non-blank frames.
+    // Collect blank iframe node refs BEFORE insertion because inserting a DocumentFragment
+    // empties it before the native method returns (never accessing contentWindow beforehand).
+    const collectBlankFrames=(node,out)=>{
+      if(disposed || !node || (node.nodeType!==1 && node.nodeType!==11))return;
+      if(isBlankFrame(node)){out.push(node);return;}
+      if(node.tagName==='IFRAME' || !node.firstElementChild)return;
+      if(typeof node.querySelectorAll==='function'){
+        for(const frame of node.querySelectorAll('iframe'))if(isBlankFrame(frame))out.push(frame);
+      }
+    };
+    const guardFrames=frames=>{
+      for(const frame of frames){
+        if(frame.isConnected && isBlankFrame(frame))try{const child=frame.contentWindow;if(child)guardChildWindow(child);}catch{}
+      }
+    };
+    const nodeProto=targetWin.Node?.prototype,elemProto=targetWin.Element?.prototype;
+    for(const key of ['appendChild','insertBefore']){
+      patchMethod(targetWin,nodeProto,key,orig=>function(...args){
+        const frames=[];
+        if(!disposed && args[0])collectBlankFrames(args[0],frames);
+        const res=Reflect.apply(orig,this,args);
+        if(!disposed && frames.length)guardFrames(frames);
+        return res;
+      },trackRestore);
+    }
+    for(const key of ['append','prepend','before','after','replaceWith','replaceChildren']){
+      patchMethod(targetWin,elemProto,key,orig=>function(...args){
+        const frames=[];
+        if(!disposed)for(const arg of args)if(arg && typeof arg==='object')collectBlankFrames(arg,frames);
+        const res=Reflect.apply(orig,this,args);
+        if(!disposed && frames.length)guardFrames(frames);
+        return res;
+      },trackRestore);
+    }
+    patchMethod(targetWin,elemProto,'insertAdjacentElement',orig=>function(...args){
+      const frames=[];
+      if(!disposed && args[1])collectBlankFrames(args[1],frames);
+      const res=Reflect.apply(orig,this,args);
+      if(!disposed && frames.length)guardFrames(frames);
+      return res;
     },trackRestore);
 
     const iframeProto=targetWin.HTMLIFrameElement?.prototype;

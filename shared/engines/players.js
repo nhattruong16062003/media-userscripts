@@ -17,7 +17,8 @@ export function playerCandidate(win, page = win, {nativeContract=()=>false}={}) 
   if (jwRoot) {
     try {
       const api = typeof page.jwplayer === 'function' && page.jwplayer(jwRoot.id);
-      if (api?.getContainer?.() === jwRoot && typeof api.seek === 'function' && typeof api.getPosition === 'function') return {kind:'jw', video, root:jwRoot, api};
+      const container = api?.getContainer?.();
+      if ((container?.wrappedJSObject || container) === (jwRoot.wrappedJSObject || jwRoot) && typeof api.seek === 'function' && typeof api.getPosition === 'function') return {kind:'jw', video, root:jwRoot, api};
     } catch { /* runtime not ready */ }
     return null;
   }
@@ -60,6 +61,9 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=tru
     try{const muted=kind==='jw' && typeof api.getMute==='function'?api.getMute():video.muted,volume=kind==='jw' && typeof api.getVolume==='function'?api.getVolume()/100:video.volume;return {muted:!!muted,volume:finite(volume) && volume>=0 && volume<=1?volume:1};}
     catch{return {muted:!!video.muted,volume:finite(video.volume)?video.volume:1};}
   };
+  const pageWin = video.ownerDocument.defaultView?.wrappedJSObject || video.ownerDocument.defaultView;
+  const exposeTo = fn => { try { return typeof exportFunction === 'function' ? exportFunction(fn, pageWin) : fn; } catch { return fn; } };
+  const noop = exposeTo(() => {});
   const setMute=value=>kind==='jw' && typeof api.setMute==='function'?api.setMute(value):(video.muted=value);
   const setVolume=value=>kind==='jw' && typeof api.setVolume==='function'?api.setVolume(value*100):(video.volume=value);
   function restoreAudio(value){
@@ -69,11 +73,11 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=tru
       try{if(navigator.getAutoplayPolicy(video)!=='allowed')return false;}catch{/* unsupported policy query: attempt only the audio setters */}
     }
     const previous=audio(),generation=++audioGeneration;
-    const rollback=()=>{
+    const rollback=exposeTo(()=>{
       if(generation!==audioGeneration || playerFingerprint(candidate)!==initialSource || !video.isConnected || !canRestoreAudio() || !state().ready)return;
-      try{setVolume(previous.volume)?.catch?.(()=>{});}catch{/* denied setter */}
-      try{setMute(previous.muted)?.catch?.(()=>{});}catch{/* denied setter */}
-    };
+      try{setVolume(previous.volume)?.catch?.(noop);}catch{/* denied setter */}
+      try{setMute(previous.muted)?.catch?.(noop);}catch{/* denied setter */}
+    });
     try{
       setVolume(wanted.volume)?.catch?.(rollback);
       setMute(wanted.muted)?.catch?.(rollback);
@@ -83,7 +87,7 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=tru
   let adActive = false;
   const handlers = [],subscribers=new Set();
   if (kind === 'jw') for (const [event,value] of [['adRequest',true],['adPlay',true],['adComplete',false],['adSkipped',false],['adError',false]]) {
-    const handler = () => { adActive = value;for(const notify of subscribers)notify(); };
+    const handler = exposeTo(() => { adActive = value;for(const notify of subscribers)notify(); });
     api.on?.(event,handler); handlers.push([event,handler]);
   }
   const isAd = () => adActive || !!video.closest('.jw-flag-ads,.jw-ad-media') || ['loading','playing','paused'].includes(api?.getAdState?.());
@@ -106,7 +110,7 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=tru
     const s = state();
     if(action==='initialize-play-audible'){
       if(!s.initializable)return false;
-      api.setMute(false);const volume=api.getVolume?.();if(!finite(volume) || volume<=0)api.setVolume?.(100);api.play(true)?.catch?.(()=>{});return true;
+      api.setMute(false);const volume=api.getVolume?.();if(!finite(volume) || volume<=0)api.setVolume?.(100);api.play(true)?.catch?.(noop);return true;
     }
     if (!s.ready || s.ad) return false;
     switch (action) {
@@ -125,7 +129,7 @@ export function attachPlayer(candidate,{canRestoreAudio=()=>true,monitorLoad=tru
         }
       }
       // Fall through so sound and playback are changed in the same handler.
-      case 'play': if (kind === 'jw' && typeof api.play==='function') api.play(true)?.catch?.(()=>{}); else video.play()?.catch(()=>{}); break;
+      case 'play': if (kind === 'jw' && typeof api.play==='function') api.play(true)?.catch?.(noop); else video.play()?.catch(()=>{}); break;
       case 'pause': if (kind === 'jw' && typeof api.pause==='function') api.pause(true); else video.pause(); break;
       default:return false;
     }

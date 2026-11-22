@@ -71,7 +71,8 @@ export function persistentMediaSession(win,{candidate,onPending=()=>{},onIdentit
     // Android device a playing source can advance beyond the tolerance before
     // the first poll, falsely timing out a successful seek to zero.
     c.api.pause(true);
-    const target=Math.max(0,Math.min(position,v.duration-.25));c.api.seek(target);
+    const safePos=Number.isFinite(position)?position:0;
+    const target=Math.max(0,Math.min(safePos,v.duration-.25));c.api.seek(target);
     // Seek confirmation is required; setting currentTime alone is not an ack.
     await new Promise((resolve,reject)=>{
       let timer,deadline;const finish=(fn,value)=>{win.clearInterval(timer);win.clearTimeout(deadline);signal?.removeEventListener('abort',cancel);fn(value);};
@@ -80,16 +81,18 @@ export function persistentMediaSession(win,{candidate,onPending=()=>{},onIdentit
       signal?.addEventListener('abort',cancel,{once:true});timer=win.setInterval(tick,50);deadline=win.setTimeout(()=>finish(reject,new Error('Chưa xác nhận vị trí phim')),5000);tick();
     });
     if(signal?.aborted || !current(c) || epoch!==generation)throw abort();
-    if(paused)c.api.pause(true);else await Promise.resolve(c.api.play(true));
+    if(paused)c.api.pause(true);else await Promise.resolve(c.api.play(true)).catch(()=>{});
     if(signal?.aborted || !current(c) || epoch!==generation)throw abort();
     if(typeof c.api.setVolume==='function' && Number.isFinite(volume) && volume>=0 && volume<=1)c.api.setVolume(volume*100);
     c.api.setMute(muted);return v;
   }
   return {snapshot,get busy(){return busy;},async replace(value,options={}){
     if(busy || disposed)throw new Error('Đang chuyển nguồn');
+    if(options.signal?.aborted)throw abort();
     const c=candidate(),playlist=mediaPlaylist(value),previous=snapshot();
     if(!playlist || !previous || !c || c.kind!=='jw' || !mediaPresentationRoot(win,c.video,c.root))throw new Error('Nguồn không hỗ trợ đổi trong phiên');
-    const before={position:c.api.getPosition(),paused:c.video.paused,muted:c.api.getMute(),volume:c.api.getVolume?.()/100},epoch=++generation;
+    const rawPos=c.api.getPosition();
+    const before={position:Number.isFinite(rawPos)?rawPos:0,paused:c.video.paused,muted:c.api.getMute(),volume:c.api.getVolume?.()/100},epoch=++generation;
     busy=true;onPending(true);
     try{const video=await load(c,playlist,options,epoch);onIdentity(options.identity);return video;}
     catch(error){

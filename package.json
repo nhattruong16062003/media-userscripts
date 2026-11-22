@@ -1,13 +1,18 @@
 {
   "name": "media-userscripts",
-  "version": "0.4.19",
+  "version": "0.4.20",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "test": "node --test rophim/tests/*.test.mjs motchill/tests/*.test.cjs tests/*.test.mjs",
+    "test:rophim": "node --test rophim/tests/*.test.mjs",
+    "test:motchill": "node --test motchill/tests/*.test.cjs",
+    "check": "npm run build && npm test",
     "check:build": "node scripts/build.mjs --check"
   },
   "devDependencies": {
-    "esbuild": "0.27.0"
+    "esbuild": "0.27.0",
+    "jsdom": "26.1.0"
   }
 }

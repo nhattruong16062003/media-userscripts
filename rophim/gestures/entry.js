@@ -8,7 +8,7 @@ import {runFamily} from '../../shared/bridge/ownership.js';
 import {childLoading} from '../lib/player-loading.js';
 import {observeHlsOwners} from '../../shared/engines/hls-access.js';
 
-if(window.parent!==window)observeHlsOwners(typeof unsafeWindow==='undefined'?window:unsafeWindow);
+if(window.parent!==window && isFrameURL(window.location.href))observeHlsOwners(typeof unsafeWindow==='undefined'?window:unsafeWindow);
 
 function startGestures(win,page) {
   // document-start may run before <html> exists, especially in a new iframe.
@@ -18,12 +18,12 @@ function startGestures(win,page) {
     const early=new win.MutationObserver(()=>{if(win.document.documentElement){early.disconnect();startGestures(win,page);}});
     early.observe(win.document,{childList:true});return;
   }
-  let mounted=null,site=null,context=null,bridge=null,frameFullscreen=false,endedKey='';
+  let mounted=null,site=null,context=null,bridge=null,frameFullscreen=false,lastSyncedLocked=false,endedKey='';
   const releaseStartup=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?playerStartupGuard(win):()=>{};
   const childGate=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?childLoading(win):null;
-  const controlsReady=()=>!!context && !!mounted?.ui.shell.isConnected && !mounted.ui.shell.hidden && mounted.player.state().ready && !mounted.player.state().ad;
-  const navigation=win.parent===win?watchNavigation(win,{onChange:()=>bridge?.refresh(),ownsPlayer:()=>bridge?.state()?.ready && !bridge.state().ad}):null;
-  const unbind=()=>{mounted?.ui.dispose();mounted=null;};
+  const controlsReady=()=>!!context && !!mounted?.ui.shell.isConnected && !mounted.ui.shell.hidden && (mounted.player.state().ready || mounted.player.state().initializable===true) && !mounted.player.state().ad;
+  const navigation=win.parent===win?watchNavigation(win,{page,onChange:()=>bridge?.refresh(),ownsPlayer:()=>bridge?.state()?.ready && !bridge.state().ad}):null;
+  const unbind=()=>{mounted?.ui.dispose();mounted=null;lastSyncedLocked=false;};
   const next=async(action,request)=>{
     if(!site || !context)return 'unavailable';
     if(action==='fullscreen')return navigation?.fullscreen(site) ?? 'unavailable';
@@ -33,8 +33,10 @@ function startGestures(win,page) {
       if(!request?.isCurrent() || win.location.href!==href || expected!==contextKey(context) || site?.frame!==frame || frame?.src!==src || !frame?.isConnected)return 'unavailable';
       if(!url)return 'missing';
       if(selectedSite.kind==='legacy-panels'){
-        win.document.cookie=`selectedServerRophim=${encodeURIComponent(selectedContext.server)}; path=/; SameSite=Lax`;
-        win.document.cookie=`selectedVidTypeRophim=${selectedContext.lane}; path=/; SameSite=Lax`;
+        for(const p of ['/','/xem-phim']){
+          win.document.cookie=`selectedServerRophim=${encodeURIComponent(selectedContext.server)}; path=${p}; SameSite=Lax`;
+          win.document.cookie=`selectedVidTypeRophim=${selectedContext.lane}; path=${p}; SameSite=Lax`;
+        }
       }
       return navigation.navigate(url,{site:selectedSite,keepLane:true,isCurrent:request.isCurrent});
     }catch{return 'error';}
@@ -60,7 +62,13 @@ function startGestures(win,page) {
       }
       if(info.player!==mounted?.player){
         unbind();
-        if(info.player)mounted={player:info.player,ui:customPlayerControls(win,info.player,{autoPlay:true,isFullscreen:()=>frameFullscreen,onNext:()=>bridge?.request('next') ?? false,onFullscreen:()=>{const pending=bridge?.request('fullscreen');return pending && pending.then(status=>{if(status==='fullscreen' || status==='windowed'){frameFullscreen=status==='fullscreen';mounted?.ui.update();}return status;});}})};
+        if(info.player){
+          lastSyncedLocked=info.locked===true;
+          mounted={player:info.player,ui:customPlayerControls(win,info.player,{autoPlay:true,initialLocked:lastSyncedLocked,onLockChange:value=>{lastSyncedLocked=value;bridge?.setLocked?.(value);},isFullscreen:()=>frameFullscreen,onNext:()=>bridge?.request('next') ?? false,onFullscreen:()=>{const pending=bridge?.request('fullscreen');return pending && pending.then(status=>{if(status==='fullscreen' || status==='windowed'){frameFullscreen=status==='fullscreen';if(!frameFullscreen)lastSyncedLocked=false;mounted?.ui.update();}return status;});}})};
+        }
+      } else if(mounted && info.locked!==lastSyncedLocked){
+        lastSyncedLocked=info.locked===true;
+        mounted.ui.syncLocked?.(lastSyncedLocked);
       }
       mounted?.ui.setContext(context);childGate?.update(controlsReady(),info.state?.load);
     },

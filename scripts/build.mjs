@@ -24,7 +24,7 @@ const navigationGuard=await build({absWorkingDir:root,entryPoints:['shared/navig
 const adapterFragments=new Map();
 for(const name of await readdir(path.join(root,'motchill/lib/sites')))if(name!=='index.js' && name.endsWith('.js'))adapterFragments.set(name,await readFile(path.join(root,'motchill/lib/sites',name),'utf8'));
 let sites=await readFile(path.join(root,'motchill/lib/sites/index.js'),'utf8');
-sites=sites.replace(/\/\/ @include ([a-z-]+\.js)/g,(_all,name)=>`/* adapter:${name} */\n${adapterFragments.get(name)}`);
+sites=sites.replace(/\/\/ @include ([a-z0-9-]+\.js)/g,(_all,name)=>{if(!adapterFragments.has(name))throw Error('Missing adapter fragment: '+name);return `/* adapter:${name} */\n${adapterFragments.get(name)}`;});
 
 function metadata(site,kind,version,old){
   const download=`${raw}/${site}/${kind}/${site}-${kind}.user.js`;

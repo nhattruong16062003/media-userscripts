@@ -57,7 +57,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     if(window.top===window){document.documentElement.dataset.mcCustomOwner='1';observer=new MutationObserver(prepareFrames);observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['src','data-mc-role']});prepareFrames();}
   }
   if(!document.documentElement){rootObserver=new MutationObserver(()=>{if(document.documentElement){rootObserver.disconnect();guard();}});rootObserver.observe(document,{childList:true});}
-  function detach(){mounted?.ui.dispose();mounted?.player.dispose?.();mounted=null;}
+  function detach(){mounted?.ui.dispose();mounted?.player.dispose?.();mounted=null;if(probe && !candidate()){probe.dispose();probe=null;probeSource='';}}
   function clearLocalPresentation(){detach();statusPanel?.dispose();statusPanel=null;if(localRoot){delete localRoot.dataset.mcLocalFsRoot;localRoot=null;}}
   function localState(video){
     const found=candidate();
@@ -73,6 +73,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return !changing && state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
   function playAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
   function initializePlayAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('initialize-play-audible');}
+  function setMute(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('mute',value);}
   function restoreAudio(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function enhanceLocal(video){
     guard();
@@ -122,10 +123,11 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     // A fresh source can have empty played ranges after its muted warmup.
     // Keep the caller's Pause across UI remounts instead of treating that as
     // permission for the new controls to autoplay. Explicit Play still works.
+    const wasPaused=found.video.paused===true;
     preservePause=value.paused===true;
     if(!persistent)persistent=SharedPlayer.persistentMediaSession(window,{candidate,onPending:value=>{changing=value;},onIdentity:identity=>{providerIdentity=identity;}});
     const root=enhancementRoot(),panel=SharedPlayer.loadingPanel(window,root,{});
-    return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).finally(()=>panel.dispose());
+    return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).catch(error=>{preservePause=wasPaused || signal?.aborted===true;throw error;}).finally(()=>panel.dispose());
   }
   function update(media,root,page){
     if(disposed)return false;
@@ -173,7 +175,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
       const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
         canAutoPlay:()=>!changing && !preservePause,
         audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
-        introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
+        introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok===true || ok==='navigating'?'navigating':ok==='error'?'error':'missing'),
         isFullscreen:()=>localPresentation()?document.fullscreenElement===root:hooks.isFullscreen(),onFullscreen:()=>localPresentation()?localFullscreen.toggle(root):hooks.onFullscreen()});
       mounted={media,root,signature,player,ui};
     }
@@ -185,5 +187,5 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,enhanceLocal,clearLocal:clearLocalPresentation,localPresentation,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,initializePlayAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;clearLocalPresentation();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,enhanceLocal,clearLocal:clearLocalPresentation,localPresentation,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,initializePlayAudible,setMute,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;clearLocalPresentation();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }

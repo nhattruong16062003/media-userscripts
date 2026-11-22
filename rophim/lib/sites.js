@@ -18,7 +18,7 @@ export function detectSite(doc, href, page = {}) {
   if (!frame) return null;
   const data = transition?.frameSrc===frame.src && ['next-ordered','next-basic'].includes(transition.kind) && transition.episode && transition.movie?{episodes:[transition.episode],movies:[transition.movie]}:rscObjects(doc, page);
   const suffix = url.pathname.match(/\.(\d+)$/)?.[1];
-  const embedID = safeURL(frame.src)?.pathname.match(/^\/embed\/(\d+)$/)?.[1];
+  const embedID = safeURL(frame.src)?.pathname.match(/^\/embed\/(\d+)\/?$/)?.[1];
   const candidates = data.episodes.filter(e => suffix ? String(e.id) === suffix : embedID ? String(e.id) === embedID : e.link === frame.src);
   const episode = candidates.at(-1);
   if (!episode || typeof episode.server !== 'string' || !['embed','m3u8'].includes(episode.type)) return null;
@@ -28,7 +28,6 @@ export function detectSite(doc, href, page = {}) {
   if (!movie) return null;
   const candidate={frame,url,episode,movie};
   return detectNextOrdered(candidate) || detectNextBasic(doc,candidate);
-  return null;
 }
 export function commitWatchSite(doc,site){
   let node=doc.getElementById('rp-watch-descriptor');if(!node){node=doc.createElement('script');node.id='rp-watch-descriptor';node.type='application/json';node.dataset.rpUi='watch-data';(doc.head || doc.documentElement).append(node);}

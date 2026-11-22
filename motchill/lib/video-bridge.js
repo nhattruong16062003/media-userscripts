@@ -55,12 +55,16 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   const providerIdentity=value=>value && typeof value.id==='string' && /^[1-9]\d*$/.test(value.id) && typeof value.movieId==='string' && /^[1-9]\d*$/.test(value.movieId) && Number.isSafeInteger(value.season) && value.season>=1 && value.season<=1000 && typeof value.server==='string' && value.server.length<200 && sites.translationKey(value.server) ? {id:value.id,movieId:value.movieId,season:value.season,server:value.server}:null;
   function readParentContext(value,origin){
     const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
+    const originHost=sites.url(origin)?.hostname || '';
+    const originMatches=!!target && (target.origin===origin || sites.embedHosts.has(originHost));
+    const routeEp=route && sites.episodeKey(route.episode);
+    const validEpisode=routeEp===value?.episodeKey || (value?.family===sites.families.NEXT_REVIVE && routeEp==='ep:1' && value?.episodeKey==='full');
     const validLanguage=value?.language==='' || !!sites.translationKey(value?.language);
-    if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !validLanguage)return null;
+    if(!target || !originMatches || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || !validEpisode || !validLanguage)return null;
     const result=Object.fromEntries(['url','family','slug','film','episode','episodeKey','language','server'].map(key=>[key,String(value[key] || '').slice(0,2048)]));
     if(Number.isFinite(value.introSeconds) && value.introSeconds>=0 && value.introSeconds<=300)result.introSeconds=value.introSeconds;
     const next=sites.url(value.next?.url),nextRoute=next && sites.route(next.href,result.family);
-    if(next?.origin===origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
+    if(next?.origin===target.origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
     return result;
   }
   const remotes = new Map();
@@ -92,7 +96,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   function hello(frame, session) {
     const currentRole = documentRole();
     const ownContext = sites.adapter().read();
-    const context = ownContext ? { ...ownContext, introSeconds: options.introSeconds?.() } : parentContext;
+    const introSeconds = window.top === window ? options.introSeconds?.() : (parentContext?.introSeconds ?? options.introSeconds?.());
+    const context = ownContext ? { ...ownContext, introSeconds } : parentContext;
     frame.contentWindow?.postMessage({ tag: channel, type: 'hello', token: session.token,
       managed: ['episode','provider'].includes(frame.dataset.mcManaged) || managed,
       role: session.assignedRole || frame.dataset.mcRole || currentRole,
@@ -282,7 +287,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         if (data.action === 'play') video.play()?.catch(() => {});
         if (data.action === 'pause') video.pause();
         if (data.action === 'reveal-controls') document.dispatchEvent(new CustomEvent('mc-reveal-controls'));
-        if (data.action === 'mute' && typeof data.value === 'boolean') video.muted = data.value;
+        if (data.action === 'mute' && typeof data.value === 'boolean') { if (!options.setMute?.(video, data.value)) video.muted = data.value; }
         if (data.action === 'rate' && Number.isFinite(data.value) && data.value >= .25 && data.value <= 4) video.playbackRate = data.value;
         if (data.action === 'start-zero') {
           const operation = ++startGeneration;
@@ -331,7 +336,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const currentSession=session;session.nextPending=true;
       Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
         if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId && ok!==true && ok!=='navigating')return;
-        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
+        const status=ok===true || ok==='navigating'?'navigating':ok==='error' || ok==='timeout'?'error':'missing';
+        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status},session.origin);
       }).catch(()=>{
         if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:'error'},session.origin);
       }).finally(()=>{currentSession.nextPending=false;});return;

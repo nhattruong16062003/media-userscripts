@@ -96,7 +96,8 @@ function startMotchillPlayerController(sites) {
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
     onIntro:()=>{if(media?.isConnected)learning.skipIntro(media,contextKey());},
     onHello:()=>{if(window.top!==window)childMode();},
-    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),initializePlayAudible:video=>customUI?.initializePlayAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
+    onNext:()=>{const hasNext=!!activePage()?.next;return Promise.resolve(nativeNavigation?.active?nativeNavigation.goNext():goNext('manual')).then(ok=>ok?'navigating':hasNext?'error':'missing');},
+    playAudible:video=>customUI?.playAudible(video),initializePlayAudible:video=>customUI?.initializePlayAudible(video),setMute:(video,value)=>customUI?.setMute?.(video,value),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -151,7 +152,7 @@ function startMotchillPlayerController(sites) {
   learning = createMotchillPlayerLearning(sites, getPage, { isCurrent: () => bridge.role !== 'prepared' });
   customUI=typeof createMotchillCustomPlayer==='function'?createMotchillCustomPlayer(sites,bridge,{
     onNativeIntro:video=>learning.skipIntro(video,contextKey()),introSeconds:()=>learning.introEnd(),onIntro:()=>learning.skipIntro(media,contextKey()),
-    onNext:()=>goNext('manual'),serverKey:()=>nativeNavigation?.active?activePage()?.server:selectedServerKey,
+    onNext:()=>{const hasNext=!!activePage()?.next;return Promise.resolve(goNext('manual')).then(ok=>ok?'navigating':hasNext?'error':'missing');},serverKey:()=>nativeNavigation?.active?activePage()?.server:selectedServerKey,
     isFullscreen:()=>document.fullscreenElement===(nativeNavigation?.active?nativeNavigation.shell:shell) && !!document.fullscreenElement,onFullscreen:()=>toggleFullscreen(),
   }):null;
   customUI?.guard();
@@ -345,10 +346,15 @@ function startMotchillPlayerController(sites) {
     if (lockButton) lockButton.hidden = true;
     down = null; stopHold();
   });
+  let lastLockKey = '', lastActionKey = '';
   function updateLockUI() {
     if (!lockButton || !shell) return;
+    if (customUI?.active && lockButton.hidden) return;
     const native = shell.matches('.jwplayer') ? shell : getDocument().querySelector('.jwplayer');
     const visible = locked ? shell.classList.contains('mc-show-lock') : native && (!native.classList.contains('jw-flag-user-inactive') || native.classList.contains('jw-state-paused'));
+    const nextKey = (visible ? '1' : '0') + '|' + (locked ? '1' : '0');
+    if (nextKey === lastLockKey) return;
+    lastLockKey = nextKey;
     lockButton.classList.toggle('mc-lock-visible', !!visible);
     lockButton.setAttribute('aria-label', locked ? 'Mở khóa màn hình' : 'Khóa màn hình');
     lockButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/>'
@@ -441,6 +447,7 @@ function startMotchillPlayerController(sites) {
     initialNodes = shell.classList.contains('mc-shell-page') ? [host] : [...shell.children].filter((node) => !/^(SCRIPT|STYLE)$/.test(node.tagName));
     if (baseHost) baseHost.classList.add('mc-media-host');
     stage = document.createElement('div'); stage.className = 'mc-player-stage'; shell.append(stage);
+    lastActionKey = ''; lastLockKey = '';
     positionStage();
     action = button('Tập tiếp theo', 'mc-next-action', () => {
       if (Date.now() - lastActionAt < 600 || action.hidden || action.disabled) return;
@@ -488,7 +495,7 @@ function startMotchillPlayerController(sites) {
     const waiting = ['switching', 'refreshing'].includes(value.phase);
     status.textContent = value.message || ''; status.hidden = customUI?.active && waiting || !waiting && value.phase !== 'error';
     retry.hidden = back.hidden = value.phase !== 'error';
-    if (waiting) { action.hidden = false; action.disabled = true; action.textContent = value.message; }
+    if (waiting) { lastActionKey = ''; action.hidden = false; action.disabled = true; action.textContent = value.message; }
     else action.disabled = false;
   }
   let rollbackMedia = null, rollbackMuted = false, rollbackPaused = true;
@@ -654,7 +661,7 @@ function startMotchillPlayerController(sites) {
       candidate.remote.command('start-zero');
       await wait(() => {
         bridge.poll(); const state = validateCandidate(candidate);
-        return state?.startedAtZero && !state.paused && state.readyState >= 2 && state.position < 3 && !state.ad;
+        return state?.startedAtZero && !state.paused && !state.ad;
       }, signal);
       let resumedTo = 0;
       const resume = candidate.target.resume;
@@ -691,9 +698,10 @@ function startMotchillPlayerController(sites) {
       currentFrame = candidate.frame; currentPage = { ...candidate.page, url: target.url };
       selectedServerKey = candidate.preferredServer;
       media = candidate.remote; media.muted = rollbackMuted;
+      if (['server', 'translation'].includes(target.intent) && rollbackPaused) media.pause();
       // Đồng bộ trong lượt commit: cú click thứ hai ngay sau khi tải xong không
       // được dùng nút tập kế của tập cũ để bỏ qua thêm một tập nữa.
-      action.hidden = true; action.dataset.action = ''; action.textContent = '';
+      lastActionKey = ''; action.hidden = true; action.dataset.action = ''; action.textContent = '';
       // Native history update avoids Next.js' patched pushState rerendering and
       // replacing the fullscreen shell. The live route remains inside the child.
       History.prototype.pushState.call(history, { ...history.state, mcEpisode: true }, '', target.url);
@@ -732,12 +740,13 @@ function startMotchillPlayerController(sites) {
     if (!shell) mount(media);
     if (!shell) return;
     positionStage();
-    if(customUI)stage.dataset.mcCustom=customUI.update(media,stage,activePage())?'1':'0';
+    if(customUI){const nextCustom=customUI.update(media,stage,activePage())?'1':'0';if(stage.dataset.mcCustom!==nextCustom)stage.dataset.mcCustom=nextCustom;}
     const lockSupported = players.canLock(getDocument(), sites.detect(getDocument(), activePage()?.url));
     if (locked && (document.fullscreenElement !== shell || !lockSupported)) {
       locked = false; shell.classList.remove('mc-locked'); stopHold();
     }
-    lockButton.hidden = document.fullscreenElement !== shell || !lockSupported;
+    const hideLock = document.fullscreenElement !== shell || !lockSupported;
+    if (lockButton.hidden !== hideLock) lockButton.hidden = hideLock;
     updateLockUI();
     const info = activePage();
     const pageIdentity = [info.url, info.language].join('|');
@@ -770,7 +779,7 @@ function startMotchillPlayerController(sites) {
     // initialization click and call play() on an empty video instead.
     const surface = stage?.querySelector('.mc-gesture-surface');
     const gestureReady = !isAd && Number.isFinite(media.duration) && media.duration > 0 && media.readyState >= 1;
-    if (surface) surface.hidden = !gestureReady || !locked && (!media.frame || media.state?.nativeGestures === true);
+    if (surface) { const hideSurface = !gestureReady || !locked && (!media.frame || media.state?.nativeGestures === true); if (surface.hidden !== hideSurface) surface.hidden = hideSurface; }
     if (!gestureReady) { down = null; stopHold(); }
     if (restoringServer) return; // Không dùng thời gian/ended của server cũ để tự chuyển.
     machine.tick({ currentTime: media.currentTime, duration: media.duration, paused: media.paused || autoSuppressed, ended: media.ended && !autoSuppressed,
@@ -779,11 +788,18 @@ function startMotchillPlayerController(sites) {
       const left = media.duration - media.currentTime;
       const nextVisible = !!info.next && Number.isFinite(media.duration) && media.duration > 0 && left <= 180 && left >= 0;
       const introVisible = media.currentTime < learning.introEnd() - 5 && media.duration >= 600;
-      action.hidden = isAd || !nextVisible && !introVisible;
-      action.dataset.action = nextVisible ? 'next' : 'intro';
-      action.innerHTML = (nextVisible ? 'Tập tiếp theo ' + icons.next : 'Bỏ qua giới thiệu ' + icons.forward);
-      const bar = media.closest?.('.jwplayer,.art-video-player')?.querySelector('.jw-controlbar,.art-bottom') || getDocument().querySelector('.jw-controlbar,.art-bottom');
-      action.style.bottom = Math.max(64, bar ? bar.offsetHeight + 4 : 0) + 'px';
+      const shouldHide = isAd || !nextVisible && !introVisible;
+      const nextKind = nextVisible ? 'next' : 'intro';
+      const bar = shouldHide || customUI?.active ? null : (media.closest?.('.jwplayer,.art-video-player')?.querySelector('.jw-controlbar,.art-bottom') || getDocument().querySelector('.jw-controlbar,.art-bottom'));
+      const bottomPx = Math.max(64, bar ? bar.offsetHeight + 4 : 0) + 'px';
+      const keyStr = `${shouldHide ? 1 : 0}|${nextKind}|${bottomPx}`;
+      if (keyStr !== lastActionKey) {
+        lastActionKey = keyStr;
+        action.hidden = shouldHide;
+        action.dataset.action = nextKind;
+        action.innerHTML = (nextVisible ? 'Tập tiếp theo ' + icons.next : 'Bỏ qua giới thiệu ' + icons.forward);
+        action.style.bottom = bottomPx;
+      }
     }
   }
   // Server click được website thực hiện, controller chỉ giữ tiến độ sau khi
@@ -804,9 +820,24 @@ function startMotchillPlayerController(sites) {
     const current = players.chosenServer(getDocument(), sites.detect(getDocument(), activePage().url), media);
     if (!retryAction && current?.key === choice.key) return;
     document.dispatchEvent(new Event('mc-before-server-change'));
-    const expected = mirror ? players.serverChoices(getDocument(), sites.detect(getDocument(), activePage().url)).find((item) => item.key === choice.key) : choice;
-    restoringServer = { position: media.currentTime, duration: media.duration, until: Date.now() + 20000,
-      key: choice.key, expected, provider: providerSignature(media), previous: media.state?.mediaId || media.currentSrc || media.src || media };
+    const pageInfo = activePage();
+    const expected = mirror ? players.serverChoices(getDocument(), sites.detect(getDocument(), pageInfo.url)).find((item) => item.key === choice.key) : choice;
+    const targetLang = sites.translationKey(expected?.label || '');
+    const languageChanged = !!targetLang && !!pageInfo.language && targetLang !== pageInfo.language;
+    const pendingRestore = { position: media.currentTime, duration: media.duration, paused: media.paused !== false, until: Date.now() + 20000,
+      key: choice.key, expected, provider: providerSignature(media), previous: media.state?.mediaId || media.currentSrc || media.src || media,
+      lookupPending: languageChanged && typeof lookupMotchillHistoryProgress === 'function' };
+    restoringServer = pendingRestore;
+    if (pendingRestore.lookupPending) {
+      lookupMotchillHistoryProgress({ ...pageInfo, language: targetLang }).then((stored) => {
+        if (restoringServer !== pendingRestore) return;
+        if (stored?.status === 'found' && stored.value) {
+          pendingRestore.position = stored.value.position;
+          pendingRestore.duration = stored.value.duration;
+        }
+        pendingRestore.lookupPending = false;
+      }).catch(() => { if (restoringServer === pendingRestore) pendingRestore.lookupPending = false; });
+    }
     machine.cancel(); selectionVersion++; transitionTarget = null; autoSuppressed = false;
     selectedServerKey = choice.key;
     const serverButton = mirror || choice.node;
@@ -823,10 +854,12 @@ function startMotchillPlayerController(sites) {
     const pending = restoringServer;
     const identity = media.state?.mediaId || media.currentSrc || media.src || media;
     if (Date.now() > pending.until) { restoringServer = null; showState({ phase: 'error', message: 'Server chưa sẵn sàng. Hãy thử chọn lại server.' }); return; }
+    if (pending.lookupPending) return;
     if (identity === pending.previous && providerSignature(media) === pending.provider || media.readyState < 1 || !Number.isFinite(media.duration)) return;
     const actualMedia = media.frame ? media : { state: bridge.state(), currentSrc: media.currentSrc, src: media.src };
     if (pending.expected?.source && !players.sourceProven(pending.expected, actualMedia)) return;
     if (Math.abs(media.duration - pending.duration) <= Math.max(30, pending.duration * .03)) media.currentTime = Math.min(pending.position, Math.max(0, media.duration - 1));
+    if (pending.paused) media.pause();
     restoringServer = null; retryAction = null; showState({ phase: 'idle' });
     if (currentFrame) syncOuterControls(getDocument(), activePage());
   }, 250);

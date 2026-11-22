@@ -27,7 +27,7 @@ export function mediaLoadMonitor(candidate,{active=()=>true,allowExpansion=false
   const events=['waiting','stalled','playing','canplay','pause','ended','error','emptied','loadstart','seeking','seeked','ratechange'];
   const onEvent=event=>{
     if(['emptied','loadstart'].includes(event.type)){reset();waiting=false;}
-    else if(['waiting','stalled','seeking'].includes(event.type)){waiting=true;stableSince=null;restore();qualityBaseline=null;healthyFrames=false;}
+    else if(['waiting','stalled','seeking'].includes(event.type)){waiting=true;stableSince=null;if(tuning && event.type!=='seeking')limited=true;restore();qualityBaseline=null;healthyFrames=false;}
     else if(event.type==='ratechange'){restore();stableSince=null;qualityBaseline=null;healthyFrames=false;}
     else if(['playing','canplay','seeked','pause','ended'].includes(event.type)){waiting=false;if(['pause','ended'].includes(event.type)){restore();stableSince=null;qualityBaseline=null;healthyFrames=false;}}
   };
@@ -45,16 +45,18 @@ export function mediaLoadMonitor(candidate,{active=()=>true,allowExpansion=false
     if(next===engine)return;
     restore();engineOff?.();engine=next;engineOff=null;fragments=[];stableSince=null;qualityBaseline=null;healthyFrames=false;levelIndex=null;limited=false;cooldownUntil=0;since=clock();lastPolicyCheck=-Infinity;policy=engine?'observed':'native';
     if(engine){
-      const fragment=(_event,data)=>{const stats=data?.stats || data?.frag?.stats,s=stats?.loading;if(!active() || data?.frag?.type && data.frag.type!=='main' || !s || !nonnegative(stats.loaded) || !(s.end>s.start) || s.start<since)return;fragments.push({bytes:stats.loaded,start:s.start,end:s.end,duration:data.part?null:data.frag?.duration});if(fragments.length>32)fragments.shift();};
-      const error=(_event,data)=>{if(data?.fatal || data?.details==='bufferFullError' || data?.error?.name==='QuotaExceededError'){limited=true;restore();}};
+      const pageWin=win?.wrappedJSObject || win;
+      const exposeTo=fn=>{try{return typeof exportFunction==='function'?exportFunction(fn,pageWin):fn;}catch{return fn;}};
+      const fragment=exposeTo((_event,raw)=>{const data=raw?.wrappedJSObject || raw,stats=data?.stats || data?.frag?.stats,s=stats?.loading;if(!active() || data?.frag?.type && data.frag.type!=='main' || !s || !nonnegative(stats.loaded) || !(s.end>s.start) || s.start<since)return;fragments.push({bytes:stats.loaded,start:s.start,end:s.end,duration:data.part?null:data.frag?.duration});if(fragments.length>32)fragments.shift();});
+      const error=exposeTo((_event,raw)=>{const data=raw?.wrappedJSObject || raw;if(data?.fatal || data?.details==='bufferFullError' || data?.error?.name==='QuotaExceededError'){limited=true;restore();}});
       const bound=engine;bound.on('hlsFragLoaded',fragment);bound.on('hlsError',error);engineOff=()=>{bound.off('hlsFragLoaded',fragment);bound.off('hlsError',error);};
     }
   }
   function bitrates(){const level=engine?.levels?.[engine.currentLevel],loading=level?.maxBitrate || level?.bitrate;return {loading,budget:loading>0?loading:loading===0?observedMediaBitrate(fragments):null};}
   function snapshot(state){
     const now=clock(),time=state.time;
-    const current=kind==='jw'?api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file:video.currentSrc || video.src;
-    if(current!==source){reset();source=current || '';waiting=false;}
+    const current=(kind==='jw'?api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file:video.currentSrc || video.src) || '';
+    if(current!==source){reset();source=current;waiting=false;}
     bindEngine();
     const ahead=bufferedAhead(video,time),enabled=active() && !state.ad;
     if(lastTime===null || Math.abs(time-lastTime)>.02){lastTime=time;lastAdvance=now;}
@@ -70,7 +72,7 @@ export function mediaLoadMonitor(candidate,{active=()=>true,allowExpansion=false
       if(stableSince!==null && quality && Number.isFinite(quality.totalVideoFrames) && Number.isFinite(quality.droppedVideoFrames)){
         if(!qualityBaseline)qualityBaseline={total:quality.totalVideoFrames,dropped:quality.droppedVideoFrames,at:now};
         const total=quality.totalVideoFrames-qualityBaseline.total,dropped=quality.droppedVideoFrames-qualityBaseline.dropped;
-        if(total<0 || dropped<0 || total>=100 && dropped/total>.01 || dropped>=3 && total<30 || tuning && delayed){
+        if(total<0 || dropped<0 || total>=100 && dropped/total>.01 || total<100 && dropped>=3 && (total<30 || dropped/total>.02) || tuning && delayed){
           // Cold decoding can drop frames before any tuning. Wait for another
           // healthy window; a regression AFTER expansion disables it for this
           // source instead of repeatedly trying and causing visible stutters.

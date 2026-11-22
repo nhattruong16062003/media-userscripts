@@ -1,10 +1,10 @@
 import {isSiteOrigin, FRAME_ORIGINS,isFrameURL, safeURL, token, finite, diagnostic, watchDOM} from './core.js';
-import {detectSite, readContext, contextKey} from './sites.js';
+import {detectSite, readContext, contextKey, commitWatchSite} from './sites.js';
 import {playerCandidate, attachPlayer, playerFingerprint} from './players.js';
 import {validLoadMetrics} from '../../shared/player/buffering.js';
 
 export function validState(s) {
-  return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && (s.failed === undefined || typeof s.failed === 'boolean') && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
+  return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && (s.initializable === undefined || typeof s.initializable === 'boolean') && (s.failed === undefined || typeof s.failed === 'boolean') && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
 }
 export function acceptsPacket(event, session, channel) {
   const d = event.data;
@@ -22,15 +22,16 @@ export function bridgeContext(value) {
 export function createBridge(win, page, feature, callbacks = {}) {
   const channel = 'rophim.' + feature + '.v1';
   const top = win.parent === win;
+  const doc = win.document;
   if (top ? !isSiteOrigin(win.location.origin) : !isFrameURL(win.location.href)) return {dispose(){},state:()=>null,command:()=>false};
   let session = null, site = null, context = null, local = null, media = '', lastSource = '', remote = null, generation = 0, sequence = 0, disposed = false;
-  let boundFrame = null,frameFullscreen=false,controlsReady=false;
-  let knownSource=false, snapshot=null, pending='', retryAfter=0;
+  let boundFrame = null,frameFullscreen=false,frameLocked=false,controlsReady=false;
+  let snapshot=null, pending='', retryAfter=0, fetchKey='', fetchAttempts=0;
   const requests=new Map();
   const resultStatuses=action=>action==='fullscreen'?['fullscreen','windowed','error','unavailable']:['missing','error','navigating','unavailable'];
   const clearRequests=()=>{for(const request of requests.values()){win.clearTimeout(request.timer);request.resolve('unavailable');}requests.clear();};
   const referrer = safeURL(win.document.referrer)?.origin;
-  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen,controlsReady:top?controlsReady:false});
+  const emit = () => callbacks.update?.({site,context,player:local,state:top ? remote : local?.state(),media,fullscreen:frameFullscreen,locked:frameLocked,controlsReady:top?controlsReady:false});
   const resetRemote = () => { remote = null; controlsReady=false;media = ''; session = null; generation++; emit(); };
   const loaded = () => { resetRemote(); tick(); };
   const send = data => { if (session) session.source.postMessage({...data,channel,token:session.token,generation:session.generation,seq:++sequence},session.origin); };
@@ -43,11 +44,14 @@ export function createBridge(win, page, feature, callbacks = {}) {
       if(!Number.isSafeInteger(d.seq) || d.seq<0)return;
       if (session?.token !== d.token || session?.generation !== d.generation) {
         clearRequests();
-        session = {source:event.source,origin:event.origin,token:d.token,generation:d.generation,seq:-1};sequence = 0;
+        session = {source:event.source,origin:event.origin,token:d.token,generation:d.generation,seq:-1,lockSynced:false};sequence = 0;
       }
       if(d.seq<=session.seq)return;
       session.seq=d.seq;
-      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;emit();report();
+      const nextContext=bridgeContext(d.context);if(contextKey(nextContext)!==contextKey(context))clearRequests();context=nextContext;frameFullscreen=d.fullscreen===true;
+      if(!frameFullscreen)frameLocked=false;
+      else if(!session.lockSynced){session.lockSynced=true;frameLocked=d.locked===true;}
+      emit();report();
       return;
     }
     if (!acceptsPacket(event,session,channel)) return;
@@ -55,6 +59,10 @@ export function createBridge(win, page, feature, callbacks = {}) {
       if (!boundFrame?.isConnected || boundFrame.contentWindow !== event.source || boundFrame.src !== session.src || contextKey(context) !== session.key) return;
       if (d.type === 'state' && validState(d.state) && /^[a-f\d]{32}$/.test(d.media)) {
         session.seq = d.seq; session.seen = Date.now(); media = d.media;remote = {...d.state,load:validLoadMetrics(d.state.load)?Object.fromEntries(['ahead','status','bytesPerSecond','online','bufferPolicy'].map(key=>[key,d.state.load[key]])):null};controlsReady=d.controlsReady===true;emit();
+      } else if (d.type === 'lock' && typeof d.locked === 'boolean' && (!media || d.media === media)) {
+        session.seq = d.seq;
+        frameFullscreen = !!win.document.fullscreenElement?.contains(boundFrame);
+        frameLocked = frameFullscreen && d.locked;
       } else if (d.type === 'request' && ['next','fullscreen'].includes(d.action) && /^[a-f\d]{32}$/.test(d.id) && d.media===media && remote?.ready && !remote.ad && Date.now()-session.seen<=4000) {
         session.seq = d.seq;
         if(session.requesting && Date.now()<=session.requesting.until)return;
@@ -76,19 +84,20 @@ export function createBridge(win, page, feature, callbacks = {}) {
     if (disposed) return;
     if (top) {
       let nextSite = detectSite(win.document,win.location.href,page);
-      if(nextSite)knownSource=true;
       const liveFrame=win.document.querySelector('.player-ratio iframe#embed-player');
       const currentHref=win.location.href;
       if(!nextSite && snapshot?.href===currentHref && snapshot.src===liveFrame?.src){nextSite={...snapshot.site,frame:liveFrame};}
-      // App-router fetches do not necessarily append to __next_f. Refresh a
-      // known source from same-origin HTML, parsed inertly, after route changes.
-      if(!nextSite && knownSource && liveFrame && typeof win.fetch==='function' && currentHref!==pending && Date.now()>retryAfter && win.location.pathname.startsWith('/xem-phim/')){
-        pending=currentHref;retryAfter=Date.now()+5000;
+      // App-router fetches do not necessarily append to __next_f. Refresh from
+      // same-origin HTML, parsed inertly, after route changes (including landing->watch SPA).
+      const nextFetchKey=liveFrame?currentHref+'|'+liveFrame.src:'';
+      if(nextFetchKey!==fetchKey){fetchKey=nextFetchKey;fetchAttempts=0;retryAfter=0;}
+      if(!nextSite && liveFrame && typeof win.fetch==='function' && currentHref!==pending && fetchAttempts<3 && Date.now()>retryAfter && win.location.pathname.startsWith('/xem-phim/')){
+        pending=currentHref;fetchAttempts++;retryAfter=Date.now()+5000*fetchAttempts;
         win.fetch(currentHref,{credentials:'same-origin'}).then(r=>r.ok ? r.text() : '').then(html=>{
-          if(!html || html.length>2_000_000 || disposed || win.location.href!==currentHref)return;
+          if(!html || html.length>2_000_000 || disposed || win.location.href!==currentHref || !liveFrame.isConnected)return;
           const parsed=new win.DOMParser().parseFromString(html,'text/html');
           const found=detectSite(parsed,currentHref);
-          if(found && found.frame.src===liveFrame.src){snapshot={href:currentHref,src:liveFrame.src,site:found};tick();}
+          if(found && found.frame.src===liveFrame.src){snapshot={href:currentHref,src:liveFrame.src,site:found};commitWatchSite(win.document,found);tick();}
         }).catch(()=>{}).finally(()=>{pending='';});
       }
       const nextContext = readContext(nextSite,win.document);
@@ -105,7 +114,8 @@ export function createBridge(win, page, feature, callbacks = {}) {
       }
       if (!session) { session = {source:frame.contentWindow,origin:url.origin,src:frame.src,key:contextKey(context),token:token(win),generation,seq:-1,seen:0};sequence = 0; }
       frameFullscreen=!!win.document.fullscreenElement?.contains(frame);
-      send({type:'hello',context,fullscreen:frameFullscreen});
+      if(!frameFullscreen)frameLocked=false;
+      send({type:'hello',context,fullscreen:frameFullscreen,locked:frameLocked});
       if (session.seen && Date.now() - session.seen > 4000) {remote = null;controlsReady=false;media = '';emit();}
       diagnostic(win.document,feature,site.kind + '/' + (remote?.ready ? remote.kind : 'chờ player nội dung'));
     } else {
@@ -119,7 +129,14 @@ export function createBridge(win, page, feature, callbacks = {}) {
       diagnostic(win.document,feature,local ? local.kind + '/' + (local.state().ready ? 'ready' : 'chờ metadata/nội dung') : 'player chưa nhận diện');
     }
   };
+  const onFullscreenChange = () => {
+    if (!top || disposed) return;
+    frameFullscreen = !!boundFrame && !!doc.fullscreenElement?.contains(boundFrame);
+    if (!frameFullscreen) frameLocked = false;
+    if (session) send({type:'hello',context,fullscreen:frameFullscreen,locked:frameLocked});
+  };
   win.addEventListener('message',onMessage);
+  if (top) doc.addEventListener('fullscreenchange',onFullscreenChange);
   const offDOM = watchDOM(win,tick), timer = win.setInterval(tick,1000);
   tick();
   const bridge = {
@@ -129,6 +146,13 @@ export function createBridge(win, page, feature, callbacks = {}) {
       if (!top) return local?.command(action,value) || false;
       if (!remote?.ready || remote.ad || !media || !session || Date.now() - session.seen > 4000) return false;
       send({type:'command',action,value,media});return true;
+    },
+    setLocked(value) {
+      if (top || !session || !media) return false;
+      frameLocked = frameFullscreen && !!value;
+      if (session) session.lockSynced = true;
+      send({type:'lock',locked:frameLocked,media});
+      return true;
     },
     request(action) {
       if(top || !['next','fullscreen'].includes(action) || !local?.state().ready || !session || !context)return false;
@@ -143,7 +167,7 @@ export function createBridge(win, page, feature, callbacks = {}) {
       });
     },
     refresh:tick,
-    dispose() { disposed = true;clearRequests();win.clearInterval(timer);offDOM();win.removeEventListener('message',onMessage);boundFrame?.removeEventListener('load',loaded);callbacks.unbind?.(local);local?.dispose(); },
+    dispose() { disposed = true;clearRequests();win.clearInterval(timer);offDOM();win.removeEventListener('message',onMessage);if(top)doc.removeEventListener('fullscreenchange',onFullscreenChange);boundFrame?.removeEventListener('load',loaded);callbacks.unbind?.(local);local?.dispose(); },
   };
   return bridge;
 }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.19
+// @version      6.0.20
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -22,10 +22,20 @@
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
 // @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed14.streamc.xyz/embed.php*
 // @match        https://embed15.streamc.xyz/embed.php*
 // @match        https://embed18.streamc.xyz/embed.php*
+// @match        https://v2.streamvsmov.com/video/*
+// @match        https://v3.streamvsmov.com/video/*
+// @match        https://v4.streamvsmov.com/video/*
+// @match        https://v6.streamvsmov.com/video/*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
+// @match        https://v10.streamvsmov.com/video/*
+// @match        https://v11.streamvsmov.com/video/*
+// @match        https://v12.streamvsmov.com/video/*
+// @match        https://v14.streamvsmov.com/video/*
+// @match        https://v15.streamvsmov.com/video/*
 // @match        https://api.clubc.live/embed/*
 // @run-at       document-start
 // @inject-into  page
@@ -121,7 +131,8 @@
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
       const expectedParent = parentOrigin();
       const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
-      if (data.type === "probe" && !active && fromParent) {
+      const frameReady = isFrameURL(win.location.href);
+      if (data.type === "probe" && !active && fromParent && frameReady) {
         ask();
         return;
       }
@@ -139,7 +150,7 @@
         frame.contentWindow.postMessage({ tag, type: "owner", family, feature, challenge: data.challenge }, origin);
         return;
       }
-      if (data.type === "owner" && !active && data.challenge === challenge && fromParent) activate();
+      if (data.type === "owner" && !active && data.challenge === challenge && fromParent && frameReady) activate();
     };
     win.addEventListener("message", receive);
     if (isSiteURL(win.location.href)) activate();
@@ -564,7 +575,7 @@ var SharedPlayer = (() => {
   // shared/player/gestures.js
   function installGestures(win, player, notify = () => {
   }, options = {}) {
-    const { video } = player, root = options.surface || player.root;
+    const { video } = player, root = options.surface || player.root, doc = win.document;
     const interactive = (target) => options.surface?.contains(target) ? false : options.isInteractive?.(target) || !!target?.closest?.('[data-rp-ui],a,button,input,select,textarea,[contenteditable="true"],[role="slider"],[role="button"],.jw-controlbar,.jw-settings-menu,.jw-rightclick,.art-controls,.art-settings,.art-contextmenus');
     let press = null, lastTap = null, holdTimer = 0, tapTimer = 0, suppressUntil = 0;
     const source = () => player.fingerprint?.() || video.currentSrc || video.src;
@@ -583,7 +594,8 @@ var SharedPlayer = (() => {
         if (root.hasPointerCapture?.(previous.id)) root.releasePointerCapture(previous.id);
       } catch {
       }
-      if (previous?.held && video.playbackRate === 2) {
+      const shouldRestoreRate = previous?.held && (video.nodeType === 1 ? video.playbackRate === 2 : video.playbackRate === 2 || video.playbackRate === previous.rate);
+      if (shouldRestoreRate) {
         let restored = false;
         try {
           if (previous.source === source()) restored = player.command("rate", previous.rate);
@@ -619,17 +631,18 @@ var SharedPlayer = (() => {
         cancel();
         return;
       }
-      if (interactive(e.target) || e.button !== 0 || !player.state().ready) return;
+      const st = player.state(), isLocked = !!options.isLocked?.();
+      if (interactive(e.target) || e.button !== 0 || !st.ready && !(isLocked && st.initializable)) return;
       const side = point(e);
       if (side === null) return;
       consume(e);
       restore();
-      press = { id: e.pointerId, x: e.clientX, y: e.clientY, side, at: Date.now(), source: source(), rate: player.state().rate, held: false, moved: false, locked: !!options.isLocked?.() };
+      press = { id: e.pointerId, x: e.clientX, y: e.clientY, side, at: Date.now(), source: source(), rate: st.rate, held: false, moved: false, locked: isLocked };
       try {
         root.setPointerCapture?.(e.pointerId);
       } catch {
       }
-      if (press.locked && !options.allowLockedMediaGestures || player.state().paused) return;
+      if (!st.ready || press.locked && !options.allowLockedMediaGestures || st.paused) return;
       holdTimer = win.setTimeout(() => {
         if (!press || !player.state().ready || player.state().paused || options.isLocked?.() && !options.allowLockedMediaGestures || source() !== press.source) return cancel();
         if (player.command("rate", 2)) {
@@ -672,7 +685,12 @@ var SharedPlayer = (() => {
         tapTimer = 0;
         return;
       }
-      if (now - p.at > 350 || source() !== p.source || !player.state().ready) return;
+      if (now - p.at > 350 || source() !== p.source) return;
+      const st = player.state();
+      if (!st.ready) {
+        if (locked && st.initializable) options.onLockedTap?.();
+        return;
+      }
       const onTap = locked ? options.onLockedTap : options.onTap;
       if (!p.side) {
         win.clearTimeout(tapTimer);
@@ -718,7 +736,7 @@ var SharedPlayer = (() => {
       if (!interactive(e.target)) consume(e);
     };
     const visibility = () => {
-      if (win.document.hidden) cancel();
+      if (doc.hidden) cancel();
     };
     for (const [name, fn] of [["pointerdown", down], ["pointermove", move], ["pointerup", up], ["pointercancel", pointerCancel], ["lostpointercapture", lostCapture], ["click", click], ["dblclick", click], ["contextmenu", menu]]) root.addEventListener(name, fn, true);
     if (options.exclusive) for (const name of ["touchstart", "touchmove", "touchend", "touchcancel"]) root.addEventListener(name, touch, { passive: false });
@@ -726,7 +744,7 @@ var SharedPlayer = (() => {
     win.addEventListener("pointerup", up, true);
     win.addEventListener("pointermove", move, true);
     win.addEventListener("pointercancel", pointerCancel, true);
-    win.document.addEventListener("visibilitychange", visibility);
+    doc.addEventListener("visibilitychange", visibility);
     video.addEventListener("emptied", cancel);
     video.addEventListener("loadstart", cancel);
     return () => {
@@ -737,7 +755,7 @@ var SharedPlayer = (() => {
       win.removeEventListener("pointerup", up, true);
       win.removeEventListener("pointermove", move, true);
       win.removeEventListener("pointercancel", pointerCancel, true);
-      win.document.removeEventListener("visibilitychange", visibility);
+      doc.removeEventListener("visibilitychange", visibility);
       video.removeEventListener("emptied", cancel);
       video.removeEventListener("loadstart", cancel);
     };
@@ -787,7 +805,8 @@ var SharedPlayer = (() => {
         if (value && (!saved && !value.muted && value.volume > 0 || saved && value.muted === saved.muted)) store.write(value);
       },
       intent(muted) {
-        if (!current() || !player.state().ready || player.state().ad) return;
+        const currentState = player.state();
+        if (!current() || !currentState.ready && !currentState.initializable || currentState.ad) return;
         attempted = true;
         learning = false;
         const value = sound(), volume = Number.isFinite(value.volume) ? value.volume : 1;
@@ -824,26 +843,45 @@ var SharedPlayer = (() => {
       registries.set(win, existing);
       return existing;
     }
-    const owners = /* @__PURE__ */ new WeakMap(), jwOwners = /* @__PURE__ */ new Set(), doc = win.document, ObjectAPI = win.Object, original = ObjectAPI.defineProperty, originalAssign = ObjectAPI.assign;
-    let observing = true, timer;
+    const owners = /* @__PURE__ */ new WeakMap(), jwOwners = /* @__PURE__ */ new Set(), ObjectAPI = win.Object, original = ObjectAPI.defineProperty, originalAssign = ObjectAPI.assign;
+    const exposeTo = (fn, target = win) => {
+      try {
+        return typeof exportFunction === "function" ? exportFunction(fn, target) : fn;
+      } catch {
+        return fn;
+      }
+    };
+    const hostWin = typeof window !== "undefined" && (window === win || window.wrappedJSObject === win) ? window : win;
+    const liveDoc = () => win.document;
+    const unwrap = (v) => v?.wrappedJSObject || v;
+    const sameDoc = (node) => {
+      const d = liveDoc();
+      return !!node && (node.ownerDocument === d || unwrap(node.ownerDocument) === unwrap(d));
+    };
+    let observing = true, timer, exposedObserve = null, exposedAssign = null;
     function releaseGlobal() {
       try {
-        if (ObjectAPI.defineProperty === observe) ObjectAPI.defineProperty = original;
+        const cur = ObjectAPI.defineProperty;
+        if (cur === exposedObserve || cur === observe || exposedObserve && unwrap(cur) === unwrap(exposedObserve)) ObjectAPI.defineProperty = original;
       } catch {
       }
       try {
-        if (ObjectAPI.assign === observeAssign) ObjectAPI.assign = originalAssign;
+        const cur = ObjectAPI.assign;
+        if (cur === exposedAssign || cur === observeAssign || exposedAssign && unwrap(cur) === unwrap(exposedAssign)) ObjectAPI.assign = originalAssign;
       } catch {
       }
     }
     function stop(event) {
-      releaseGlobal();
-      win.clearTimeout(timer);
       if (event?.persisted) return;
+      if (event?.type === "pagehide" && win.location?.href === "about:blank") return;
+      releaseGlobal();
+      hostWin.clearTimeout(timer);
       observing = false;
-      win.removeEventListener("pagehide", stop);
+      hostWin.removeEventListener("pagehide", stop);
+      registries.delete(win);
       try {
-        if (win[registryKey] === registry) delete win[registryKey];
+        const cur = win[registryKey];
+        if (cur === registry || unwrap(cur) === unwrap(registry)) delete win[registryKey];
       } catch {
       }
     }
@@ -851,14 +889,15 @@ var SharedPlayer = (() => {
       const result = Reflect.apply(original, this, arguments);
       if (observing && key === "url") {
         try {
-          if (typeof ObjectAPI.getOwnPropertyDescriptor(descriptor, "get")?.value !== "function" || typeof ObjectAPI.getOwnPropertyDescriptor(descriptor, "set")?.value !== "function") return result;
-          const template = ObjectAPI.getOwnPropertyDescriptor(target, "template")?.value;
-          if (!template || ObjectAPI.getOwnPropertyDescriptor(template, "art")?.value !== target) return result;
+          const rawTarget = unwrap(target), rawDesc = unwrap(descriptor);
+          if (typeof ObjectAPI.getOwnPropertyDescriptor(rawDesc, "get")?.value !== "function" || typeof ObjectAPI.getOwnPropertyDescriptor(rawDesc, "set")?.value !== "function") return result;
+          const template = unwrap(ObjectAPI.getOwnPropertyDescriptor(rawTarget, "template")?.value);
+          if (!template || unwrap(ObjectAPI.getOwnPropertyDescriptor(template, "art")?.value) !== rawTarget) return result;
           const video = ObjectAPI.getOwnPropertyDescriptor(template, "$video")?.value, root = ObjectAPI.getOwnPropertyDescriptor(template, "$player")?.value;
-          if (video?.ownerDocument === doc && video.matches("video.art-video") && root?.classList.contains("art-video-player") && root.contains(video) && typeof target.on === "function") {
-            owners.set(video, target);
+          if (sameDoc(video) && video.matches("video.art-video") && root?.classList.contains("art-video-player") && root.contains(video) && typeof rawTarget.on === "function") {
+            owners.set(unwrap(video), rawTarget);
             releaseGlobal();
-            win.clearTimeout(timer);
+            hostWin.clearTimeout(timer);
           }
         } catch {
         }
@@ -868,36 +907,47 @@ var SharedPlayer = (() => {
     function observeAssign(target, ...sources) {
       const result = Reflect.apply(originalAssign, this, [target, ...sources]);
       if (observing && target && jwOwners.size < 8) try {
-        for (const value of sources) {
+        const rawTarget = unwrap(target);
+        for (const source of sources) {
+          const value = unwrap(source);
           if (!value || ObjectAPI.getOwnPropertyDescriptor(value, "isSetup")?.value !== false) continue;
-          const model = ObjectAPI.getOwnPropertyDescriptor(value, "model")?.value, api = ObjectAPI.getOwnPropertyDescriptor(value, "api")?.value;
-          if (!model || !api || ObjectAPI.getOwnPropertyDescriptor(target, "model")?.value !== model || ObjectAPI.getOwnPropertyDescriptor(target, "api")?.value !== api) continue;
-          if (typeof model.getVideo !== "function" || typeof model.get !== "function" || typeof api.getContainer !== "function" || api.getContainer()?.ownerDocument !== doc || model.get("id") !== api.id) continue;
+          const model = unwrap(ObjectAPI.getOwnPropertyDescriptor(value, "model")?.value), api = unwrap(ObjectAPI.getOwnPropertyDescriptor(value, "api")?.value);
+          if (!model || !api || unwrap(ObjectAPI.getOwnPropertyDescriptor(rawTarget, "model")?.value) !== model || unwrap(ObjectAPI.getOwnPropertyDescriptor(rawTarget, "api")?.value) !== api) continue;
+          if (typeof model.getVideo !== "function" || typeof model.get !== "function" || typeof api.getContainer !== "function" || !sameDoc(api.getContainer()) || model.get("id") !== api.id) continue;
           jwOwners.add({ model, api });
           releaseGlobal();
-          win.clearTimeout(timer);
+          hostWin.clearTimeout(timer);
           break;
         }
       } catch {
       }
       return result;
     }
-    const registry = { version: 1, get(video) {
-      const owner = owners.get(video);
-      if (owner?.template?.$video === video && !owner.isDestroy) return owner.hls;
+    const registry = new ObjectAPI();
+    registry.version = 1;
+    registry.get = exposeTo(function(video) {
+      const rawVideo = unwrap(video);
+      const owner = owners.get(rawVideo) || owners.get(video);
+      if (owner && unwrap(owner.template?.$video) === rawVideo && !owner.isDestroy) return owner.hls;
       for (const { model, api } of jwOwners) {
         const provider = model.getVideo(), root = api.getContainer();
-        if (provider?.video === video && video.ownerDocument === doc && video.closest(".jwplayer") === root && root.contains(video)) return provider.hlsjs;
+        if (unwrap(provider?.video) === rawVideo && sameDoc(rawVideo) && unwrap(rawVideo.closest(".jwplayer")) === unwrap(root) && root?.contains(rawVideo)) return provider.hlsjs;
       }
       return null;
-    }, stop };
+    }, win);
+    registry.stop = exposeTo(stop, win);
     registries.set(win, registry);
     try {
-      Reflect.apply(original, ObjectAPI, [win, registryKey, { value: registry, configurable: true }]);
-      ObjectAPI.defineProperty = observe;
-      ObjectAPI.assign = observeAssign;
-      timer = win.setTimeout(releaseGlobal, 9e4);
-      win.addEventListener("pagehide", stop);
+      exposedObserve = exposeTo(observe, win);
+      exposedAssign = exposeTo(observeAssign, win);
+      const desc = new ObjectAPI();
+      desc.value = registry;
+      desc.configurable = true;
+      Reflect.apply(original, ObjectAPI, [win, registryKey, desc]);
+      ObjectAPI.defineProperty = exposedObserve;
+      ObjectAPI.assign = exposedAssign;
+      timer = hostWin.setTimeout(releaseGlobal, 9e4);
+      hostWin.addEventListener("pagehide", stop);
     } catch {
       releaseGlobal();
       observing = false;
@@ -906,11 +956,19 @@ var SharedPlayer = (() => {
   }
   function accessibleHls(candidate) {
     const { video, kind, api } = candidate, win = video.ownerDocument.defaultView;
+    const pageWin = win?.wrappedJSObject || null, rawVideo = video.wrappedJSObject || video;
     const provider = kind === "jw" ? api?.getProvider?.() : null;
-    const registry = registries.get(win) || win[registryKey];
-    const captured = registry?.version === 1 ? registry.get(video) : null;
-    for (const h of [captured, provider?.hlsjs, provider?.hls, win.hls, win.art?.hls])
-      if (h?.media === video && h.config && typeof h.on === "function" && typeof h.off === "function") return h;
+    const views = [win, pageWin].filter((v, i, a) => v && a.indexOf(v) === i);
+    const captured = [];
+    for (const view of views) {
+      const registry = registries.get(view) || view[registryKey];
+      if (registry?.version === 1) {
+        const item = registry.get(rawVideo) || registry.get(video);
+        if (item) captured.push(item);
+      }
+    }
+    for (const h of [...captured, provider?.hlsjs, provider?.hls, ...views.flatMap((view) => [view.hls, view.art?.hls])])
+      if (h && (h.media === video || h.media === rawVideo) && h.config && typeof h.on === "function" && typeof h.off === "function") return h;
     return null;
   }
 
@@ -975,6 +1033,7 @@ var SharedPlayer = (() => {
       } else if (["waiting", "stalled", "seeking"].includes(event.type)) {
         waiting = true;
         stableSince = null;
+        if (tuning && event.type !== "seeking") limited = true;
         restore();
         qualityBaseline = null;
         healthyFrames = false;
@@ -1046,18 +1105,27 @@ var SharedPlayer = (() => {
       lastPolicyCheck = -Infinity;
       policy = engine ? "observed" : "native";
       if (engine) {
-        const fragment = (_event, data) => {
-          const stats = data?.stats || data?.frag?.stats, s = stats?.loading;
+        const pageWin = win?.wrappedJSObject || win;
+        const exposeTo = (fn) => {
+          try {
+            return typeof exportFunction === "function" ? exportFunction(fn, pageWin) : fn;
+          } catch {
+            return fn;
+          }
+        };
+        const fragment = exposeTo((_event, raw) => {
+          const data = raw?.wrappedJSObject || raw, stats = data?.stats || data?.frag?.stats, s = stats?.loading;
           if (!active() || data?.frag?.type && data.frag.type !== "main" || !s || !nonnegative(stats.loaded) || !(s.end > s.start) || s.start < since) return;
           fragments.push({ bytes: stats.loaded, start: s.start, end: s.end, duration: data.part ? null : data.frag?.duration });
           if (fragments.length > 32) fragments.shift();
-        };
-        const error = (_event, data) => {
+        });
+        const error = exposeTo((_event, raw) => {
+          const data = raw?.wrappedJSObject || raw;
           if (data?.fatal || data?.details === "bufferFullError" || data?.error?.name === "QuotaExceededError") {
             limited = true;
             restore();
           }
-        };
+        });
         const bound = engine;
         bound.on("hlsFragLoaded", fragment);
         bound.on("hlsError", error);
@@ -1073,10 +1141,10 @@ var SharedPlayer = (() => {
     }
     function snapshot(state) {
       const now = clock(), time = state.time;
-      const current = kind === "jw" ? api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file : video.currentSrc || video.src;
+      const current = (kind === "jw" ? api?.getPlaylistItem?.()?.file || api?.getPlaylistItem?.()?.sources?.[0]?.file : video.currentSrc || video.src) || "";
       if (current !== source) {
         reset();
-        source = current || "";
+        source = current;
         waiting = false;
       }
       bindEngine();
@@ -1118,7 +1186,7 @@ var SharedPlayer = (() => {
         if (stableSince !== null && quality && Number.isFinite(quality.totalVideoFrames) && Number.isFinite(quality.droppedVideoFrames)) {
           if (!qualityBaseline) qualityBaseline = { total: quality.totalVideoFrames, dropped: quality.droppedVideoFrames, at: now };
           const total = quality.totalVideoFrames - qualityBaseline.total, dropped = quality.droppedVideoFrames - qualityBaseline.dropped;
-          if (total < 0 || dropped < 0 || total >= 100 && dropped / total > 0.01 || dropped >= 3 && total < 30 || tuning && delayed) {
+          if (total < 0 || dropped < 0 || total >= 100 && dropped / total > 0.01 || total < 100 && dropped >= 3 && (total < 30 || dropped / total > 0.02) || tuning && delayed) {
             if (tuning) limited = true;
             cooldownUntil = now + 15e3;
             stableSince = null;
@@ -1283,11 +1351,11 @@ var SharedPlayer = (() => {
       host.append(node);
       return node;
     }
-    let disposed = false, locked = false, chromeVisible = true, lockVisible = true, scrubbing = false, nativeOwned = false, lastReady = false, lastPaused = null, context = null, autoPlayAttempted = false;
+    let disposed = false, locked = false, chromeVisible = true, lockVisible = true, scrubbing = false, nativeOwned = false, lastReady = false, lastInteractive = false, lastPaused = null, context = null, autoPlayAttempted = false;
     const lockRecord = fullscreenLockRecord(doc);
     const fullscreenScope = () => inFullscreen() ? doc.fullscreenElement || root : null;
-    locked = !!fullscreenScope() && lockRecord.scope === fullscreenScope() && lockRecord.locked;
-    let hideTimer = 0, lockTimer = 0, tipTimer = 0, errorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
+    locked = !!fullscreenScope() && (typeof options.initialLocked === "boolean" ? options.initialLocked : lockRecord.scope === fullscreenScope() && lockRecord.locked);
+    let hideTimer = 0, lockTimer = 0, tipTimer = 0, errorTimer = 0, nextErrorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
     const audio = options.audioPreferences ? audioPreferenceSession(win, player, options.audioPreferences) : null;
     const savedAttributes = new Map(["controls", "playsinline", "webkit-playsinline"].map((name) => [name, element?.getAttribute(name) ?? null]));
     const originalPosition = root.style.position;
@@ -1457,7 +1525,7 @@ var SharedPlayer = (() => {
       lockRecord.locked = !!lockRecord.scope && locked;
       data(shell, "rpChrome", chromeVisible);
       data(shell, "rpLocked", locked);
-      prop(lock, "hidden", !lastReady || !inFullscreen() || locked && !lockVisible);
+      prop(lock, "hidden", !lastInteractive || !inFullscreen() || locked && !lockVisible && lastReady);
       if (nativeMode) {
         const changed2 = nativeRoot.dataset.rpNativeChrome !== String(chromeVisible);
         data(nativeRoot, "rpNativeChrome", chromeVisible);
@@ -1489,19 +1557,21 @@ var SharedPlayer = (() => {
       }, 2500);
       applyChrome();
     }
-    function setLocked(value) {
+    function setLocked(value, notify = true) {
       if (value && !inFullscreen()) return;
       cancelGestures();
+      const changed2 = locked !== value;
       locked = value;
-      settings.hidden = true;
+      prop(settings, "hidden", true);
       win.clearTimeout(lockTimer);
+      if (changed2 && notify) options.onLockChange?.(locked);
       if (value) revealLock();
       else show();
       update();
     }
     function cancelGestures() {
       (nativeMode ? root : surface).dispatchEvent(new win.Event("pointercancel"));
-      holdTip.hidden = true;
+      prop(holdTip, "hidden", true);
     }
     function actionClick(action, node) {
       if (action === "play" && !player.state().ready && player.state().initializable) {
@@ -1569,8 +1639,8 @@ var SharedPlayer = (() => {
       nextError = { node: nextPending.node, text: status === "missing" ? "Ch\u01B0a c\xF3 t\u1EADp c\xF9ng b\u1EA3n d\u1ECBch" : status === "timeout" ? "Ch\u01B0a nh\u1EADn \u0111\u01B0\u1EE3c ph\u1EA3n h\u1ED3i" : "Kh\xF4ng chuy\u1EC3n \u0111\u01B0\u1EE3c t\u1EADp" };
       nextPending = null;
       update();
-      win.clearTimeout(errorTimer);
-      errorTimer = win.setTimeout(() => {
+      win.clearTimeout(nextErrorTimer);
+      nextErrorTimer = win.setTimeout(() => {
         nextError = null;
         update();
       }, 5e3);
@@ -1728,7 +1798,8 @@ var SharedPlayer = (() => {
       if (disposed) return;
       const state = player.state(), becameReady = state.ready && !lastReady;
       lastReady = state.ready;
-      prop(shell, "hidden", !state.ready && !state.initializable);
+      lastInteractive = state.ready || state.initializable === true;
+      prop(shell, "hidden", !lastInteractive);
       const metrics = validLoadMetrics(state.load) ? state.load : null, loading = !!metrics && state.ready && !state.ad && ["loading", "buffering"].includes(metrics.status) && !state.paused && !state.ended;
       const loadText = loadMetricsText(metrics);
       text(loadReadout, loadText);
@@ -1743,17 +1814,16 @@ var SharedPlayer = (() => {
       if (locked && !inFullscreen()) {
         cancelGestures();
         locked = false;
-        settings.hidden = true;
+        options.onLockChange?.(false);
+        prop(settings, "hidden", true);
         win.clearTimeout(lockTimer);
         show();
       }
       if (!state.ready) {
         cancelGestures();
         scrubbing = false;
-        settings.hidden = true;
-        nextPending = null;
+        prop(settings, "hidden", true);
         nextError = null;
-        win.clearTimeout(nextTimer);
       }
       nativeOwned = true;
       if (!nativeMode) data(nativeRoot, "rpCustomControls", "1");
@@ -1764,11 +1834,9 @@ var SharedPlayer = (() => {
       }
       if (becameReady || lastPaused !== null && state.paused !== lastPaused) show();
       lastPaused = state.paused;
-      for (const node of [center, play, mute, fullscreen, settingsButton, seek, ...rates.children]) prop(node, "disabled", !state.ready || locked);
-      if (state.initializable && !locked) {
-        center.disabled = false;
-        play.disabled = false;
-      }
+      const playDisabled = !state.ready && !state.initializable || locked;
+      for (const node of [center, play]) prop(node, "disabled", playDisabled);
+      for (const node of [mute, fullscreen, settingsButton, seek, ...rates.children]) prop(node, "disabled", !state.ready || locked);
       for (const node of [center, play]) {
         icon(node, state.paused ? "play" : "pause");
         attr(node, "aria-label", state.paused ? "Ph\xE1t" : "T\u1EA1m d\u1EEBng");
@@ -1852,6 +1920,9 @@ var SharedPlayer = (() => {
       shell,
       surface,
       update,
+      syncLocked(value) {
+        setLocked(!!value, false);
+      },
       setContext(value) {
         const key = (c) => c ? [c.url, c.episodeID, c.lane, c.server].join("|") : "";
         const oldKey = key(context);
@@ -1880,7 +1951,7 @@ var SharedPlayer = (() => {
         offGestures();
         offPlayer?.();
         nativeObserver.disconnect();
-        for (const timer of [hideTimer, lockTimer, tipTimer, errorTimer, nextTimer, scrubTimer]) win.clearTimeout(timer);
+        for (const timer of [hideTimer, lockTimer, tipTimer, errorTimer, nextErrorTimer, nextTimer, scrubTimer]) win.clearTimeout(timer);
         for (const name of mediaEvents) video.removeEventListener(name, changed);
         for (const name of inputEvents) shell.removeEventListener(name, block);
         doc.removeEventListener("fullscreenchange", fsChanged);
@@ -2138,7 +2209,8 @@ var SharedPlayer = (() => {
       });
       if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
       c.api.pause(true);
-      const target = Math.max(0, Math.min(position, v.duration - 0.25));
+      const safePos = Number.isFinite(position) ? position : 0;
+      const target = Math.max(0, Math.min(safePos, v.duration - 0.25));
       c.api.seek(target);
       await new Promise((resolve, reject) => {
         let timer, deadline;
@@ -2164,7 +2236,8 @@ var SharedPlayer = (() => {
       });
       if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
       if (paused) c.api.pause(true);
-      else await Promise.resolve(c.api.play(true));
+      else await Promise.resolve(c.api.play(true)).catch(() => {
+      });
       if (signal?.aborted || !current(c) || epoch !== generation) throw abort();
       if (typeof c.api.setVolume === "function" && Number.isFinite(volume) && volume >= 0 && volume <= 1) c.api.setVolume(volume * 100);
       c.api.setMute(muted);
@@ -2174,9 +2247,11 @@ var SharedPlayer = (() => {
       return busy;
     }, async replace(value, options = {}) {
       if (busy || disposed) throw new Error("\u0110ang chuy\u1EC3n ngu\u1ED3n");
+      if (options.signal?.aborted) throw abort();
       const c = candidate(), playlist = mediaPlaylist(value), previous = snapshot();
       if (!playlist || !previous || !c || c.kind !== "jw" || !mediaPresentationRoot(win, c.video, c.root)) throw new Error("Ngu\u1ED3n kh\xF4ng h\u1ED7 tr\u1EE3 \u0111\u1ED5i trong phi\xEAn");
-      const before = { position: c.api.getPosition(), paused: c.video.paused, muted: c.api.getMute(), volume: c.api.getVolume?.() / 100 }, epoch = ++generation;
+      const rawPos = c.api.getPosition();
+      const before = { position: Number.isFinite(rawPos) ? rawPos : 0, paused: c.video.paused, muted: c.api.getMute(), volume: c.api.getVolume?.() / 100 }, epoch = ++generation;
       busy = true;
       onPending(true);
       try {
@@ -2334,7 +2409,8 @@ var SharedPlayer = (() => {
     if (jwRoot) {
       try {
         const api = typeof page.jwplayer === "function" && page.jwplayer(jwRoot.id);
-        if (api?.getContainer?.() === jwRoot && typeof api.seek === "function" && typeof api.getPosition === "function") return { kind: "jw", video, root: jwRoot, api };
+        const container = api?.getContainer?.();
+        if ((container?.wrappedJSObject || container) === (jwRoot.wrappedJSObject || jwRoot) && typeof api.seek === "function" && typeof api.getPosition === "function") return { kind: "jw", video, root: jwRoot, api };
       } catch {
       }
       return null;
@@ -2390,6 +2466,16 @@ var SharedPlayer = (() => {
         return { muted: !!video.muted, volume: finite(video.volume) ? video.volume : 1 };
       }
     };
+    const pageWin = video.ownerDocument.defaultView?.wrappedJSObject || video.ownerDocument.defaultView;
+    const exposeTo = (fn) => {
+      try {
+        return typeof exportFunction === "function" ? exportFunction(fn, pageWin) : fn;
+      } catch {
+        return fn;
+      }
+    };
+    const noop = exposeTo(() => {
+    });
     const setMute = (value) => kind === "jw" && typeof api.setMute === "function" ? api.setMute(value) : video.muted = value;
     const setVolume = (value) => kind === "jw" && typeof api.setVolume === "function" ? api.setVolume(value * 100) : video.volume = value;
     function restoreAudio(value) {
@@ -2403,19 +2489,17 @@ var SharedPlayer = (() => {
         }
       }
       const previous = audio(), generation = ++audioGeneration;
-      const rollback = () => {
+      const rollback = exposeTo(() => {
         if (generation !== audioGeneration || playerFingerprint(candidate) !== initialSource || !video.isConnected || !canRestoreAudio() || !state().ready) return;
         try {
-          setVolume(previous.volume)?.catch?.(() => {
-          });
+          setVolume(previous.volume)?.catch?.(noop);
         } catch {
         }
         try {
-          setMute(previous.muted)?.catch?.(() => {
-          });
+          setMute(previous.muted)?.catch?.(noop);
         } catch {
         }
-      };
+      });
       try {
         setVolume(wanted.volume)?.catch?.(rollback);
         setMute(wanted.muted)?.catch?.(rollback);
@@ -2428,10 +2512,10 @@ var SharedPlayer = (() => {
     let adActive = false;
     const handlers = [], subscribers = /* @__PURE__ */ new Set();
     if (kind === "jw") for (const [event, value] of [["adRequest", true], ["adPlay", true], ["adComplete", false], ["adSkipped", false], ["adError", false]]) {
-      const handler = () => {
+      const handler = exposeTo(() => {
         adActive = value;
         for (const notify of subscribers) notify();
-      };
+      });
       api.on?.(event, handler);
       handlers.push([event, handler]);
     }
@@ -2457,8 +2541,7 @@ var SharedPlayer = (() => {
         api.setMute(false);
         const volume = api.getVolume?.();
         if (!finite(volume) || volume <= 0) api.setVolume?.(100);
-        api.play(true)?.catch?.(() => {
-        });
+        api.play(true)?.catch?.(noop);
         return true;
       }
       if (!s.ready || s.ad) return false;
@@ -2492,8 +2575,7 @@ var SharedPlayer = (() => {
         }
         // Fall through so sound and playback are changed in the same handler.
         case "play":
-          if (kind === "jw" && typeof api.play === "function") api.play(true)?.catch?.(() => {
-          });
+          if (kind === "jw" && typeof api.play === "function") api.play(true)?.catch?.(noop);
           else video.play()?.catch(() => {
           });
           break;
@@ -2543,8 +2625,11 @@ function createMotchillSites() {
   // Tập 35 sv-1 do người dùng cung cấp (2026-11-14) khai báo embed11.
   // motchillv.online sv-2 (2026-11-21): player.cloudbeta.win/embed/... (JW 8.38.8).
   // motchillfv.help (2026-11-21): embed10/15/18.streamc.xyz/embed.php (Stream Panel R25 JW 8.51.3).
+  // motchillkd.online / motchillkd.net / motchillv.online / motchillfv.help (2026-11-22):
+  // live HTTP 200 verified shards: embed14.streamc.xyz (Stream Panel R25 JW)
+  // and v2/v3/v4/v6/v10/v11/v12/v14/v15.streamvsmov.com/video/* (JW + origin.js).
   // Quyền origin riêng; không coi hostname là bằng chứng về engine bên trong.
-  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'player.cloudbeta.win', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'embed10.streamc.xyz', 'embed15.streamc.xyz', 'embed18.streamc.xyz', 'v8.streamvsmov.com', 'v9.streamvsmov.com']);
+  const embedHosts = new Set(['api.clubc.live', 'fcloud.live', 'player.phimapi.com', 'maztoycdn.xyz', 'player.cbplay.cc', 'player.cloudbeta.win', 'cdn.loadvid.com', 'embed13.streamc.xyz', 'embed1.streamc.xyz', 'embed12.streamc.xyz', 'embed2.streamc.xyz', 'embed11.streamc.xyz', 'embed10.streamc.xyz', 'embed14.streamc.xyz', 'embed15.streamc.xyz', 'embed18.streamc.xyz', 'v2.streamvsmov.com', 'v3.streamvsmov.com', 'v4.streamvsmov.com', 'v6.streamvsmov.com', 'v8.streamvsmov.com', 'v9.streamvsmov.com', 'v10.streamvsmov.com', 'v11.streamvsmov.com', 'v12.streamvsmov.com', 'v14.streamvsmov.com', 'v15.streamvsmov.com']);
   const ROLE_ATTR = 'data-mc-role';
   const ROLES = Object.freeze({ CURRENT: 'current', PREPARED: 'prepared' });
   // Giới hạn website/iframe được trao đổi dữ liệu; không dùng để chọn family.
@@ -2566,8 +2651,9 @@ function createMotchillSites() {
   };
   const extractSeason = (...values) => {
     const joined = normalize(values.filter(Boolean).join(' '));
-    return joined.match(/(?:phan|season|part)-(\d+)/)?.[1] || '';
+    return joined.match(/(?:^|-)(?:phan|season|part)-(\d{1,3})(?:-|$)/)?.[1] || '';
   };
+  const safeDecode = (value) => { try { return decodeURIComponent(value); } catch (_) { return value; } };
   function isPrepared(el) {
     if (!el) return false;
     if (el.state?.prepared || el.state?.role === ROLES.PREPARED) return true;
@@ -2596,8 +2682,10 @@ function createMotchillSites() {
       'maztoycdn.xyz': /^\/watch\//, 'player.cbplay.cc': /^\/embed\//, 'player.cloudbeta.win': /^\/embed\//,
       'cdn.loadvid.com': /^\/videos\/play\//, 'embed13.streamc.xyz': /^\/.+/,
       'embed1.streamc.xyz': /^\/embed\.php$/, 'embed12.streamc.xyz': /^\/embed\.php$/, 'embed2.streamc.xyz': /^\/embed\.php$/,
-      'embed11.streamc.xyz': /^\/embed\.php$/, 'embed10.streamc.xyz': /^\/embed\.php$/, 'embed15.streamc.xyz': /^\/embed\.php$/, 'embed18.streamc.xyz': /^\/embed\.php$/,
-      'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//,
+      'embed11.streamc.xyz': /^\/embed\.php$/, 'embed10.streamc.xyz': /^\/embed\.php$/, 'embed14.streamc.xyz': /^\/embed\.php$/, 'embed15.streamc.xyz': /^\/embed\.php$/, 'embed18.streamc.xyz': /^\/embed\.php$/,
+      'v2.streamvsmov.com': /^\/video\//, 'v3.streamvsmov.com': /^\/video\//, 'v4.streamvsmov.com': /^\/video\//, 'v6.streamvsmov.com': /^\/video\//,
+      'v8.streamvsmov.com': /^\/video\//, 'v9.streamvsmov.com': /^\/video\//, 'v10.streamvsmov.com': /^\/video\//, 'v11.streamvsmov.com': /^\/video\//,
+      'v12.streamvsmov.com': /^\/video\//, 'v14.streamvsmov.com': /^\/video\//, 'v15.streamvsmov.com': /^\/video\//,
       'api.clubc.live': /^\/embed\/[1-9]\d*\/?$/,
     };
     return !!paths[parsed.hostname]?.test(parsed.pathname);
@@ -2920,7 +3008,7 @@ function createMotchillSites() {
     const target = url(pageUrl);
     const match = target?.pathname.match(/^\/(?:phim|xem-phim)\/([^/]+)\/?$/);
     if (!match) return null;
-    const slug = decodeURIComponent(match[1]);
+    const slug = safeDecode(match[1]);
     const data = nextData(doc, pageUrl).filter((entry) => entry.slug === slug);
     const identity = data.find((entry) => entry.name && entry.initialDigits != null) || {};
     const episodes = data.find((entry) => Array.isArray(entry.episodes)) || {};
@@ -3134,7 +3222,7 @@ function createMotchillSites() {
         match = path.match(/^\/xem-phim\/([^/]+)\/?$/);
         const number = target.searchParams.has('tap') ? target.searchParams.get('tap') : '1';
         if (!match || !/^\d{1,5}$/.test(number) || Number(number) < 1 || /\.trailer$/i.test(match[1])) return null;
-        return { slug: decodeURIComponent(match[1]), episode: 'tap-' + Number(number), path: path + target.search };
+        return { slug: safeDecode(match[1]), episode: 'tap-' + Number(number), path: path + target.search };
       }
       case families.CLASSIC:
         match = path.match(/^\/xem-phim\/([^/]+)\/([^/]+)\/?$/); break;
@@ -3225,7 +3313,7 @@ function createMotchillSites() {
   }
   function episodeKey(value) {
     const normalized = normalize(value);
-    if (/^(?:[a-z]-)?(?:full|full-hd|hoan-tat|movie)(?:-(?:sv|src)-.*)?$/.test(normalized)) return 'full';
+    if (/^(?:(?:[a-z]+-)?(?:tap|episode|ep)-|[a-z]-)?(?:full|full-hd|hoan-tat|movie)(?:-(?:sv|src)-.*)?$/.test(normalized)) return 'full';
     const match = normalized.match(/^(?:(?:[a-z]+-)?(?:tap|episode|ep)-|[a-z]-)?0*(\d+)(?:-(?:sv|src)-.*)?$/);
     return match ? 'ep:' + Number(match[1]) : 'special:' + normalized;
   }
@@ -3283,8 +3371,8 @@ function createMotchillSites() {
     const chibiflixYear = family === families.CHIBIFLIX ? [...doc.querySelectorAll('.detail-more .hl-tags .tag-classic span,.hl-tags .tag-classic span')].map(text)
       .find((value) => /^(?:19|20)\d{2}$/.test(value)) : '';
     const yearText = data.publish_year || data.year || text(doc.querySelector('.origyear,.movie-year,.movie-identity__year,.apx-hero-fact--year,.publish-year,.sheader .date')) || nextProductionYear || chibiflixYear;
-    const year = String(yearText || '').match(/\b(?:19|20)\d{2}\b/)?.[0] || extractTitleYear(rawTitle, rawOriginal);
-    const season = extractSeason(cleanedTitle, rawOriginal, slug);
+    const year = String(yearText || '').match(/\b(?:19|20)\d{2}\b/)?.[0] || extractTitleYear(rawTitle, rawOriginal, doc.title);
+    const season = extractSeason(cleanedTitle, originalTitle, slug);
     const externalIds = {};
     const refs = [movie.sameAs, movie.identifier,
       data.tmdb?.id && `https://www.themoviedb.org/${data.tmdb.type || 'tv'}/${data.tmdb.id}`,
@@ -3316,17 +3404,18 @@ function createMotchillSites() {
     return candidates.map(translationKey).find(Boolean) || '';
   }
   function translationServers(doc, family, pageUrl) {
-    if (family === families.CHIBIFLIX) return chibiflixServers(doc, pageUrl || url(doc.URL)?.href || location.href);
+    const resolvedUrl = pageUrl || url(doc.URL)?.href || url(doc.location?.href)?.href || location.href;
+    if (family === families.CHIBIFLIX) return chibiflixServers(doc, resolvedUrl);
     if(family===families.NEXT){
-      const state=nextProviderState(doc,doc.URL);
-      if(state)return nextProviderButtons(doc,doc.URL).map(node=>{
+      const state=nextProviderState(doc,resolvedUrl);
+      if(state)return nextProviderButtons(doc,resolvedUrl).map(node=>{
         const label=node.dataset.mcNativeLabel || text(node),matches=state.data.movie.episodes.filter(ep=>ep && ep.slug===state.episode.slug && ep.server===label && ep.type==='m3u8');
         return {node,label,language:translationKey(label),selected:label===state.episode.server,
           source:matches.length===1?new URL('/embed/'+matches[0].id,state.source).href:''};
-      });
+      }).filter((entry) => entry.language);
     }
     if (family === families.NEXT_REVIVE) {
-      const page = url(doc.URL, location.href);
+      const page = url(resolvedUrl, location.href);
       const data = reviveData(doc, page?.href || location.href);
       const number = Number(page?.searchParams.get('tap') || data?.initialDigits || 1);
       return reviveServerNodes(doc).map((node) => {
@@ -3356,12 +3445,11 @@ function createMotchillSites() {
         || ['btn-success', 'btn-active', 'active', 'is-active', 'on'].some((name) => node.classList.contains(name));
       let source = '';
       if (family === families.NEXT) {
-        const pageUrl = url(doc.location?.href)?.href || location.href;
-        const parsed = route(pageUrl, family);
-        const data = parsed && nextData(doc, pageUrl).find((entry) => entry.movie?.slug === parsed.slug);
+        const parsed = route(resolvedUrl, family);
+        const data = parsed && nextData(doc, resolvedUrl).find((entry) => entry.movie?.slug === parsed.slug);
         const matches = [...(data?.episodeVariants || []), ...(data?.movie?.episodes || [])].filter((ep) => ep && episodeKey(ep.slug) === episodeKey(parsed?.episode)
           && normalize(ep.server) === normalize(label.replace(/^server\s+/i, '')));
-        const candidates = [...new Set(matches.filter((ep) => (ep.type || 'm3u8') === 'm3u8').map((ep) => url(ep.link, pageUrl)?.href).filter(Boolean))];
+        const candidates = [...new Set(matches.filter((ep) => (ep.type || 'm3u8') === 'm3u8').map((ep) => url(ep.link, resolvedUrl)?.href).filter(Boolean))];
         if (candidates.length === 1) source = candidates[0];
       }
       return { language, label, selected, node, source };
@@ -3438,10 +3526,14 @@ function createMotchillSites() {
       seen.add(key);
       episodes.push(entry);
     };
+    const isSamePageHash = (raw, target) => raw.trim().startsWith('#')
+      || (!!target.hash && target.origin === page.origin && target.pathname === page.pathname && target.search === page.search);
     const scanLinks = (sel) => [...doc.querySelectorAll(sel || ':not(*)')].filter((a) => {
       if (a.closest('.mh-continue')) return false;
-      const target = url(a.getAttribute('href'), page.href);
-      const other = target && target.origin === page.origin && route(target.href, resolvedFamily, page.href);
+      const raw = a.getAttribute('href') || '';
+      const target = url(raw, page.href);
+      if (!target || isSamePageHash(raw, target)) return false;
+      const other = target.origin === page.origin && route(target.href, resolvedFamily, page.href);
       return other && other.slug === parsed.slug;
     });
     // Read all language tabs of this film, not just the currently active server.
@@ -3451,6 +3543,7 @@ function createMotchillSites() {
     if (!domLinks.length) domLinks = scanLinks('a[href]');
     for (const a of domLinks) {
       const target = url(a.getAttribute('href'), page.href);
+      target.hash = '';
       const other = route(target.href, resolvedFamily, page.href);
       const epText = text(a.querySelector?.('.ep-sort,.media-title')) || text(a) || other.episode;
       pushEp({ url: target.href, path: other.path, episode: epText, episodeKey: episodeKey(other.episode),
@@ -3464,7 +3557,7 @@ function createMotchillSites() {
           episodeKey: episodeKey(ep.slug), language: linkLanguage(null, doc, ep, meta.data, ep.name || ep.slug) });
       }
     }
-    if (watch && resolvedFamily !== families.CHIBIFLIX) for (const entry of translationServers(doc, resolvedFamily)) {
+    if (watch && resolvedFamily !== families.CHIBIFLIX) for (const entry of translationServers(doc, resolvedFamily, page.href)) {
       // Server options are bound to this loaded episode. Their labels are
       // evidence for a translation, unlike a generic film-level description.
       pushEp({ url: page.href, path: watch.path, episode: watch.episode,
@@ -3485,8 +3578,12 @@ function createMotchillSites() {
     const items = new Map();
     for (const a of doc.querySelectorAll('a[href]')) {
       if (a.closest('.mh-continue')) continue;
-      const target = url(a.getAttribute('href'), page.href);
+      const rawHref = a.getAttribute('href') || '';
+      if (rawHref.trim().startsWith('#')) continue;
+      const target = url(rawHref, page.href);
       if (!target || target.origin !== page.origin) continue;
+      if (target.hash && target.pathname === page.pathname && target.search === page.search) continue;
+      target.hash = '';
       const watch = route(target.href, resolvedFamily, page.href);
       const detail = !watch && detailRoute(target.href, resolvedFamily, page.href);
       const parsed = watch || detail;
@@ -3633,12 +3730,16 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   const providerIdentity=value=>value && typeof value.id==='string' && /^[1-9]\d*$/.test(value.id) && typeof value.movieId==='string' && /^[1-9]\d*$/.test(value.movieId) && Number.isSafeInteger(value.season) && value.season>=1 && value.season<=1000 && typeof value.server==='string' && value.server.length<200 && sites.translationKey(value.server) ? {id:value.id,movieId:value.movieId,season:value.season,server:value.server}:null;
   function readParentContext(value,origin){
     const target=sites.url(value?.url),route=target && sites.route(target.href,value?.family);
+    const originHost=sites.url(origin)?.hostname || '';
+    const originMatches=!!target && (target.origin===origin || sites.embedHosts.has(originHost));
+    const routeEp=route && sites.episodeKey(route.episode);
+    const validEpisode=routeEp===value?.episodeKey || (value?.family===sites.families.NEXT_REVIVE && routeEp==='ep:1' && value?.episodeKey==='full');
     const validLanguage=value?.language==='' || !!sites.translationKey(value?.language);
-    if(!target || target.origin!==origin || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || sites.episodeKey(route.episode)!==value.episodeKey || !validLanguage)return null;
+    if(!target || !originMatches || !sites.isMotchill(target.hostname) || !route || route.slug!==value.slug || !validEpisode || !validLanguage)return null;
     const result=Object.fromEntries(['url','family','slug','film','episode','episodeKey','language','server'].map(key=>[key,String(value[key] || '').slice(0,2048)]));
     if(Number.isFinite(value.introSeconds) && value.introSeconds>=0 && value.introSeconds<=300)result.introSeconds=value.introSeconds;
     const next=sites.url(value.next?.url),nextRoute=next && sites.route(next.href,result.family);
-    if(next?.origin===origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
+    if(next?.origin===target.origin && nextRoute?.slug===route.slug && Number(sites.episodeKey(nextRoute.episode).replace('ep:',''))===Number(result.episodeKey.replace('ep:',''))+1)result.next={url:next.href};
     return result;
   }
   const remotes = new Map();
@@ -3670,7 +3771,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
   function hello(frame, session) {
     const currentRole = documentRole();
     const ownContext = sites.adapter().read();
-    const context = ownContext ? { ...ownContext, introSeconds: options.introSeconds?.() } : parentContext;
+    const introSeconds = window.top === window ? options.introSeconds?.() : (parentContext?.introSeconds ?? options.introSeconds?.());
+    const context = ownContext ? { ...ownContext, introSeconds } : parentContext;
     frame.contentWindow?.postMessage({ tag: channel, type: 'hello', token: session.token,
       managed: ['episode','provider'].includes(frame.dataset.mcManaged) || managed,
       role: session.assignedRole || frame.dataset.mcRole || currentRole,
@@ -3860,7 +3962,7 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
         if (data.action === 'play') video.play()?.catch(() => {});
         if (data.action === 'pause') video.pause();
         if (data.action === 'reveal-controls') document.dispatchEvent(new CustomEvent('mc-reveal-controls'));
-        if (data.action === 'mute' && typeof data.value === 'boolean') video.muted = data.value;
+        if (data.action === 'mute' && typeof data.value === 'boolean') { if (!options.setMute?.(video, data.value)) video.muted = data.value; }
         if (data.action === 'rate' && Number.isFinite(data.value) && data.value >= .25 && data.value <= 4) video.playbackRate = data.value;
         if (data.action === 'start-zero') {
           const operation = ++startGeneration;
@@ -3909,7 +4011,8 @@ function createMotchillVideoBridge(sites, channel, options = {}) {
       const currentSession=session;session.nextPending=true;
       Promise.resolve(upstream?requestNext():options.onNext?.()).then(ok=>{
         if(validRemote(frame)!==receiver || sessions.get(frame)!==currentSession || receiver.state.mediaId!==data.mediaId && ok!==true && ok!=='navigating')return;
-        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:ok===true || ok==='navigating'?'navigating':'missing'},session.origin);
+        const status=ok===true || ok==='navigating'?'navigating':ok==='error' || ok==='timeout'?'error':'missing';
+        frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status},session.origin);
       }).catch(()=>{
         if(validRemote(frame)===receiver && sessions.get(frame)===currentSession)frame.contentWindow.postMessage({tag:channel,type:'next-result',token:session.token,id:data.id,mediaId:data.mediaId,status:'error'},session.origin);
       }).finally(()=>{currentSession.nextPending=false;});return;
@@ -4242,11 +4345,11 @@ function createMotchillEpisodeMachine(hooks, options = {}) {
     // not lose most of its content to the fixed ninety-second credits skip.
     // Actual ended remains a separate fallback below.
     const valid = Number.isFinite(duration) && duration >= 600 && Number.isFinite(time) && time > 0 && remaining >= 0;
-    if (valid && remaining <= 240 && !warmAttempted) warmup();
+    if (valid && remaining <= 240 && !warmAttempted && state.phase !== 'error') warmup();
     // Ended là dự phòng, kể cả nguồn không báo duration hợp lệ. Tách guard để
     // một lần thất bại ở mốc 90s còn có thể thử lại khi thực sự ended.
     if (media.ended && !attemptedEnd) { attemptedEnd = true; go('ended'); }
-    else if (valid && !media.paused && remaining <= 90 && time >= 30 && !attemptedAuto) {
+    else if (valid && !media.paused && remaining <= 90 && time >= 30 && !attemptedAuto && state.phase !== 'error') {
       attemptedAuto = true;
       go('auto');
     }
@@ -4524,7 +4627,8 @@ function startMotchillPlayerController(sites) {
     customState: video=>customUI?.localState(video),selectTrack:(video,group,id)=>customUI?.commandTrack(video,group,id),
     onIntro:()=>{if(media?.isConnected)learning.skipIntro(media,contextKey());},
     onHello:()=>{if(window.top!==window)childMode();},
-    onNext:()=>nativeNavigation?.active?nativeNavigation.goNext():goNext('manual'),playAudible:video=>customUI?.playAudible(video),initializePlayAudible:video=>customUI?.initializePlayAudible(video),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
+    onNext:()=>{const hasNext=!!activePage()?.next;return Promise.resolve(nativeNavigation?.active?nativeNavigation.goNext():goNext('manual')).then(ok=>ok?'navigating':hasNext?'error':'missing');},
+    playAudible:video=>customUI?.playAudible(video),initializePlayAudible:video=>customUI?.initializePlayAudible(video),setMute:(video,value)=>customUI?.setMute?.(video,value),restoreAudio:(video,value)=>customUI?.restoreAudio(video,value),replaceMedia:(video,value,signal)=>customUI?.replaceMedia(video,value,signal) });
   const players = createMotchillPlayerAdapters(sites);
   const supported = () => {
     switch (sites.detect()) {
@@ -4579,7 +4683,7 @@ function startMotchillPlayerController(sites) {
   learning = createMotchillPlayerLearning(sites, getPage, { isCurrent: () => bridge.role !== 'prepared' });
   customUI=typeof createMotchillCustomPlayer==='function'?createMotchillCustomPlayer(sites,bridge,{
     onNativeIntro:video=>learning.skipIntro(video,contextKey()),introSeconds:()=>learning.introEnd(),onIntro:()=>learning.skipIntro(media,contextKey()),
-    onNext:()=>goNext('manual'),serverKey:()=>nativeNavigation?.active?activePage()?.server:selectedServerKey,
+    onNext:()=>{const hasNext=!!activePage()?.next;return Promise.resolve(goNext('manual')).then(ok=>ok?'navigating':hasNext?'error':'missing');},serverKey:()=>nativeNavigation?.active?activePage()?.server:selectedServerKey,
     isFullscreen:()=>document.fullscreenElement===(nativeNavigation?.active?nativeNavigation.shell:shell) && !!document.fullscreenElement,onFullscreen:()=>toggleFullscreen(),
   }):null;
   customUI?.guard();
@@ -4773,10 +4877,15 @@ function startMotchillPlayerController(sites) {
     if (lockButton) lockButton.hidden = true;
     down = null; stopHold();
   });
+  let lastLockKey = '', lastActionKey = '';
   function updateLockUI() {
     if (!lockButton || !shell) return;
+    if (customUI?.active && lockButton.hidden) return;
     const native = shell.matches('.jwplayer') ? shell : getDocument().querySelector('.jwplayer');
     const visible = locked ? shell.classList.contains('mc-show-lock') : native && (!native.classList.contains('jw-flag-user-inactive') || native.classList.contains('jw-state-paused'));
+    const nextKey = (visible ? '1' : '0') + '|' + (locked ? '1' : '0');
+    if (nextKey === lastLockKey) return;
+    lastLockKey = nextKey;
     lockButton.classList.toggle('mc-lock-visible', !!visible);
     lockButton.setAttribute('aria-label', locked ? 'Mở khóa màn hình' : 'Khóa màn hình');
     lockButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/>'
@@ -4869,6 +4978,7 @@ function startMotchillPlayerController(sites) {
     initialNodes = shell.classList.contains('mc-shell-page') ? [host] : [...shell.children].filter((node) => !/^(SCRIPT|STYLE)$/.test(node.tagName));
     if (baseHost) baseHost.classList.add('mc-media-host');
     stage = document.createElement('div'); stage.className = 'mc-player-stage'; shell.append(stage);
+    lastActionKey = ''; lastLockKey = '';
     positionStage();
     action = button('Tập tiếp theo', 'mc-next-action', () => {
       if (Date.now() - lastActionAt < 600 || action.hidden || action.disabled) return;
@@ -4916,7 +5026,7 @@ function startMotchillPlayerController(sites) {
     const waiting = ['switching', 'refreshing'].includes(value.phase);
     status.textContent = value.message || ''; status.hidden = customUI?.active && waiting || !waiting && value.phase !== 'error';
     retry.hidden = back.hidden = value.phase !== 'error';
-    if (waiting) { action.hidden = false; action.disabled = true; action.textContent = value.message; }
+    if (waiting) { lastActionKey = ''; action.hidden = false; action.disabled = true; action.textContent = value.message; }
     else action.disabled = false;
   }
   let rollbackMedia = null, rollbackMuted = false, rollbackPaused = true;
@@ -5082,7 +5192,7 @@ function startMotchillPlayerController(sites) {
       candidate.remote.command('start-zero');
       await wait(() => {
         bridge.poll(); const state = validateCandidate(candidate);
-        return state?.startedAtZero && !state.paused && state.readyState >= 2 && state.position < 3 && !state.ad;
+        return state?.startedAtZero && !state.paused && !state.ad;
       }, signal);
       let resumedTo = 0;
       const resume = candidate.target.resume;
@@ -5119,9 +5229,10 @@ function startMotchillPlayerController(sites) {
       currentFrame = candidate.frame; currentPage = { ...candidate.page, url: target.url };
       selectedServerKey = candidate.preferredServer;
       media = candidate.remote; media.muted = rollbackMuted;
+      if (['server', 'translation'].includes(target.intent) && rollbackPaused) media.pause();
       // Đồng bộ trong lượt commit: cú click thứ hai ngay sau khi tải xong không
       // được dùng nút tập kế của tập cũ để bỏ qua thêm một tập nữa.
-      action.hidden = true; action.dataset.action = ''; action.textContent = '';
+      lastActionKey = ''; action.hidden = true; action.dataset.action = ''; action.textContent = '';
       // Native history update avoids Next.js' patched pushState rerendering and
       // replacing the fullscreen shell. The live route remains inside the child.
       History.prototype.pushState.call(history, { ...history.state, mcEpisode: true }, '', target.url);
@@ -5160,12 +5271,13 @@ function startMotchillPlayerController(sites) {
     if (!shell) mount(media);
     if (!shell) return;
     positionStage();
-    if(customUI)stage.dataset.mcCustom=customUI.update(media,stage,activePage())?'1':'0';
+    if(customUI){const nextCustom=customUI.update(media,stage,activePage())?'1':'0';if(stage.dataset.mcCustom!==nextCustom)stage.dataset.mcCustom=nextCustom;}
     const lockSupported = players.canLock(getDocument(), sites.detect(getDocument(), activePage()?.url));
     if (locked && (document.fullscreenElement !== shell || !lockSupported)) {
       locked = false; shell.classList.remove('mc-locked'); stopHold();
     }
-    lockButton.hidden = document.fullscreenElement !== shell || !lockSupported;
+    const hideLock = document.fullscreenElement !== shell || !lockSupported;
+    if (lockButton.hidden !== hideLock) lockButton.hidden = hideLock;
     updateLockUI();
     const info = activePage();
     const pageIdentity = [info.url, info.language].join('|');
@@ -5198,7 +5310,7 @@ function startMotchillPlayerController(sites) {
     // initialization click and call play() on an empty video instead.
     const surface = stage?.querySelector('.mc-gesture-surface');
     const gestureReady = !isAd && Number.isFinite(media.duration) && media.duration > 0 && media.readyState >= 1;
-    if (surface) surface.hidden = !gestureReady || !locked && (!media.frame || media.state?.nativeGestures === true);
+    if (surface) { const hideSurface = !gestureReady || !locked && (!media.frame || media.state?.nativeGestures === true); if (surface.hidden !== hideSurface) surface.hidden = hideSurface; }
     if (!gestureReady) { down = null; stopHold(); }
     if (restoringServer) return; // Không dùng thời gian/ended của server cũ để tự chuyển.
     machine.tick({ currentTime: media.currentTime, duration: media.duration, paused: media.paused || autoSuppressed, ended: media.ended && !autoSuppressed,
@@ -5207,11 +5319,18 @@ function startMotchillPlayerController(sites) {
       const left = media.duration - media.currentTime;
       const nextVisible = !!info.next && Number.isFinite(media.duration) && media.duration > 0 && left <= 180 && left >= 0;
       const introVisible = media.currentTime < learning.introEnd() - 5 && media.duration >= 600;
-      action.hidden = isAd || !nextVisible && !introVisible;
-      action.dataset.action = nextVisible ? 'next' : 'intro';
-      action.innerHTML = (nextVisible ? 'Tập tiếp theo ' + icons.next : 'Bỏ qua giới thiệu ' + icons.forward);
-      const bar = media.closest?.('.jwplayer,.art-video-player')?.querySelector('.jw-controlbar,.art-bottom') || getDocument().querySelector('.jw-controlbar,.art-bottom');
-      action.style.bottom = Math.max(64, bar ? bar.offsetHeight + 4 : 0) + 'px';
+      const shouldHide = isAd || !nextVisible && !introVisible;
+      const nextKind = nextVisible ? 'next' : 'intro';
+      const bar = shouldHide || customUI?.active ? null : (media.closest?.('.jwplayer,.art-video-player')?.querySelector('.jw-controlbar,.art-bottom') || getDocument().querySelector('.jw-controlbar,.art-bottom'));
+      const bottomPx = Math.max(64, bar ? bar.offsetHeight + 4 : 0) + 'px';
+      const keyStr = `${shouldHide ? 1 : 0}|${nextKind}|${bottomPx}`;
+      if (keyStr !== lastActionKey) {
+        lastActionKey = keyStr;
+        action.hidden = shouldHide;
+        action.dataset.action = nextKind;
+        action.innerHTML = (nextVisible ? 'Tập tiếp theo ' + icons.next : 'Bỏ qua giới thiệu ' + icons.forward);
+        action.style.bottom = bottomPx;
+      }
     }
   }
   // Server click được website thực hiện, controller chỉ giữ tiến độ sau khi
@@ -5232,9 +5351,24 @@ function startMotchillPlayerController(sites) {
     const current = players.chosenServer(getDocument(), sites.detect(getDocument(), activePage().url), media);
     if (!retryAction && current?.key === choice.key) return;
     document.dispatchEvent(new Event('mc-before-server-change'));
-    const expected = mirror ? players.serverChoices(getDocument(), sites.detect(getDocument(), activePage().url)).find((item) => item.key === choice.key) : choice;
-    restoringServer = { position: media.currentTime, duration: media.duration, until: Date.now() + 20000,
-      key: choice.key, expected, provider: providerSignature(media), previous: media.state?.mediaId || media.currentSrc || media.src || media };
+    const pageInfo = activePage();
+    const expected = mirror ? players.serverChoices(getDocument(), sites.detect(getDocument(), pageInfo.url)).find((item) => item.key === choice.key) : choice;
+    const targetLang = sites.translationKey(expected?.label || '');
+    const languageChanged = !!targetLang && !!pageInfo.language && targetLang !== pageInfo.language;
+    const pendingRestore = { position: media.currentTime, duration: media.duration, paused: media.paused !== false, until: Date.now() + 20000,
+      key: choice.key, expected, provider: providerSignature(media), previous: media.state?.mediaId || media.currentSrc || media.src || media,
+      lookupPending: languageChanged && typeof lookupMotchillHistoryProgress === 'function' };
+    restoringServer = pendingRestore;
+    if (pendingRestore.lookupPending) {
+      lookupMotchillHistoryProgress({ ...pageInfo, language: targetLang }).then((stored) => {
+        if (restoringServer !== pendingRestore) return;
+        if (stored?.status === 'found' && stored.value) {
+          pendingRestore.position = stored.value.position;
+          pendingRestore.duration = stored.value.duration;
+        }
+        pendingRestore.lookupPending = false;
+      }).catch(() => { if (restoringServer === pendingRestore) pendingRestore.lookupPending = false; });
+    }
     machine.cancel(); selectionVersion++; transitionTarget = null; autoSuppressed = false;
     selectedServerKey = choice.key;
     const serverButton = mirror || choice.node;
@@ -5251,10 +5385,12 @@ function startMotchillPlayerController(sites) {
     const pending = restoringServer;
     const identity = media.state?.mediaId || media.currentSrc || media.src || media;
     if (Date.now() > pending.until) { restoringServer = null; showState({ phase: 'error', message: 'Server chưa sẵn sàng. Hãy thử chọn lại server.' }); return; }
+    if (pending.lookupPending) return;
     if (identity === pending.previous && providerSignature(media) === pending.provider || media.readyState < 1 || !Number.isFinite(media.duration)) return;
     const actualMedia = media.frame ? media : { state: bridge.state(), currentSrc: media.currentSrc, src: media.src };
     if (pending.expected?.source && !players.sourceProven(pending.expected, actualMedia)) return;
     if (Math.abs(media.duration - pending.duration) <= Math.max(30, pending.duration * .03)) media.currentTime = Math.min(pending.position, Math.max(0, media.duration - 1));
+    if (pending.paused) media.pause();
     restoringServer = null; retryAction = null; showState({ phase: 'idle' });
     if (currentFrame) syncOuterControls(getDocument(), activePage());
   }, 250);
@@ -5450,10 +5586,15 @@ function createMotchillNextProviderNavigation(sites,bridge,players,fullscreen,ho
     }
     const source=state();if(!source){if(active){machine.cancel();identity='';active=false;}return false;}
     active=true;shell=source.frame.parentElement;if(!style.isConnected)(document.head || document.documentElement).append(style);
-    const newKey=key();if(identity && identity!==newKey){machine.cancel();override=null;}identity=newKey;lastURL=location.href;syncButtons();
+    const newKey=key();
+    const sameEpisode=identity && identity.split('|').slice(0,3).join('|')===newKey.split('|').slice(0,3).join('|');
+    const keepError=!!sameEpisode && machine.state.phase==='error';
+    if(identity && identity!==newKey && !keepError){machine.cancel();override=null;}
+    if(!keepError)identity=newKey;
+    lastURL=location.href;syncButtons();
     currentMedia=bridge.getFrame(source.frame) || null;
     if(currentMedia)hooks.poll?.(currentMedia,newKey);
-    if(!machine.busy){const info=page(),target=override || info?.next;machine.tick({currentTime:currentMedia?.currentTime,duration:currentMedia?.duration,paused:currentMedia?.paused!==false,ended:currentMedia?.ended,ad:currentMedia?.state.ad},newKey,target);}
+    if(!machine.busy && (!keepError || currentMedia?.ended)){const info=page(),target=override || info?.next;machine.tick({currentTime:currentMedia?.currentTime,duration:currentMedia?.duration,paused:currentMedia?.paused!==false,ended:currentMedia?.ended,ad:currentMedia?.state.ad},keepError?identity:newKey,target);}
     return true;
   }
   async function transitionTo(target,reason='manual'){
@@ -5511,7 +5652,7 @@ function startMotchillTranslations(sites, controller, options = {}) {
   style.textContent = '.mc-translations{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px 12px;border:1px solid #444;border-radius:7px;background:#181818;color:#eee;font:14px/1.4 sans-serif}.mc-translations button{padding:8px 12px;min-height:38px;border:1px solid #777;border-radius:6px;background:#303030;color:#fff;font:inherit;cursor:pointer}.mc-translations button:disabled{opacity:.6;cursor:wait}.mc-translation-status{flex-basis:100%;font-size:13px}.mc-translations[hidden]{display:none!important}';
   // Provider identity comes from the actual server label after removing only
   // its translation and the generic Server prefix, never from DOM position.
-  const provider = (label) => sites.normalize(label).replace(/(?:^|-)(?:vietsub|long-tieng|thuyet-minh)(?=-|$)/g, '-')
+  const provider = (label) => sites.normalize(label).replace(/(?:^|-)(?:vietsub|phu-de|long-tieng|thuyet-minh)(?=-|$)/g, '-')
     .replace(/^server-/, '').replace(/^-+|-+$/g, '');
   function snapshot() {
     const doc = controller.getDocument?.() || document;
@@ -5705,7 +5846,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     if(window.top===window){document.documentElement.dataset.mcCustomOwner='1';observer=new MutationObserver(prepareFrames);observer.observe(document,{subtree:true,childList:true,attributes:true,attributeFilter:['src','data-mc-role']});prepareFrames();}
   }
   if(!document.documentElement){rootObserver=new MutationObserver(()=>{if(document.documentElement){rootObserver.disconnect();guard();}});rootObserver.observe(document,{childList:true});}
-  function detach(){mounted?.ui.dispose();mounted?.player.dispose?.();mounted=null;}
+  function detach(){mounted?.ui.dispose();mounted?.player.dispose?.();mounted=null;if(probe && !candidate()){probe.dispose();probe=null;probeSource='';}}
   function clearLocalPresentation(){detach();statusPanel?.dispose();statusPanel=null;if(localRoot){delete localRoot.dataset.mcLocalFsRoot;localRoot=null;}}
   function localState(video){
     const found=candidate();
@@ -5721,6 +5862,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   function commandTrack(video,group,id){const found=candidate(),state=localState(video);return !changing && state.customCapable && !state.ad && !video.error && video.readyState>=1 && found?.video===video && SharedPlayer.selectPlayerTrack(found,group,id);}
   function playAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('play-audible');}
   function initializePlayAudible(video){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('initialize-play-audible');}
+  function setMute(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && probe?.video===video && probe.command('mute',value);}
   function restoreAudio(video,value){const state=localState(video);return !changing && state.customCapable && !state.ad && bridge.role!=='prepared' && !sites.isPrepared(video) && probe?.video===video && probe.command('restore-audio',value);}
   function enhanceLocal(video){
     guard();
@@ -5770,10 +5912,11 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     // A fresh source can have empty played ranges after its muted warmup.
     // Keep the caller's Pause across UI remounts instead of treating that as
     // permission for the new controls to autoplay. Explicit Play still works.
+    const wasPaused=found.video.paused===true;
     preservePause=value.paused===true;
     if(!persistent)persistent=SharedPlayer.persistentMediaSession(window,{candidate,onPending:value=>{changing=value;},onIdentity:identity=>{providerIdentity=identity;}});
     const root=enhancementRoot(),panel=SharedPlayer.loadingPanel(window,root,{});
-    return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).finally(()=>panel.dispose());
+    return persistent.replace(playlist,{signal,identity:provider,position:value.position,paused:value.paused,muted:value.muted,volume:value.volume}).catch(error=>{preservePause=wasPaused || signal?.aborted===true;throw error;}).finally(()=>panel.dispose());
   }
   function update(media,root,page){
     if(disposed)return false;
@@ -5821,7 +5964,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
       const ui=SharedPlayer.customPlayerControls(window,player,{autoPlay:true,nextTimeoutMs:localPresentation() || remote && media.state.nativeEnhanced?45000:undefined,
         canAutoPlay:()=>!changing && !preservePause,
         audioPreferences,canRestoreAudio:()=>!changing && bridge.role!=='prepared' && !sites.isPrepared(media) && media.state?.role!=='prepared',
-        introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok?'navigating':'missing'),
+        introSeconds:()=>localPresentation()?bridge.parentContext?.introSeconds ?? 90:hooks.introSeconds(),onIntro:()=>localPresentation()?bridge.requestIntro():hooks.onIntro(),onNext:()=>localPresentation()?bridge.requestNext():Promise.resolve(hooks.onNext()).then(ok=>ok===true || ok==='navigating'?'navigating':ok==='error'?'error':'missing'),
         isFullscreen:()=>localPresentation()?document.fullscreenElement===root:hooks.isFullscreen(),onFullscreen:()=>localPresentation()?localFullscreen.toggle(root):hooks.onFullscreen()});
       mounted={media,root,signature,player,ui};
     }
@@ -5833,7 +5976,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
     }
     return true;
   }
-  return {guard,enhanceLocal,clearLocal:clearLocalPresentation,localPresentation,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,initializePlayAudible,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;clearLocalPresentation();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
+  return {guard,enhanceLocal,clearLocal:clearLocalPresentation,localPresentation,replaceMedia,get nativeRoot(){return enhancementRoot();},localState,commandTrack,playAudible,initializePlayAudible,setMute,restoreAudio,update,get active(){return !!mounted;},refresh(){mounted?.ui.update();},dispose(){disposed=true;clearLocalPresentation();persistent?.dispose();localFullscreen?.dispose();probe?.dispose();probe=null;observer?.disconnect();rootObserver?.disconnect();for(const [frame,record] of waiting){record.panel?.dispose();frame.removeEventListener('load',record.reset);frame.removeEventListener('error',record.error);}waiting.clear();guardOff?.();document.querySelector('[data-mc-custom-guard]')?.remove();document.querySelector('[data-mc-local-fullscreen]')?.remove();delete document.documentElement.dataset.mcCustomOwner;}};
 }
 
 // END MOTCHILL SITES

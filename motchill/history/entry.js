@@ -21,10 +21,20 @@
 // @match        https://embed2.streamc.xyz/embed.php*
 // @match        https://embed11.streamc.xyz/embed.php*
 // @match        https://embed10.streamc.xyz/embed.php*
+// @match        https://embed14.streamc.xyz/embed.php*
 // @match        https://embed15.streamc.xyz/embed.php*
 // @match        https://embed18.streamc.xyz/embed.php*
+// @match        https://v2.streamvsmov.com/video/*
+// @match        https://v3.streamvsmov.com/video/*
+// @match        https://v4.streamvsmov.com/video/*
+// @match        https://v6.streamvsmov.com/video/*
 // @match        https://v8.streamvsmov.com/video/*
 // @match        https://v9.streamvsmov.com/video/*
+// @match        https://v10.streamvsmov.com/video/*
+// @match        https://v11.streamvsmov.com/video/*
+// @match        https://v12.streamvsmov.com/video/*
+// @match        https://v14.streamvsmov.com/video/*
+// @match        https://v15.streamvsmov.com/video/*
 // @include      /^https?:\/\/[^\/?#]*motchill[^\/?#]*\//
 // @match        https://api.clubc.live/embed/*
 // @run-at       document-start
@@ -274,10 +284,14 @@
     const remoteUrl = sites.url(remoteInfo?.url);
     const remoteRoute = remoteUrl && remoteInfo && sites.route(remoteUrl.href, remoteInfo.family);
     const outerRoute = remoteInfo && sites.route(location.href, remoteInfo.family);
+    const epMatch = (infoKey, parsedRoute, family) => {
+      const routeKey = parsedRoute && sites.episodeKey(parsedRoute.episode);
+      return infoKey === routeKey || (family === sites.families.NEXT_REVIVE && infoKey === 'full' && routeKey === 'ep:1');
+    };
     if (media?.frame?.dataset.mcManaged === 'episode' && media.frame.dataset.mcRole === 'current'
       && remoteUrl?.origin === location.origin && remoteUrl.pathname === location.pathname
-      && remoteRoute && outerRoute && remoteInfo.episodeKey === sites.episodeKey(remoteRoute.episode)
-      && remoteInfo.episodeKey === sites.episodeKey(outerRoute.episode)) info = { ...remoteInfo, url: location.href };
+      && remoteRoute && outerRoute && epMatch(remoteInfo.episodeKey, remoteRoute, remoteInfo.family)
+      && epMatch(remoteInfo.episodeKey, outerRoute, remoteInfo.family)) info = { ...remoteInfo, url: location.href };
     if (!info && sites.detect() === sites.families.WRAPPER && bridge.state()?.direct) info = bridge.state().page;
     if (info && media?.state?.page && !sites.sameEpisode(info, media.state.page)) info = null;
     if (!info || !media || !sites.url(info.url) || !sites.isMotchill(sites.url(info.url).hostname)) {
@@ -328,7 +342,7 @@
       const similarDuration = !saved?.duration || Math.abs(saved.duration - video.duration) <= Math.max(30, video.duration * .03);
       if (!startsFromZero() && saved && similarDuration && saved.position > MIN_SECONDS && saved.position < video.duration * .95) {
         restored = true;
-        if (video.state) awaitingSeek = saved.position;
+        if (video.state) awaitingSeek = { target: saved.position, until: Date.now() + 8000 };
         video.currentTime = saved.position;
         // Restoring a position must preserve an explicit Pause. The engine or
         // custom Play owns playback/autoplay; history only owns the seek.
@@ -340,8 +354,11 @@
       const position = Math.floor(video.currentTime);
       if (!Number.isFinite(position)) return;
       // Chờ iframe xác nhận đã tua; bản tin cũ có thể vẫn mang vị trí trước seek.
+      // Cho phép lệch nhẹ theo keyframe HLS (±12s) hoặc hết cửa sổ chờ nếu đã qua MIN_SECONDS.
       if (awaitingSeek !== null) {
-        if (Math.abs(position - awaitingSeek) > 5) return;
+        const matched = Math.abs(position - awaitingSeek.target) <= 12;
+        const expired = Date.now() > awaitingSeek.until && position > MIN_SECONDS;
+        if (!matched && !expired) return;
         awaitingSeek = null;
       }
       // Remote iframe xác nhận seek ở bản tin sau; không ghi vị trí 0 đè dữ liệu trước đó.
@@ -458,8 +475,9 @@
   }
   function hasFilmConflict(a, b) {
     if (!a || !b) return true;
-    const sa = a.season || sites.normalize(a.title || a.originalTitle || a.slug).match(/(?:phan|season|part)-(\d+)/)?.[1] || '';
-    const sb = b.season || sites.normalize(b.title || b.originalTitle || b.slug).match(/(?:phan|season|part)-(\d+)/)?.[1] || '';
+    const seasonOf = (item) => item.season || sites.normalize([item.title, item.originalTitle, item.slug].filter(Boolean).join(' ')).match(/(?:^|-)(?:phan|season|part)-(\d{1,3})(?:-|$)/)?.[1] || '';
+    const sa = seasonOf(a);
+    const sb = seasonOf(b);
     if (sa && sb && String(sa) !== String(sb)) return true;
     if (a.year && b.year && String(a.year) !== String(b.year)) return true;
     return ['imdb', 'tmdb'].some((k) => a.externalIds?.[k] && b.externalIds?.[k] && a.externalIds[k] !== b.externalIds[k]);
@@ -544,8 +562,9 @@
       matchedDetail = detail;
       let episode = pickEpisode(detail.episodes, show);
       if (!episode && !detail.isWatch && detail.episodes.length > 0) {
-        const watchDoc = await fetchDoc(detail.episodes[0].url, signal);
-        const watchDetail = sites.readDetail(watchDoc, detail.episodes[0].url);
+        const probeEp = detail.episodes.find((ep) => ep.episodeKey === show.episodeKey) || detail.episodes[0];
+        const watchDoc = await fetchDoc(probeEp.url, signal);
+        const watchDetail = sites.readDetail(watchDoc, probeEp.url);
         if (verifiedSameFilm(show, watchDetail)) {
           episode = pickEpisode(watchDetail.episodes, show);
           if (episode) return { status: 'found', url: episode.url, detailUrl: detail.url, detail: watchDetail };
@@ -830,7 +849,9 @@
           const needsMount = location.pathname === '/' && db.shows.some((s) => !s.finished)
             && (!section?.isConnected || !isMountedAt(section, sites.homeMount()));
           const needsMenu = !document.querySelector('.mh-menu') && !!menuNav();
-          if (!style.isConnected || needsMount || needsMenu || sessionStorage.getItem(PENDING_KEY)) scheduleRecover();
+          let hasPending = false;
+          try { hasPending = !!sessionStorage.getItem(PENDING_KEY); } catch (_) {}
+          if (!style.isConnected || needsMount || needsMenu || hasPending) scheduleRecover();
         }).observe(document.documentElement, { childList: true, subtree: true });
       }
       window.addEventListener('popstate', scheduleRecover);

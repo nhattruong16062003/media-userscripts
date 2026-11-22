@@ -8,21 +8,32 @@ export async function historyDestination(row,win) {
   if(!isSiteOrigin(win.location.origin))return null;
   const original=safeURL(row.url);
   if(original?.origin===win.location.origin && original.pathname.startsWith('/xem-phim/'))return {url:original.href,source:row.source,lane:row.lane};
-  const candidates=[];
+  const watchCandidates=[],detailCandidates=[];
   for(const a of win.document.querySelectorAll('a[href]')){
     const url=safeURL(a.href,win.location.href);
-    if(url?.origin===win.location.origin && /^\/(?:phim|xem-phim)\//.test(url.pathname) && (url.pathname.includes('/'+row.movie) || identityText(a.textContent)===identityText(row.title)))candidates.push(url.href);
+    if(url?.origin===win.location.origin && /^\/(?:phim|xem-phim)\//.test(url.pathname) && (url.pathname.includes('/'+row.movie) || identityText(a.textContent)===identityText(row.title))){
+      (url.pathname.startsWith('/xem-phim/')?watchCandidates:detailCandidates).push(url.href);
+    }
   }
+  const candidates=[...watchCandidates,...detailCandidates];
   if(/^[a-z0-9-]{1,200}$/i.test(row.movie))candidates.push(new URL('/xem-phim/'+row.movie,win.location.href).href);
   const load=async url=>{
     const response=await win.fetch(url,{credentials:'same-origin'});
     if(!response.ok || response.url && safeURL(response.url)?.origin!==win.location.origin)return null;
     const html=await response.text();
-    return html.length<=2_000_000?new win.DOMParser().parseFromString(html,'text/html'):null;
+    return html.length<=2_000_000?{doc:new win.DOMParser().parseFromString(html,'text/html'),url:response.url || url}:null;
   };
-  for(const url of [...new Set(candidates)].slice(0,5)){
-    const doc=await load(url);if(!doc)continue;
-    const site=detectSite(doc,url),context=readContext(site,doc);
+  for(const rawUrl of [...new Set(candidates)].slice(0,5)){
+    let loaded=await load(rawUrl);if(!loaded)continue;
+    let {doc,url}=loaded;
+    let site=detectSite(doc,url);
+    if(!site && safeURL(url)?.pathname.startsWith('/phim/')){
+      const slug=safeURL(url).pathname.slice('/phim/'.length).replace(/\/.*$/,'');
+      const watchLinks=[...doc.querySelectorAll('a[href]')].map(a=>safeURL(a.getAttribute('href'),url)).filter(u=>u?.origin===win.location.origin && u.pathname.startsWith('/xem-phim/'));
+      const watchLink=watchLinks.find(u=>slug && u.pathname.includes('/'+slug) || u.pathname.includes('/'+row.movie)) || watchLinks[0];
+      if(watchLink){loaded=await load(watchLink.href);if(!loaded)continue;({doc,url}=loaded);site=detectSite(doc,url);}
+    }
+    const context=readContext(site,doc);
     if(!context || !sameFilm(row,context))continue;
     switch(site.kind){
       case 'next-ordered':
@@ -37,6 +48,7 @@ export async function historyDestination(row,win) {
         return {url:new URL('/xem-phim/'+encodeURIComponent(context.movie)+'.'+found[0].id,win.location.href).href,source:site.kind,lane:found[0].server_type || found[0].server};
       }
       case 'legacy-panels':{
+        if(String(context.season || '1')!==String(row.season || '1'))continue;
         const lane=laneKey(row.lane);if(!['subtitle','voiceover'].includes(lane))return null;
         const nodes=[...doc.querySelectorAll(lane==='voiceover'?'.btn-episode.chaptertm':'.btn-episode.chaptervs')];
         const found=nodes.filter(n=>episodeKey(n.querySelector('.v-title,.info')?.textContent.trim() || n.textContent.trim())===episodeKey(row.episode));

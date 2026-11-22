@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Chặn quảng cáo
 // @namespace    rophim-userscripts.local
-// @version      0.4.19
+// @version      0.4.20
 // @author       zic
 // @description  Chặn quảng cáo cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -25,6 +25,7 @@
     return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
   }
   function safeURL(value, base) {
+    if (typeof value !== "string" || !value.trim()) return null;
     try {
       const u = new URL(value, base);
       return u.protocol === "https:" && !u.username && !u.password ? u : null;
@@ -93,6 +94,13 @@
     { id: "sponsor-card", selector: ".row-topic.adserver", proof: (n) => !!n.querySelector('ins[data-revive-id][data-z],a[rel~="sponsored"]') },
     { id: "sponsor-directory", selector: ".topics-list.topics-grid", proof: (n) => sponsorDirectories(n.ownerDocument).includes(n) }
   ];
+  var exposeTo = (fn, target) => {
+    try {
+      return typeof exportFunction === "function" ? exportFunction(fn, target) : fn;
+    } catch {
+      return fn;
+    }
+  };
   function filterAdCarousel(doc) {
     const changed = /* @__PURE__ */ new Set();
     for (const node of doc.querySelectorAll("#top_slider .top-slide-main .swiper-slide,#top_slider .top-slide-small .swiper-slide")) {
@@ -105,7 +113,7 @@
       }
     }
     for (const container of doc.querySelectorAll("#top_slider .top-slide-main,#top_slider .top-slide-small")) {
-      const api = container.swiper;
+      const api = container.wrappedJSObject?.swiper || container.swiper;
       if (!api || api.destroyed) continue;
       try {
         if (changed.has(container)) api.update?.();
@@ -139,32 +147,38 @@
     }
     return [...applied];
   }
-  function withoutAdvertising(config) {
-    if (!config || typeof config !== "object" || !Object.hasOwn(config, "advertising")) return config;
-    const next = { ...config };
+  function withoutAdvertising(config, page) {
+    const raw = config?.wrappedJSObject || config, ObjectAPI = page?.Object || Object;
+    if (!raw || typeof raw !== "object" || !ObjectAPI.hasOwn(raw, "advertising")) return config;
+    const next = page?.Object ? page.Object.assign(new page.Object(), raw) : { ...raw };
     delete next.advertising;
     return next;
   }
   function installJWHook(page) {
     const hooked = /* @__PURE__ */ new WeakSet(), functions = /* @__PURE__ */ new WeakMap();
     const wrap = (fn) => {
-      if (typeof fn !== "function") return fn;
-      if (functions.has(fn)) return functions.get(fn);
-      const proxy = new Proxy(fn, { apply(target, thisArg, args) {
+      const rawFn = fn?.wrappedJSObject || fn;
+      if (typeof rawFn !== "function") return fn;
+      if (functions.has(rawFn)) return functions.get(rawFn);
+      const handler = page?.Object ? new page.Object() : {};
+      handler.apply = exposeTo((target, thisArg, args) => {
         const instance = Reflect.apply(target, thisArg, args);
-        if (instance && typeof instance.setup === "function" && !hooked.has(instance)) {
-          const setup = instance.setup;
+        const rawInstance = instance?.wrappedJSObject || instance;
+        if (rawInstance && typeof rawInstance.setup === "function" && !hooked.has(rawInstance)) {
+          const setup = rawInstance.setup;
           try {
-            instance.setup = function(config, ...rest) {
-              return Reflect.apply(setup, this, [withoutAdvertising(config), ...rest]);
-            };
-            hooked.add(instance);
+            rawInstance.setup = exposeTo(function(config, ...rest) {
+              return Reflect.apply(setup, this?.wrappedJSObject || this, [withoutAdvertising(config, page), ...rest]);
+            }, page);
+            hooked.add(rawInstance);
           } catch {
           }
         }
         return instance;
-      } });
-      functions.set(fn, proxy);
+      }, page);
+      const P = page?.Proxy || Proxy;
+      const proxy = new P(rawFn, handler);
+      functions.set(rawFn, proxy);
       functions.set(proxy, proxy);
       return proxy;
     };
@@ -172,9 +186,9 @@
       const descriptor = Object.getOwnPropertyDescriptor(page, "jwplayer");
       if (descriptor && (!descriptor.configurable || descriptor.get || descriptor.set)) return false;
       let current = wrap(page.jwplayer);
-      Object.defineProperty(page, "jwplayer", { configurable: true, enumerable: descriptor?.enumerable ?? true, get: () => current, set: (value) => {
+      Object.defineProperty(page, "jwplayer", { configurable: true, enumerable: descriptor?.enumerable ?? true, get: exposeTo(() => current, page), set: exposeTo((value) => {
         current = wrap(value);
-      } });
+      }, page) });
       return true;
     } catch {
       return false;
@@ -185,11 +199,11 @@
     if (!proto || typeof proto.click !== "function") return false;
     const original = proto.click;
     try {
-      proto.click = function(...args) {
+      proto.click = exposeTo(function(...args) {
         const url = safeURL(this.href, page.location.href);
         if (this.relList?.contains("sponsored") && this.target === "_blank" && url && url.origin !== page.location.origin) return;
         return Reflect.apply(original, this, args);
-      };
+      }, page);
       return true;
     } catch {
       return false;
@@ -286,7 +300,8 @@
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
       const expectedParent = parentOrigin();
       const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
-      if (data.type === "probe" && !active && fromParent) {
+      const frameReady = isFrameURL2(win.location.href);
+      if (data.type === "probe" && !active && fromParent && frameReady) {
         ask();
         return;
       }
@@ -304,7 +319,7 @@
         frame.contentWindow.postMessage({ tag, type: "owner", family, feature, challenge: data.challenge }, origin);
         return;
       }
-      if (data.type === "owner" && !active && data.challenge === challenge && fromParent) activate();
+      if (data.type === "owner" && !active && data.challenge === challenge && fromParent && frameReady) activate();
     };
     win.addEventListener("message", receive);
     if (isSiteURL(win.location.href)) activate();
@@ -368,7 +383,7 @@
     const had = frame.hasAttribute("sandbox");
     const tokens = had ? (frame.getAttribute("sandbox") || "").split(/\s+/).filter(Boolean) : ["allow-scripts", "allow-same-origin", "allow-forms", "allow-presentation", "allow-orientation-lock"];
     const forbidden = /* @__PURE__ */ new Set(["allow-popups", "allow-popups-to-escape-sandbox", "allow-top-navigation", "allow-top-navigation-by-user-activation", "allow-top-navigation-to-custom-protocols"]);
-    const sandbox = tokens.filter((t) => !forbidden.has(t)).join(" ");
+    const sandbox = tokens.filter((t) => !forbidden.has(t.toLowerCase())).join(" ");
     if (frame.getAttribute("sandbox") !== sandbox) frame.setAttribute("sandbox", sandbox);
     return true;
   }
@@ -388,7 +403,7 @@
     const originalOpen = page.open, originalConfirm = page.confirm;
     let disposed = false, approved = null;
     const restores = [];
-    const exposeTo = (fn, target = page) => {
+    const exposeTo2 = (fn, target = page) => {
       try {
         return typeof exportFunction === "function" ? exportFunction(fn, target) : fn;
       } catch {
@@ -396,11 +411,11 @@
       }
     };
     const open = () => null;
-    const exposedOpen = exposeTo(open, page);
+    const exposedOpen = exposeTo2(open, page);
     let openDescriptor;
     try {
       openDescriptor = Object.getOwnPropertyDescriptor(page, "open");
-      Object.defineProperty(page, "open", { configurable: true, enumerable: openDescriptor?.enumerable ?? true, get: exposeTo(() => exposedOpen, page), set: exposeTo(() => {
+      Object.defineProperty(page, "open", { configurable: true, enumerable: openDescriptor?.enumerable ?? true, get: exposeTo2(() => exposedOpen, page), set: exposeTo2(() => {
       }, page) });
     } catch {
     }
@@ -446,7 +461,9 @@
     }
     function shouldBlockForm(form, submitter, targetWin, trusted = false) {
       const baseHref = resolveBase(targetWin);
-      const target = submitter?.getAttribute?.("formtarget") || submitter?.formTarget || form?.getAttribute?.("target") || form?.target || baseTargetOf(form);
+      const subTarget = submitter?.getAttribute?.("formtarget") || (typeof submitter?.formTarget === "string" ? submitter.formTarget : "");
+      const formTarget = form?.getAttribute ? form.getAttribute("target") || "" : typeof form?.target === "string" ? form.target : "";
+      const target = subTarget || formTarget || baseTargetOf(form);
       if (!trusted && isNewWindowTarget(target)) return true;
       const rawAction = submitter?.getAttribute?.("formaction") || (form?.getAttribute ? form.getAttribute("action") : form?.action) || "";
       const trimmed = rawAction.trim();
@@ -496,7 +513,7 @@
       if (!allowConfirm || !allowed(url.href, event.isTrusted)) return;
       approved = url.href;
       try {
-        if (effectiveTarget && effectiveTarget.toLowerCase() !== "_self") Reflect.apply(originalOpen, page, [url.href, "_blank", "noopener,noreferrer"]);
+        if (event.type === "auxclick" || effectiveTarget && effectiveTarget.toLowerCase() !== "_self") Reflect.apply(originalOpen, page, [url.href, "_blank", "noopener,noreferrer"]);
         else page.location.assign(url.href);
       } finally {
         approved = null;
@@ -513,7 +530,7 @@
       }
       if (typeof orig !== "function") return;
       if (ownDesc && !ownDesc.configurable && !ownDesc.writable) return;
-      const wrapped = exposeTo(makeWrapper(orig), targetWin);
+      const wrapped = exposeTo2(makeWrapper(orig), targetWin);
       try {
         if (!ownDesc || ownDesc.configurable) {
           Object.defineProperty(proto, key, { configurable: true, enumerable: ownDesc ? ownDesc.enumerable : false, writable: true, value: wrapped });
@@ -542,7 +559,8 @@
       const areaProto = targetWin.HTMLAreaElement?.prototype;
       const formProto = targetWin.HTMLFormElement?.prototype;
       const makeClick = (orig) => function(...args) {
-        if (!disposed && (this?.tagName === "A" || this?.tagName === "AREA") && shouldBlockProgrammaticAnchor(this, targetWin)) return;
+        const anchor = !disposed && (this?.tagName === "A" || this?.tagName === "AREA" ? this : this?.closest?.("a,area"));
+        if (anchor && shouldBlockProgrammaticAnchor(anchor, targetWin)) return;
         return Reflect.apply(orig, this, args);
       };
       if (htmlElemProto && typeof htmlElemProto.click === "function") {
@@ -555,9 +573,13 @@
       }
       const makeAnchorDispatch = (orig) => function(...args) {
         const event = args[0];
-        if (!disposed && (event?.type === "click" || event?.type === "auxclick") && shouldBlockProgrammaticAnchor(this, targetWin)) return false;
+        if (!disposed && (event?.type === "click" || event?.type === "auxclick")) {
+          const anchor = this?.tagName === "A" || this?.tagName === "AREA" ? this : this?.closest?.("a,area");
+          if (anchor && shouldBlockProgrammaticAnchor(anchor, targetWin)) return false;
+        }
         return Reflect.apply(orig, this, args);
       };
+      patchMethod(targetWin, htmlElemProto, "dispatchEvent", makeAnchorDispatch, trackRestore);
       patchMethod(targetWin, anchorProto, "dispatchEvent", makeAnchorDispatch, trackRestore);
       patchMethod(targetWin, areaProto, "dispatchEvent", makeAnchorDispatch, trackRestore);
       patchMethod(targetWin, formProto, "submit", (orig) => function(...args) {
@@ -573,6 +595,54 @@
         if (!disposed && event?.type === "submit" && shouldBlockForm(this, event?.submitter, targetWin, false)) return false;
         return Reflect.apply(orig, this, args);
       }, trackRestore);
+      const collectBlankFrames = (node, out) => {
+        if (disposed || !node || node.nodeType !== 1 && node.nodeType !== 11) return;
+        if (isBlankFrame(node)) {
+          out.push(node);
+          return;
+        }
+        if (node.tagName === "IFRAME" || !node.firstElementChild) return;
+        if (typeof node.querySelectorAll === "function") {
+          for (const frame of node.querySelectorAll("iframe")) if (isBlankFrame(frame)) out.push(frame);
+        }
+      };
+      const guardFrames = (frames) => {
+        for (const frame of frames) {
+          if (frame.isConnected && isBlankFrame(frame)) try {
+            const child = frame.contentWindow;
+            if (child) guardChildWindow(child);
+          } catch {
+          }
+        }
+      };
+      const nodeProto = targetWin.Node?.prototype, elemProto = targetWin.Element?.prototype;
+      for (const key of ["appendChild", "insertBefore"]) {
+        patchMethod(targetWin, nodeProto, key, (orig) => function(...args) {
+          const frames = [];
+          if (!disposed && args[0]) collectBlankFrames(args[0], frames);
+          const res = Reflect.apply(orig, this, args);
+          if (!disposed && frames.length) guardFrames(frames);
+          return res;
+        }, trackRestore);
+      }
+      for (const key of ["append", "prepend", "before", "after", "replaceWith", "replaceChildren"]) {
+        patchMethod(targetWin, elemProto, key, (orig) => function(...args) {
+          const frames = [];
+          if (!disposed) {
+            for (const arg of args) if (arg && typeof arg === "object") collectBlankFrames(arg, frames);
+          }
+          const res = Reflect.apply(orig, this, args);
+          if (!disposed && frames.length) guardFrames(frames);
+          return res;
+        }, trackRestore);
+      }
+      patchMethod(targetWin, elemProto, "insertAdjacentElement", (orig) => function(...args) {
+        const frames = [];
+        if (!disposed && args[1]) collectBlankFrames(args[1], frames);
+        const res = Reflect.apply(orig, this, args);
+        if (!disposed && frames.length) guardFrames(frames);
+        return res;
+      }, trackRestore);
       const iframeProto = targetWin.HTMLIFrameElement?.prototype;
       if (iframeProto) {
         for (const prop of ["contentWindow", "contentDocument"]) {
@@ -584,7 +654,7 @@
           }
           if (!desc || typeof desc.get !== "function" || !desc.configurable) continue;
           const origGet = desc.get;
-          const wrappedGet = exposeTo(function() {
+          const wrappedGet = exposeTo2(function() {
             const val = Reflect.apply(origGet, this, []);
             if (!disposed && val) {
               const child = prop === "contentDocument" ? val.defaultView : val;
@@ -627,14 +697,14 @@
       }
       if (!currentOpen || !guardedOpens.has(currentOpen)) {
         const origChildOpen = currentOpen;
-        const childOpen = exposeTo((...args) => {
+        const childOpen = exposeTo2((...args) => {
           if (disposed && typeof origChildOpen === "function") return Reflect.apply(origChildOpen, raw, args);
           return null;
         }, raw);
         guardedOpens.add(childOpen);
         try {
           const desc = Object.getOwnPropertyDescriptor(raw, "open");
-          Object.defineProperty(raw, "open", { configurable: true, enumerable: desc?.enumerable ?? true, get: exposeTo(() => childOpen, raw), set: exposeTo(() => {
+          Object.defineProperty(raw, "open", { configurable: true, enumerable: desc?.enumerable ?? true, get: exposeTo2(() => childOpen, raw), set: exposeTo2(() => {
           }, raw) });
         } catch {
         }
@@ -645,8 +715,8 @@
       }
       if (childDoc && !guardedDocs.has(childDoc)) {
         guardedDocs.add(childDoc);
-        const childClick = exposeTo((event) => handleClick(event, raw, false), raw);
-        const childSubmit = exposeTo((event) => {
+        const childClick = exposeTo2((event) => handleClick(event, raw, false), raw);
+        const childSubmit = exposeTo2((event) => {
           if (!disposed && shouldBlockForm(event.target, event.submitter, raw, false)) stop(event);
         }, raw);
         try {

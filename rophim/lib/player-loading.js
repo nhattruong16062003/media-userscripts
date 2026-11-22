@@ -28,7 +28,7 @@ export function frameLoading(win){
     begin(frame){const record=prepare(frame,true);if(record)record.awaitingLoad=true;},
     update(info){
       const frame=info.site?.frame,record=prepare(frame);if(!record)return;
-      if(!record.awaitingLoad && info.controlsReady===true && info.state?.ready && !info.state.ad && info.context && info.media && record.src===frame.src){frame.dataset.rpDisplay='custom';record.panel?.dispose();record.panel=null;}
+      if(!record.awaitingLoad && info.controlsReady===true && (info.state?.ready || info.state?.initializable===true) && !info.state.ad && info.context && info.media && record.src===frame.src){frame.dataset.rpDisplay='custom';record.panel?.dispose();record.panel=null;}
       else if(frame.dataset.rpDisplay==='custom')prepare(frame,true);
       if(info.state?.failed===true)record.panel?.fail();
     },
