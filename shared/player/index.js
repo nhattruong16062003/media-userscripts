@@ -6,5 +6,7 @@ export {fullscreenController} from './fullscreen.js';
 export {mediaPresentationRoot,mediaPlaylist,persistentMediaSession} from './persistent-media.js';
 export {loadingPanel,childLoading} from './loading.js';
 export {validLoadMetrics,bufferedAhead,loadMetricsText} from './buffering.js';
+export {detectHlsAdBreaks,readPlayerAdBreaks} from './ssai-breaks.js';
+export {createSkipPreferences,filmKeyFromContext} from './skip-preferences.js';
 export {observeHlsOwners} from '../engines/hls-access.js';
 export {playerCandidate,attachPlayer,playerFingerprint,playerTracks,selectPlayerTrack} from '../engines/players.js';

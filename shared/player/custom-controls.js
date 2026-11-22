@@ -2,6 +2,8 @@ import {playerIcon,playerUIStyle} from './player-ui.js';
 import {installGestures} from './gestures.js';
 import {audioPreferenceSession} from './audio-preferences.js';
 import {validLoadMetrics,loadMetricsText} from './buffering.js';
+import {readPlayerAdBreaks} from './ssai-breaks.js';
+import {createSkipPreferences,filmKeyFromContext} from './skip-preferences.js';
 
 // Lock belongs to the fullscreen presentation, not to an episode's engine/UI.
 // Keep it across a source/UI rebind; a real fullscreen exit always clears it,
@@ -67,6 +69,41 @@ export function customPlayerControls(win,player,options={}) {
   const rates=doc.createElement('div');rates.className='rp-player-speed-options';settings.append(rates);
   for(const rate of [.75,1,1.25,1.5,2]){const node=doc.createElement('button');node.type='button';node.className='rp-speed';node.dataset.rpRate=String(rate);node.textContent=rate+'x';node.addEventListener('click',()=>{if(!locked){command('rate',rate);settings.hidden=true;show();update();}});rates.append(node);}
   const tracks=doc.createElement('div');tracks.className='rp-player-tracks';settings.append(tracks);let trackSignature='';
+  const skipPrefs=createSkipPreferences(win);
+  let pendingAdStart=null,autoIntroKey='',lastAutoAdKey='',activeAdTarget=null;
+  const skipSection=doc.createElement('div');skipSection.className='rp-skip-section';settings.append(skipSection);
+  const skipLabel=doc.createElement('div');skipLabel.className='rp-track-label';skipLabel.textContent='Bỏ qua tự động';skipSection.append(skipLabel);
+  const autoIntroBtn=doc.createElement('button');autoIntroBtn.type='button';autoIntroBtn.className='rp-skip-btn';autoIntroBtn.dataset.rpSetting='auto-intro';autoIntroBtn.textContent='Tự bỏ qua giới thiệu';skipSection.append(autoIntroBtn);
+  const autoAdBtn=doc.createElement('button');autoAdBtn.type='button';autoAdBtn.className='rp-skip-btn';autoAdBtn.dataset.rpSetting='auto-ad';autoAdBtn.textContent='Tự bỏ qua QC video';skipSection.append(autoAdBtn);
+  const markRow=doc.createElement('div');markRow.className='rp-skip-row';skipSection.append(markRow);
+  const markAdBtn=doc.createElement('button');markAdBtn.type='button';markAdBtn.className='rp-skip-btn';markAdBtn.dataset.rpAction='mark-ad';markAdBtn.textContent='Đánh dấu bắt đầu QC';markRow.append(markAdBtn);
+  const clearMarkBtn=doc.createElement('button');clearMarkBtn.type='button';clearMarkBtn.className='rp-skip-btn rp-skip-clear';clearMarkBtn.dataset.rpAction='clear-ad-mark';clearMarkBtn.textContent='Xóa';clearMarkBtn.hidden=true;markRow.append(clearMarkBtn);
+  autoIntroBtn.addEventListener('click',()=>{if(locked)return;const next=!skipPrefs.get().autoSkipIntro;skipPrefs.set({autoSkipIntro:next});show();update();});
+  autoAdBtn.addEventListener('click',()=>{if(locked)return;const next=!skipPrefs.get().autoSkipAd;skipPrefs.set({autoSkipAd:next});show();update();});
+  markAdBtn.addEventListener('click',()=>{
+    if(locked || !player.state().ready)return;
+    const fk=filmKeyFromContext(context);
+    if(!fk){report('Chưa xác định được phim để lưu mốc QC.');return;}
+    const nowTime=player.state().time;
+    if(pendingAdStart===null){
+      pendingAdStart=nowTime;
+      report('Đã đánh dấu bắt đầu QC tại '+format(nowTime)+'. Bấm lại khi QC kết thúc.');
+    }else{
+      const saved=skipPrefs.setAdMark(fk,pendingAdStart,nowTime);
+      pendingAdStart=null;
+      if(saved)report('Đã lưu mốc QC (+'+saved.duration+'s) cho các tập sau.');
+      else report('Khoảng QC phải từ 5 giây đến 3 phút.');
+    }
+    show();update();
+  });
+  clearMarkBtn.addEventListener('click',()=>{
+    if(locked)return;
+    pendingAdStart=null;
+    const fk=filmKeyFromContext(context);
+    if(fk)skipPrefs.clearAdMark(fk);
+    report('Đã xóa mốc QC của phim này.');
+    show();update();
+  });
   const loadDetail=doc.createElement('div');loadDetail.className='rp-load-detail';settings.append(loadDetail);
   function updateTracks(){
     const groups=player.tracks?.() || {},signature=JSON.stringify(groups);
@@ -99,7 +136,12 @@ export function customPlayerControls(win,player,options={}) {
       case 'mute':{const muted=!(player.audio?.().muted ?? video.muted);audio?.intent(muted);command('mute',muted);show();break;}
       case 'lock':setLocked(true);break;
       case 'settings':settings.hidden=!settings.hidden;show();break;
-      case 'context':if(node.dataset.rpMode==='intro'){if(options.onIntro)options.onIntro();else command('seek',Math.min(introEnd(),player.state().duration));}else beginNext(node);break;
+      case 'context':
+        if(node.dataset.rpMode==='ad-hls' && activeAdTarget?.source==='hls'){command('seek',Math.min(activeAdTarget.end,player.state().duration));report('Đã bỏ qua quảng cáo');}
+        else if(node.dataset.rpMode==='ad-mark' && activeAdTarget?.source==='mark'){command('seek',Math.min(player.state().time+activeAdTarget.duration,player.state().duration));report('Đã bỏ qua quảng cáo (+'+activeAdTarget.duration+'s)');}
+        else if(node.dataset.rpMode==='intro'){if(options.onIntro)options.onIntro();else command('seek',Math.min(introEnd(),player.state().duration));}
+        else beginNext(node);
+        break;
       case 'next':beginNext(node);break;
       case 'fullscreen':try{if(options.onFullscreen){const pending=options.onFullscreen();if(!pending)report('Chưa kết nối được khung phát.');else pending.then(status=>{if(!disposed && !['fullscreen','windowed'].includes(status))report('Không bật được toàn màn hình khung.');});}else{const result=inFullscreen()?doc.exitFullscreen?.():root.requestFullscreen?.();if(!result && !root.requestFullscreen)report('Trình duyệt chưa hỗ trợ toàn màn hình khung.');result?.catch(()=>report('Không bật được toàn màn hình khung.'));}}catch{report('Không bật được toàn màn hình khung.');}break;
     }
@@ -165,15 +207,41 @@ export function customPlayerControls(win,player,options={}) {
     icon(lock,locked?'lock':'unlock');attr(lock,'aria-label',locked?'Mở khóa màn hình':'Khóa màn hình');
     if(!scrubbing && (chromeVisible&&!locked || state.paused)){prop(seek,'max',String(Math.max(1,state.duration)));prop(seek,'value',String(state.time));paintTime(state.time,state.duration);}
     for(const node of rates.children)attr(node,'aria-pressed',Number(node.dataset.rpRate)===state.rate);
-    const intro=state.ready && state.time<introEnd()-5 && state.duration>=600,nearEnd=state.ready && state.duration-state.time<=180;
-    data(contextAction,'rpMode',(nextPending?.node===contextAction || nextError?.node===contextAction)?'next':intro?'intro':'next');
-    prop(contextAction,'hidden',(!intro && !context) || !(intro || nearEnd || nextPending?.node===contextAction || nextError?.node===contextAction));
+    const sp=skipPrefs.get(),fk=filmKeyFromContext(context),userMark=fk?skipPrefs.getAdMark(fk):null;
+    attr(autoIntroBtn,'aria-pressed',sp.autoSkipIntro);prop(autoIntroBtn,'disabled',locked);
+    attr(autoAdBtn,'aria-pressed',sp.autoSkipAd);prop(autoAdBtn,'disabled',locked);
+    prop(markAdBtn,'disabled',!state.ready || locked);
+    text(markAdBtn,pendingAdStart!==null?'Kết thúc QC (từ '+format(pendingAdStart)+')':userMark?'Đánh dấu lại QC (+'+userMark.duration+'s)':'Đánh dấu bắt đầu QC');
+    prop(clearMarkBtn,'hidden',pendingAdStart===null && !userMark);prop(clearMarkBtn,'disabled',locked);
+    const hlsBreaks=state.ready && !state.ad?readPlayerAdBreaks(player):[];
+    const hlsAd=hlsBreaks.find(b=>state.time>=b.start-1 && state.time<b.end-1) || null;
+    const markAd=!hlsAd && state.ready && !state.ad && userMark && state.time>=userMark.start-30 && state.time<=userMark.start+Math.max(30,userMark.duration)?{...userMark,source:'mark'}:null;
+    activeAdTarget=hlsAd || markAd;
+    const epKey=context?[context.url,context.episodeID,context.lane].join('|'):'';
+    if(state.ready && !state.ad && !state.paused && sp.autoSkipAd && hlsAd && state.time>=hlsAd.start){
+      const adKey=epKey+'|'+Math.round(hlsAd.start);
+      if(adKey!==lastAutoAdKey){lastAutoAdKey=adKey;if(command('seek',Math.min(hlsAd.end,state.duration)))report('Đã tự bỏ qua quảng cáo ('+hlsAd.duration+'s)');}
+    }
+    const intro=state.ready && !state.ad && state.time<introEnd()-5 && state.duration>=600,nearEnd=state.ready && state.duration-state.time<=180;
+    if(intro && !state.paused && sp.autoSkipIntro && epKey && autoIntroKey!==epKey){
+      autoIntroKey=epKey;
+      if(options.onIntro)options.onIntro();else command('seek',Math.min(introEnd(),state.duration));
+      report('Đã tự bỏ qua giới thiệu');
+    }
+    const ctxMode=(nextPending?.node===contextAction || nextError?.node===contextAction)?'next':hlsAd?'ad-hls':markAd?'ad-mark':intro?'intro':'next';
+    data(contextAction,'rpMode',ctxMode);
+    const showCtx=!!(hlsAd || markAd || intro || nearEnd && context || nextPending?.node===contextAction || nextError?.node===contextAction);
+    prop(contextAction,'hidden',!showCtx);
     data(line,'rpNextStatus',nextPending?.node===next || nextError?.node===next);
     for(const node of [contextAction,next]){
       data(node,'rpStatus',nextPending?.node===node || nextError?.node===node);
-      prop(node,'disabled',!state.ready||locked&&node!==contextAction||(!context && !(node===contextAction && intro))||!!nextPending);attr(node,'aria-busy',nextPending?.node===node);
+      prop(node,'disabled',!state.ready||locked&&node!==contextAction||(!context && !(node===contextAction && (intro || hlsAd)))||!!nextPending);attr(node,'aria-busy',nextPending?.node===node);
       if(nextPending?.node===node)buttonText(node,'Đang chuyển tập…');else if(nextError?.node===node)buttonText(node,nextError.text);
-      else if(node===contextAction)content(node,'context:'+intro,()=>{node.innerHTML=(intro?'Bỏ qua giới thiệu':'Tập tiếp theo')+' '+playerIcon(intro?'forward':'next');});else icon(node,'next');
+      else if(node===contextAction){
+        if(ctxMode==='ad-hls')content(node,'context:ad-hls',()=>{node.innerHTML='Bỏ qua quảng cáo '+playerIcon('forward');});
+        else if(ctxMode==='ad-mark')content(node,'context:ad-mark:'+markAd.duration,()=>{node.innerHTML='Bỏ qua quảng cáo (+'+markAd.duration+'s) '+playerIcon('forward');});
+        else content(node,'context:'+intro,()=>{node.innerHTML=(intro?'Bỏ qua giới thiệu':'Tập tiếp theo')+' '+playerIcon(intro?'forward':'next');});
+      }else icon(node,'next');
     }
     applyChrome();
     // Start only the parent's validated selected episode, once it can play.
@@ -199,7 +267,7 @@ export function customPlayerControls(win,player,options={}) {
   };
   if(nativeMode){center.remove();chrome.remove();settings.remove();surface.remove();root.addEventListener('click',nativeClick,true);root.addEventListener('click',nativeVolume,true);root.addEventListener('pointerup',nativeVolume,true);}
   root.append(shell);update();if(locked)revealLock();
-  return {shell,surface,update,syncLocked(value){setLocked(!!value,false);},setContext(value){const key=c=>c ? [c.url,c.episodeID,c.lane,c.server].join('|') : '';const oldKey=key(context);context=value;if(oldKey && oldKey!==key(value)){nextPending=null;nextError=null;win.clearTimeout(nextTimer);cancelGestures();settings.hidden=true;if(!inFullscreen())setLocked(false);}update();},
+  return {shell,surface,update,syncLocked(value){setLocked(!!value,false);},setContext(value){const key=c=>c ? [c.url,c.episodeID,c.lane,c.server].join('|') : '';const oldKey=key(context);context=value;if(oldKey && oldKey!==key(value)){nextPending=null;nextError=null;pendingAdStart=null;lastAutoAdKey='';win.clearTimeout(nextTimer);cancelGestures();settings.hidden=true;if(!inFullscreen())setLocked(false);}update();},
     requestResult(status){if(status!=='navigating')finishNext(status);},
     dispose(){if(disposed)return;checkpointAudio();disposed=true;win.clearInterval(loadTimer);root.removeEventListener('click',nativeClick,true);root.removeEventListener('click',nativeVolume,true);root.removeEventListener('pointerup',nativeVolume,true);offGestures();offPlayer?.();nativeObserver.disconnect();for(const timer of [hideTimer,lockTimer,tipTimer,errorTimer,nextErrorTimer,nextTimer,scrubTimer])win.clearTimeout(timer);for(const name of mediaEvents)video.removeEventListener(name,changed);for(const name of inputEvents)shell.removeEventListener(name,block);doc.removeEventListener('fullscreenchange',fsChanged);doc.removeEventListener('visibilitychange',changed);win.removeEventListener('blur',cancelScrub);win.removeEventListener('pointerup',releaseScrub);win.removeEventListener('keydown',lockedKey,true);win.removeEventListener('keyup',lockedKey,true);win.removeEventListener('pagehide',checkpointAudio);restoreNative();if(positioned)root.style.position=originalPosition;shell.remove();},
   };

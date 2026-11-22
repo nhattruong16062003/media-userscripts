@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.21
+// @version      6.0.22
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -257,7 +257,10 @@ var SharedPlayer = (() => {
     audioPreferenceStore: () => audioPreferenceStore,
     bufferedAhead: () => bufferedAhead,
     childLoading: () => childLoading,
+    createSkipPreferences: () => createSkipPreferences,
     customPlayerControls: () => customPlayerControls,
+    detectHlsAdBreaks: () => detectHlsAdBreaks,
+    filmKeyFromContext: () => filmKeyFromContext,
     fullscreenController: () => fullscreenController,
     installGestures: () => installGestures,
     loadMetricsText: () => loadMetricsText,
@@ -271,6 +274,7 @@ var SharedPlayer = (() => {
     playerStartupGuard: () => playerStartupGuard,
     playerTracks: () => playerTracks,
     playerUIStyle: () => playerUIStyle,
+    readPlayerAdBreaks: () => readPlayerAdBreaks,
     selectPlayerTrack: () => selectPlayerTrack,
     validLoadMetrics: () => validLoadMetrics
   });
@@ -544,7 +548,7 @@ var SharedPlayer = (() => {
   .rp-player-shell .rp-lock{position:absolute;left:48px;top:50%;transform:translateY(-50%);width:48px;height:48px;padding:0;border-radius:50%;background:rgba(0,0,0,.12);border:.5px solid rgba(255,255,255,.35);color:#fff}.rp-player-shell .rp-lock svg{width:24px;height:24px}
   .rp-feedback-seek{position:absolute;top:40%;left:78%;transform:translate(-50%,-50%);pointer-events:none}.rp-feedback-seek svg{width:16px;height:16px}.rp-feedback-seek[data-side="right"] svg{animation:rp-nudge-right .35s ease-out}.rp-feedback-seek[data-side="left"] svg{animation:rp-nudge-left .35s ease-out}
   .rp-feedback-hold{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none}.rp-chevrons{display:flex}.rp-chevrons svg{width:9px;height:12px;fill:currentColor;stroke-width:0;margin-left:-1px;opacity:.3;animation:rp-run 1s ease-in-out infinite}.rp-chevrons svg:nth-child(2){animation-delay:.15s}.rp-chevrons svg:nth-child(3){animation-delay:.3s}
-  .rp-player-settings{position:absolute;bottom:64px;right:16px;z-index:2;width:200px;max-height:70%;overflow-y:auto;padding:4px 12px 10px;border:0;border-radius:2px;background:#1a1a1a;color:#fff;pointer-events:auto}.rp-player-settings-header{display:flex;align-items:center;justify-content:space-between;font-size:13px}.rp-player-speed-options{display:flex;flex-wrap:wrap;gap:4px}.rp-player-shell .rp-speed{padding:6px 10px;min-height:38px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:13px}.rp-player-shell .rp-speed[aria-pressed="true"]{background:#555}.rp-track-label{font-size:13px;margin:10px 0 4px}.rp-player-tracks .rp-speed{margin:2px}
+  .rp-player-settings{position:absolute;bottom:64px;right:16px;z-index:2;width:224px;max-height:70%;overflow-y:auto;padding:4px 12px 10px;border:0;border-radius:2px;background:#1a1a1a;color:#fff;pointer-events:auto}.rp-player-settings-header{display:flex;align-items:center;justify-content:space-between;font-size:13px}.rp-player-speed-options{display:flex;flex-wrap:wrap;gap:4px}.rp-player-shell .rp-speed{padding:6px 10px;min-height:38px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:13px}.rp-player-shell .rp-speed[aria-pressed="true"]{background:#555}.rp-track-label{font-size:13px;margin:10px 0 4px}.rp-player-tracks .rp-speed{margin:2px}.rp-skip-section{margin-top:10px;padding-top:8px;border-top:1px solid #ffffff24;display:flex;flex-direction:column;gap:6px}.rp-skip-row{display:flex;gap:4px}.rp-player-shell .rp-skip-btn{width:100%;text-align:left;padding:7px 10px;min-height:36px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:8px}.rp-player-shell .rp-skip-btn[aria-pressed="true"]{background:#2e6b40;color:#fff}.rp-player-shell .rp-skip-clear{flex:0 0 auto;width:auto;background:#552b2b}
   .rp-player-error{position:absolute;bottom:76px;left:12px;right:12px;padding:6px 10px;border-radius:4px;background:#151515ed;color:#fff;font-size:12px;pointer-events:none}
   .rp-player-shell[data-rp-chrome="false"] .rp-player-chrome,.rp-player-shell[data-rp-chrome="false"] .rp-center-play,.rp-player-shell[data-rp-chrome="false"][data-rp-locked="false"] .rp-lock,.rp-player-shell[data-rp-locked="true"] .rp-player-chrome,.rp-player-shell[data-rp-locked="true"] .rp-center-play{visibility:hidden;pointer-events:none}
   @keyframes rp-run{0%,100%{opacity:.3;transform:translateX(0)}35%{opacity:1;transform:translateX(2px)}}@keyframes rp-nudge-right{from{transform:translateX(-4px);opacity:.3}to{transform:none;opacity:1}}@keyframes rp-nudge-left{from{transform:translateX(4px);opacity:.3}to{transform:none;opacity:1}}
@@ -1272,6 +1276,178 @@ var SharedPlayer = (() => {
     } };
   }
 
+  // shared/player/ssai-breaks.js
+  var AD_SEGMENT_RE = /\/v\d+\/[0-9a-f]{32}\/segment_\d{3,5}\.ts(?:[?#]|$)/i;
+  function fragUrl(frag) {
+    const raw = frag?.url || frag?.relurl || "";
+    return typeof raw === "string" ? raw : "";
+  }
+  function fragDir(url) {
+    if (!url) return "";
+    const clean = url.split(/[?#]/)[0];
+    const idx = clean.lastIndexOf("/");
+    return idx >= 0 ? clean.slice(0, idx + 1) : "";
+  }
+  function isUnencrypted(frag) {
+    const d = frag?.decryptdata;
+    if (!d) return true;
+    if (d.method && d.method !== "NONE") return false;
+    return !d.uri;
+  }
+  function detectHlsAdBreaks(fragments) {
+    if (!Array.isArray(fragments) || fragments.length < 5) return [];
+    const runs = [];
+    let current = null;
+    for (const frag of fragments) {
+      if (!frag || !Number.isFinite(frag.start) || !Number.isFinite(frag.duration) || frag.duration <= 0) continue;
+      const cc = Number.isFinite(frag.cc) ? frag.cc : 0;
+      if (!current || current.cc !== cc) {
+        current = { cc, start: frag.start, end: frag.start + frag.duration, duration: frag.duration, frags: [frag] };
+        runs.push(current);
+      } else {
+        current.end = frag.start + frag.duration;
+        current.duration += frag.duration;
+        current.frags.push(frag);
+      }
+    }
+    if (runs.length < 3) return [];
+    const breaks = [];
+    for (let i = 1; i < runs.length - 1; i++) {
+      const prev = runs[i - 1], run = runs[i], next = runs[i + 1];
+      if (run.duration < 15 || run.duration > 60 || run.frags.length < 2) continue;
+      const prevDir = fragDir(fragUrl(prev.frags.at(-1))), nextDir = fragDir(fragUrl(next.frags[0]));
+      if (prevDir !== nextDir) continue;
+      const allAd = run.frags.every((f) => {
+        const u = fragUrl(f);
+        return AD_SEGMENT_RE.test(u) && fragDir(u) !== prevDir && isUnencrypted(f);
+      });
+      if (allAd) breaks.push({ start: run.start, end: run.end, duration: Math.round(run.duration), source: "hls" });
+    }
+    return breaks;
+  }
+  var breakCache = /* @__PURE__ */ new WeakMap();
+  function readPlayerAdBreaks(candidate) {
+    if (!candidate || !candidate.video || candidate.video.nodeType !== 1) return [];
+    let hls = null;
+    try {
+      hls = accessibleHls(candidate);
+    } catch {
+      return [];
+    }
+    const fragments = hls?.levels?.[hls.currentLevel]?.details?.fragments;
+    if (!Array.isArray(fragments) || !fragments.length) return [];
+    if (breakCache.has(fragments)) return breakCache.get(fragments);
+    const found = detectHlsAdBreaks(fragments);
+    breakCache.set(fragments, found);
+    return found;
+  }
+
+  // shared/player/skip-preferences.js
+  var KEY = "media.skip.prefs.v1";
+  var MAX_MARKS = 200;
+  function readRaw(win) {
+    try {
+      if (typeof GM_getValue === "function") {
+        const v = GM_getValue(KEY, null);
+        if (v) return typeof v === "string" ? JSON.parse(v) : v;
+      }
+    } catch {
+    }
+    try {
+      const v = win.localStorage?.getItem(KEY);
+      if (v) return JSON.parse(v);
+    } catch {
+    }
+    return null;
+  }
+  function writeRaw(win, data) {
+    const json = JSON.stringify(data);
+    try {
+      if (typeof GM_setValue === "function") {
+        GM_setValue(KEY, json);
+        return;
+      }
+    } catch {
+    }
+    try {
+      win.localStorage?.setItem(KEY, json);
+    } catch {
+    }
+  }
+  function normalizeData(raw) {
+    const out = { autoSkipIntro: false, autoSkipAd: false, adMarks: {} };
+    if (!raw || typeof raw !== "object") return out;
+    out.autoSkipIntro = raw.autoSkipIntro === true;
+    out.autoSkipAd = raw.autoSkipAd === true;
+    if (raw.adMarks && typeof raw.adMarks === "object" && !Array.isArray(raw.adMarks)) {
+      for (const [k, v] of Object.entries(raw.adMarks)) {
+        if (typeof k === "string" && k && v && Number.isFinite(v.start) && v.start >= 0 && Number.isFinite(v.duration) && v.duration >= 5 && v.duration <= 180) {
+          out.adMarks[k] = { start: Math.round(v.start), duration: Math.round(v.duration), updated: Number.isFinite(v.updated) ? v.updated : 0 };
+        }
+      }
+    }
+    return out;
+  }
+  function filmKeyFromContext(context) {
+    if (!context || typeof context !== "object") return "";
+    if (typeof context.movie === "string" && context.movie.trim()) return context.movie.trim().toLowerCase();
+    if (typeof context.film === "string" && context.film.trim()) return context.film.trim().toLowerCase();
+    if (typeof context.url === "string") {
+      try {
+        const p = new URL(context.url).pathname.replace(/\/+$/, "");
+        const m = p.match(/\/(?:xem-phim|phim-le|phim|tap-phim)\/([^/]+)/i);
+        if (m) return m[1].replace(/\.\d+$/, "").replace(/-tap-\d+.*$/i, "").toLowerCase();
+      } catch {
+      }
+    }
+    return "";
+  }
+  function createSkipPreferences(win) {
+    let data = normalizeData(readRaw(win));
+    const save = () => {
+      const entries = Object.entries(data.adMarks);
+      if (entries.length > MAX_MARKS) {
+        entries.sort((a, b) => (b[1].updated || 0) - (a[1].updated || 0));
+        data.adMarks = Object.fromEntries(entries.slice(0, MAX_MARKS));
+      }
+      writeRaw(win, data);
+    };
+    return {
+      get() {
+        const fresh = readRaw(win);
+        if (fresh) data = normalizeData(fresh);
+        return { autoSkipIntro: data.autoSkipIntro, autoSkipAd: data.autoSkipAd };
+      },
+      set(patch) {
+        if (typeof patch?.autoSkipIntro === "boolean") data.autoSkipIntro = patch.autoSkipIntro;
+        if (typeof patch?.autoSkipAd === "boolean") data.autoSkipAd = patch.autoSkipAd;
+        save();
+        return { autoSkipIntro: data.autoSkipIntro, autoSkipAd: data.autoSkipAd };
+      },
+      getAdMark(filmKey) {
+        if (!filmKey) return null;
+        const fresh = readRaw(win);
+        if (fresh) data = normalizeData(fresh);
+        return data.adMarks[filmKey] || null;
+      },
+      setAdMark(filmKey, start, end) {
+        if (!filmKey || !Number.isFinite(start) || !Number.isFinite(end)) return null;
+        const duration = Math.round(end - start);
+        if (start < 0 || duration < 5 || duration > 180) return null;
+        const mark = { start: Math.round(start), duration, updated: Date.now() };
+        data.adMarks[filmKey] = mark;
+        save();
+        return mark;
+      },
+      clearAdMark(filmKey) {
+        if (!filmKey || !data.adMarks[filmKey]) return false;
+        delete data.adMarks[filmKey];
+        save();
+        return true;
+      }
+    };
+  }
+
   // shared/player/custom-controls.js
   var fullscreenLocks = /* @__PURE__ */ new WeakMap();
   function fullscreenLockRecord(doc) {
@@ -1450,6 +1626,86 @@ var SharedPlayer = (() => {
     tracks.className = "rp-player-tracks";
     settings.append(tracks);
     let trackSignature = "";
+    const skipPrefs = createSkipPreferences(win);
+    let pendingAdStart = null, autoIntroKey = "", lastAutoAdKey = "", activeAdTarget = null;
+    const skipSection = doc.createElement("div");
+    skipSection.className = "rp-skip-section";
+    settings.append(skipSection);
+    const skipLabel = doc.createElement("div");
+    skipLabel.className = "rp-track-label";
+    skipLabel.textContent = "B\u1ECF qua t\u1EF1 \u0111\u1ED9ng";
+    skipSection.append(skipLabel);
+    const autoIntroBtn = doc.createElement("button");
+    autoIntroBtn.type = "button";
+    autoIntroBtn.className = "rp-skip-btn";
+    autoIntroBtn.dataset.rpSetting = "auto-intro";
+    autoIntroBtn.textContent = "T\u1EF1 b\u1ECF qua gi\u1EDBi thi\u1EC7u";
+    skipSection.append(autoIntroBtn);
+    const autoAdBtn = doc.createElement("button");
+    autoAdBtn.type = "button";
+    autoAdBtn.className = "rp-skip-btn";
+    autoAdBtn.dataset.rpSetting = "auto-ad";
+    autoAdBtn.textContent = "T\u1EF1 b\u1ECF qua QC video";
+    skipSection.append(autoAdBtn);
+    const markRow = doc.createElement("div");
+    markRow.className = "rp-skip-row";
+    skipSection.append(markRow);
+    const markAdBtn = doc.createElement("button");
+    markAdBtn.type = "button";
+    markAdBtn.className = "rp-skip-btn";
+    markAdBtn.dataset.rpAction = "mark-ad";
+    markAdBtn.textContent = "\u0110\xE1nh d\u1EA5u b\u1EAFt \u0111\u1EA7u QC";
+    markRow.append(markAdBtn);
+    const clearMarkBtn = doc.createElement("button");
+    clearMarkBtn.type = "button";
+    clearMarkBtn.className = "rp-skip-btn rp-skip-clear";
+    clearMarkBtn.dataset.rpAction = "clear-ad-mark";
+    clearMarkBtn.textContent = "X\xF3a";
+    clearMarkBtn.hidden = true;
+    markRow.append(clearMarkBtn);
+    autoIntroBtn.addEventListener("click", () => {
+      if (locked) return;
+      const next2 = !skipPrefs.get().autoSkipIntro;
+      skipPrefs.set({ autoSkipIntro: next2 });
+      show();
+      update();
+    });
+    autoAdBtn.addEventListener("click", () => {
+      if (locked) return;
+      const next2 = !skipPrefs.get().autoSkipAd;
+      skipPrefs.set({ autoSkipAd: next2 });
+      show();
+      update();
+    });
+    markAdBtn.addEventListener("click", () => {
+      if (locked || !player.state().ready) return;
+      const fk = filmKeyFromContext(context);
+      if (!fk) {
+        report("Ch\u01B0a x\xE1c \u0111\u1ECBnh \u0111\u01B0\u1EE3c phim \u0111\u1EC3 l\u01B0u m\u1ED1c QC.");
+        return;
+      }
+      const nowTime = player.state().time;
+      if (pendingAdStart === null) {
+        pendingAdStart = nowTime;
+        report("\u0110\xE3 \u0111\xE1nh d\u1EA5u b\u1EAFt \u0111\u1EA7u QC t\u1EA1i " + format(nowTime) + ". B\u1EA5m l\u1EA1i khi QC k\u1EBFt th\xFAc.");
+      } else {
+        const saved = skipPrefs.setAdMark(fk, pendingAdStart, nowTime);
+        pendingAdStart = null;
+        if (saved) report("\u0110\xE3 l\u01B0u m\u1ED1c QC (+" + saved.duration + "s) cho c\xE1c t\u1EADp sau.");
+        else report("Kho\u1EA3ng QC ph\u1EA3i t\u1EEB 5 gi\xE2y \u0111\u1EBFn 3 ph\xFAt.");
+      }
+      show();
+      update();
+    });
+    clearMarkBtn.addEventListener("click", () => {
+      if (locked) return;
+      pendingAdStart = null;
+      const fk = filmKeyFromContext(context);
+      if (fk) skipPrefs.clearAdMark(fk);
+      report("\u0110\xE3 x\xF3a m\u1ED1c QC c\u1EE7a phim n\xE0y.");
+      show();
+      update();
+    });
     const loadDetail = doc.createElement("div");
     loadDetail.className = "rp-load-detail";
     settings.append(loadDetail);
@@ -1605,7 +1861,13 @@ var SharedPlayer = (() => {
           show();
           break;
         case "context":
-          if (node.dataset.rpMode === "intro") {
+          if (node.dataset.rpMode === "ad-hls" && activeAdTarget?.source === "hls") {
+            command("seek", Math.min(activeAdTarget.end, player.state().duration));
+            report("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o");
+          } else if (node.dataset.rpMode === "ad-mark" && activeAdTarget?.source === "mark") {
+            command("seek", Math.min(player.state().time + activeAdTarget.duration, player.state().duration));
+            report("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (+" + activeAdTarget.duration + "s)");
+          } else if (node.dataset.rpMode === "intro") {
             if (options.onIntro) options.onIntro();
             else command("seek", Math.min(introEnd(), player.state().duration));
           } else beginNext(node);
@@ -1860,20 +2122,56 @@ var SharedPlayer = (() => {
         paintTime(state.time, state.duration);
       }
       for (const node of rates.children) attr(node, "aria-pressed", Number(node.dataset.rpRate) === state.rate);
-      const intro = state.ready && state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.ready && state.duration - state.time <= 180;
-      data(contextAction, "rpMode", nextPending?.node === contextAction || nextError?.node === contextAction ? "next" : intro ? "intro" : "next");
-      prop(contextAction, "hidden", !intro && !context || !(intro || nearEnd || nextPending?.node === contextAction || nextError?.node === contextAction));
+      const sp = skipPrefs.get(), fk = filmKeyFromContext(context), userMark = fk ? skipPrefs.getAdMark(fk) : null;
+      attr(autoIntroBtn, "aria-pressed", sp.autoSkipIntro);
+      prop(autoIntroBtn, "disabled", locked);
+      attr(autoAdBtn, "aria-pressed", sp.autoSkipAd);
+      prop(autoAdBtn, "disabled", locked);
+      prop(markAdBtn, "disabled", !state.ready || locked);
+      text(markAdBtn, pendingAdStart !== null ? "K\u1EBFt th\xFAc QC (t\u1EEB " + format(pendingAdStart) + ")" : userMark ? "\u0110\xE1nh d\u1EA5u l\u1EA1i QC (+" + userMark.duration + "s)" : "\u0110\xE1nh d\u1EA5u b\u1EAFt \u0111\u1EA7u QC");
+      prop(clearMarkBtn, "hidden", pendingAdStart === null && !userMark);
+      prop(clearMarkBtn, "disabled", locked);
+      const hlsBreaks = state.ready && !state.ad ? readPlayerAdBreaks(player) : [];
+      const hlsAd = hlsBreaks.find((b) => state.time >= b.start - 1 && state.time < b.end - 1) || null;
+      const markAd = !hlsAd && state.ready && !state.ad && userMark && state.time >= userMark.start - 30 && state.time <= userMark.start + Math.max(30, userMark.duration) ? { ...userMark, source: "mark" } : null;
+      activeAdTarget = hlsAd || markAd;
+      const epKey = context ? [context.url, context.episodeID, context.lane].join("|") : "";
+      if (state.ready && !state.ad && !state.paused && sp.autoSkipAd && hlsAd && state.time >= hlsAd.start) {
+        const adKey = epKey + "|" + Math.round(hlsAd.start);
+        if (adKey !== lastAutoAdKey) {
+          lastAutoAdKey = adKey;
+          if (command("seek", Math.min(hlsAd.end, state.duration))) report("\u0110\xE3 t\u1EF1 b\u1ECF qua qu\u1EA3ng c\xE1o (" + hlsAd.duration + "s)");
+        }
+      }
+      const intro = state.ready && !state.ad && state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.ready && state.duration - state.time <= 180;
+      if (intro && !state.paused && sp.autoSkipIntro && epKey && autoIntroKey !== epKey) {
+        autoIntroKey = epKey;
+        if (options.onIntro) options.onIntro();
+        else command("seek", Math.min(introEnd(), state.duration));
+        report("\u0110\xE3 t\u1EF1 b\u1ECF qua gi\u1EDBi thi\u1EC7u");
+      }
+      const ctxMode = nextPending?.node === contextAction || nextError?.node === contextAction ? "next" : hlsAd ? "ad-hls" : markAd ? "ad-mark" : intro ? "intro" : "next";
+      data(contextAction, "rpMode", ctxMode);
+      const showCtx = !!(hlsAd || markAd || intro || nearEnd && context || nextPending?.node === contextAction || nextError?.node === contextAction);
+      prop(contextAction, "hidden", !showCtx);
       data(line, "rpNextStatus", nextPending?.node === next || nextError?.node === next);
       for (const node of [contextAction, next]) {
         data(node, "rpStatus", nextPending?.node === node || nextError?.node === node);
-        prop(node, "disabled", !state.ready || locked && node !== contextAction || !context && !(node === contextAction && intro) || !!nextPending);
+        prop(node, "disabled", !state.ready || locked && node !== contextAction || !context && !(node === contextAction && (intro || hlsAd)) || !!nextPending);
         attr(node, "aria-busy", nextPending?.node === node);
         if (nextPending?.node === node) buttonText(node, "\u0110ang chuy\u1EC3n t\u1EADp\u2026");
         else if (nextError?.node === node) buttonText(node, nextError.text);
-        else if (node === contextAction) content(node, "context:" + intro, () => {
-          node.innerHTML = (intro ? "B\u1ECF qua gi\u1EDBi thi\u1EC7u" : "T\u1EADp ti\u1EBFp theo") + " " + playerIcon(intro ? "forward" : "next");
-        });
-        else icon(node, "next");
+        else if (node === contextAction) {
+          if (ctxMode === "ad-hls") content(node, "context:ad-hls", () => {
+            node.innerHTML = "B\u1ECF qua qu\u1EA3ng c\xE1o " + playerIcon("forward");
+          });
+          else if (ctxMode === "ad-mark") content(node, "context:ad-mark:" + markAd.duration, () => {
+            node.innerHTML = "B\u1ECF qua qu\u1EA3ng c\xE1o (+" + markAd.duration + "s) " + playerIcon("forward");
+          });
+          else content(node, "context:" + intro, () => {
+            node.innerHTML = (intro ? "B\u1ECF qua gi\u1EDBi thi\u1EC7u" : "T\u1EADp ti\u1EBFp theo") + " " + playerIcon(intro ? "forward" : "next");
+          });
+        } else icon(node, "next");
       }
       applyChrome();
       if (options.autoPlay && options.canAutoPlay?.() !== false && context && !autoPlayAttempted && state.ready && video.readyState >= 3 && !doc.hidden) {
@@ -1930,6 +2228,8 @@ var SharedPlayer = (() => {
         if (oldKey && oldKey !== key(value)) {
           nextPending = null;
           nextError = null;
+          pendingAdStart = null;
+          lastAutoAdKey = "";
           win.clearTimeout(nextTimer);
           cancelGestures();
           settings.hidden = true;
