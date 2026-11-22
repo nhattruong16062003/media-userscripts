@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.4.20
+// @version      0.4.21
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -33,9 +33,16 @@
 
   // rophim/lib/core.js
   var FRAME_ORIGINS = /* @__PURE__ */ new Set(["https://player.phimapi.com", "https://api.clubc.org", "https://dora.nobitayeuxuka.xyz", "https://api.rophim10.ink"]);
+  var ROPHIM_HOST = /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i;
   function isFrameURL(value) {
     const url = safeURL(value);
-    return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
+    if (!url) return false;
+    if (FRAME_ORIGINS.has(url.origin)) return url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname);
+    return ROPHIM_HOST.test(url.hostname) && /^\/embed\/\d+\/[1-9]\d*\/?$/.test(url.pathname);
+  }
+  function isFrameOrigin(value) {
+    const url = safeURL(value);
+    return !!url && (FRAME_ORIGINS.has(url.origin) || isFrameURL(value));
   }
   function safeURL(value, base) {
     if (typeof value !== "string" || !value.trim()) return null;
@@ -48,7 +55,7 @@
   }
   function isSiteOrigin(value) {
     const url = safeURL(value);
-    return !!url && !FRAME_ORIGINS.has(url.origin) && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
+    return !!url && !FRAME_ORIGINS.has(url.origin) && !isFrameURL(value) && ROPHIM_HOST.test(url.hostname);
   }
   var normalize = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
   var bounded = (value, max = 200) => String(value || "").slice(0, max);
@@ -89,7 +96,7 @@
   }
 
   // shared/bridge/ownership.js
-  function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin = () => false }, start) {
+  function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin: isFrameOrigin2 = () => false }, start) {
     const tag = "media-userscripts-owner-v1";
     let active = false, disposed = false, timer = 0, blankTimer = 0, blankTicks = 0;
     const challenge = Array.from(win.crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
@@ -150,7 +157,7 @@
       const data = event.data;
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
       const expectedParent = parentOrigin();
-      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
+      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin2(event.origin)) && (!expectedParent || expectedParent === event.origin);
       const frameReady = isFrameURL2(win.location.href);
       if (data.type === "probe" && !active && fromParent && frameReady) {
         ask();
@@ -381,13 +388,15 @@
   // rophim/lib/sites/next-basic.js
   function detectNextBasic(doc, candidate) {
     if (doc.querySelector(".player-frame-stable") && candidate.frame.classList.contains("player-frame-content")) return { kind: "next-basic", ...candidate };
+    if (Number.isFinite(candidate.episode?.order_index) && candidate.frame?.id === "embed-player") return { kind: "next-basic", ...candidate };
     return null;
   }
 
   // rophim/lib/sites/next-common.js
   function nextContext(site) {
     const { episode: e, movie: m, url } = site;
-    const season = e.season_number || m.latestEpisodes?.find((item) => item.id === e.id)?.season_number || m.partNumber || 1;
+    const latest = Array.isArray(m.latestEpisodes) ? m.latestEpisodes : [];
+    const season = e.season_number || latest.find((item) => item.id === e.id)?.season_number || m.partNumber || 1;
     return { source: site.kind, movie: bounded(m.slug), movieID: String(m.id), title: bounded(m.name), episode: bounded(e.name), episodeID: String(e.id), season: String(season), lane: bounded(e.server_type || e.server), server: bounded(e.server), url: url.origin + url.pathname, ...movieIdentity(m) };
   }
   function episodeNext(entries, current) {
@@ -455,7 +464,7 @@
     const pick = (value, keys) => value ? Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]])) : void 0;
     const episode = pick(site.episode, ["id", "slug", "name", "server", "server_type", "episode_order", "season_number", "type", "link"]);
     const movie = pick(site.movie, ["id", "slug", "name", "origin_name", "originalTitle", "publish_year", "year", "type", "imdb_id", "tmdb_id", "thumbnail", "poster", "partNumber"]);
-    if (movie) movie.latestEpisodes = site.movie.latestEpisodes?.filter((e) => e.id === site.episode.id).map((e) => ({ id: e.id, season_number: e.season_number }));
+    if (movie && Array.isArray(site.movie.latestEpisodes)) movie.latestEpisodes = site.movie.latestEpisodes.filter((e) => e.id === site.episode.id).map((e) => ({ id: e.id, season_number: e.season_number }));
     node.textContent = JSON.stringify({ href: site.url.origin + site.url.pathname, kind: site.kind, frameSrc: site.frame.src, episode, movie, preferences: site.preferences });
   }
   function readContext(site, doc) {
@@ -1359,7 +1368,7 @@
 
   // rophim/lib/bridge.js
   function validState(s) {
-    return s && ["jw", "art-native", "native-cdn"].includes(s.kind) && typeof s.ready === "boolean" && (s.initializable === void 0 || typeof s.initializable === "boolean") && (s.failed === void 0 || typeof s.failed === "boolean") && typeof s.ad === "boolean" && typeof s.played === "boolean" && typeof s.paused === "boolean" && typeof s.ended === "boolean" && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
+    return s && ["jw", "art-native", "native-cdn", "html5"].includes(s.kind) && typeof s.ready === "boolean" && (s.initializable === void 0 || typeof s.initializable === "boolean") && (s.failed === void 0 || typeof s.failed === "boolean") && typeof s.ad === "boolean" && typeof s.played === "boolean" && typeof s.paused === "boolean" && typeof s.ended === "boolean" && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
   }
   function acceptsPacket(event, session, channel) {
     const d = event.data;
@@ -1544,7 +1553,8 @@
         }
         diagnostic(win.document, feature, site.kind + "/" + (remote?.ready ? remote.kind : "ch\u1EDD player n\u1ED9i dung"));
       } else {
-        const candidate = playerCandidate(win, page);
+        const nativeContract = (video) => video.id === "video" && video.closest("#player-wrap")?.querySelector("#controls") ? video.closest("#player-wrap") : null;
+        const candidate = playerCandidate(win, page, { nativeContract });
         let source = "";
         try {
           source = candidate ? playerFingerprint(candidate) : "";
@@ -2241,5 +2251,5 @@
       }
     });
   }
-  runFamily(window, { family: "rophim", feature: "history", isSiteURL: isSiteOrigin, isFrameURL, isFrameOrigin: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin) }, () => startHistory(window, typeof unsafeWindow === "undefined" ? window : unsafeWindow));
+  runFamily(window, { family: "rophim", feature: "history", isSiteURL: isSiteOrigin, isFrameURL, isFrameOrigin }, () => startHistory(window, typeof unsafeWindow === "undefined" ? window : unsafeWindow));
 })();

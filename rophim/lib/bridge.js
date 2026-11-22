@@ -4,7 +4,7 @@ import {playerCandidate, attachPlayer, playerFingerprint} from './players.js';
 import {validLoadMetrics} from '../../shared/player/buffering.js';
 
 export function validState(s) {
-  return s && ['jw','art-native','native-cdn'].includes(s.kind) && typeof s.ready === 'boolean' && (s.initializable === undefined || typeof s.initializable === 'boolean') && (s.failed === undefined || typeof s.failed === 'boolean') && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
+  return s && ['jw','art-native','native-cdn','html5'].includes(s.kind) && typeof s.ready === 'boolean' && (s.initializable === undefined || typeof s.initializable === 'boolean') && (s.failed === undefined || typeof s.failed === 'boolean') && typeof s.ad === 'boolean' && typeof s.played === 'boolean' && typeof s.paused === 'boolean' && typeof s.ended === 'boolean' && finite(s.time) && s.time >= 0 && finite(s.duration) && s.duration >= 0 && s.time <= s.duration + 5 && finite(s.rate) && s.rate >= 0.25 && s.rate <= 4;
 }
 export function acceptsPacket(event, session, channel) {
   const d = event.data;
@@ -119,7 +119,8 @@ export function createBridge(win, page, feature, callbacks = {}) {
       if (session.seen && Date.now() - session.seen > 4000) {remote = null;controlsReady=false;media = '';emit();}
       diagnostic(win.document,feature,site.kind + '/' + (remote?.ready ? remote.kind : 'chờ player nội dung'));
     } else {
-      const candidate = playerCandidate(win,page);
+      const nativeContract=video=>video.id==='video' && video.closest('#player-wrap')?.querySelector('#controls')?video.closest('#player-wrap'):null;
+      const candidate = playerCandidate(win,page,{nativeContract});
       let source = '';
       try { source = candidate ? playerFingerprint(candidate) : ''; } catch { /* not ready */ }
       if (candidate?.video !== local?.video || candidate?.api !== local?.api || candidate?.kind !== local?.kind || source !== lastSource) {

@@ -1,4 +1,4 @@
-import {isSiteOrigin, FRAME_ORIGINS, safeURL, diagnostic, watchDOM} from './core.js';
+import {isSiteOrigin, FRAME_ORIGINS, isFrameURL, safeURL, diagnostic, watchDOM} from './core.js';
 import {sponsorDirectories} from './advertising-slots.js';
 
 // Advertising contracts are independent of site/player classification.
@@ -101,7 +101,7 @@ export function blockSyntheticSponsored(page) {
 }
 export function startAds(win,page) {
   const top=win.parent===win;
-  if(top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin))return;
+  if(top ? !isSiteOrigin(win.location.origin) : !isFrameURL(win.location.href))return;
   // This documented component-ad preference is harmless on source variants
   // without that contract, and takes effect before React mounts its listeners.
   const kill=()=>{

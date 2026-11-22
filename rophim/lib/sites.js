@@ -34,7 +34,7 @@ export function commitWatchSite(doc,site){
   const pick=(value,keys)=>value?Object.fromEntries(keys.filter(key=>Object.hasOwn(value,key)).map(key=>[key,value[key]])):undefined;
   const episode=pick(site.episode,['id','slug','name','server','server_type','episode_order','season_number','type','link']);
   const movie=pick(site.movie,['id','slug','name','origin_name','originalTitle','publish_year','year','type','imdb_id','tmdb_id','thumbnail','poster','partNumber']);
-  if(movie)movie.latestEpisodes=site.movie.latestEpisodes?.filter(e=>e.id===site.episode.id).map(e=>({id:e.id,season_number:e.season_number}));
+  if(movie && Array.isArray(site.movie.latestEpisodes))movie.latestEpisodes=site.movie.latestEpisodes.filter(e=>e.id===site.episode.id).map(e=>({id:e.id,season_number:e.season_number}));
   node.textContent=JSON.stringify({href:site.url.origin+site.url.pathname,kind:site.kind,frameSrc:site.frame.src,episode,movie,preferences:site.preferences});
 }
 export function readContext(site, doc) {

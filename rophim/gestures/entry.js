@@ -3,7 +3,7 @@ import {createBridge} from '../lib/bridge.js';
 import {customPlayerControls} from '../lib/custom-controls.js';
 import {watchNavigation} from '../lib/watch-navigation.js';
 import {playerStartupGuard} from '../lib/player-ui.js';
-import {FRAME_ORIGINS,isFrameURL,isSiteOrigin,safeURL} from '../lib/core.js';
+import {FRAME_ORIGINS,isFrameURL,isFrameOrigin,isSiteOrigin,safeURL} from '../lib/core.js';
 import {runFamily} from '../../shared/bridge/ownership.js';
 import {childLoading} from '../lib/player-loading.js';
 import {observeHlsOwners} from '../../shared/engines/hls-access.js';
@@ -19,8 +19,8 @@ function startGestures(win,page) {
     early.observe(win.document,{childList:true});return;
   }
   let mounted=null,site=null,context=null,bridge=null,frameFullscreen=false,lastSyncedLocked=false,endedKey='';
-  const releaseStartup=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?playerStartupGuard(win):()=>{};
-  const childGate=win.parent!==win && FRAME_ORIGINS.has(win.location.origin)?childLoading(win):null;
+  const releaseStartup=win.parent!==win && isFrameURL(win.location.href)?playerStartupGuard(win):()=>{};
+  const childGate=win.parent!==win && isFrameURL(win.location.href)?childLoading(win):null;
   const controlsReady=()=>!!context && !!mounted?.ui.shell.isConnected && !mounted.ui.shell.hidden && (mounted.player.state().ready || mounted.player.state().initializable===true) && !mounted.player.state().ad;
   const navigation=win.parent===win?watchNavigation(win,{page,onChange:()=>bridge?.refresh(),ownsPlayer:()=>bridge?.state()?.ready && !bridge.state().ad}):null;
   const unbind=()=>{mounted?.ui.dispose();mounted=null;lastSyncedLocked=false;};
@@ -76,4 +76,4 @@ function startGestures(win,page) {
   });
   win.addEventListener('pagehide',event=>{if(!event.persisted){bridge.dispose();navigation?.dispose();unbind();childGate?.dispose();releaseStartup();}});
 }
-runFamily(window,{family:'rophim',feature:'gestures',isSiteURL:isSiteOrigin,isFrameURL,isFrameOrigin:value=>FRAME_ORIGINS.has(safeURL(value)?.origin)},()=>startGestures(window, typeof unsafeWindow==='undefined' ? window : unsafeWindow));
+runFamily(window,{family:'rophim',feature:'gestures',isSiteURL:isSiteOrigin,isFrameURL,isFrameOrigin},()=>startGestures(window, typeof unsafeWindow==='undefined' ? window : unsafeWindow));

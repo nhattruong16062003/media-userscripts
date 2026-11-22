@@ -2,7 +2,8 @@ import {safeURL,bounded} from '../core.js';
 import {movieIdentity,laneKey} from '../identity.js';
 export function nextContext(site){
       const {episode:e, movie:m, url} = site;
-      const season = e.season_number || m.latestEpisodes?.find(item=>item.id===e.id)?.season_number || m.partNumber || 1;
+      const latest = Array.isArray(m.latestEpisodes) ? m.latestEpisodes : [];
+      const season = e.season_number || latest.find(item=>item.id===e.id)?.season_number || m.partNumber || 1;
       return {source:site.kind, movie:bounded(m.slug), movieID:String(m.id), title:bounded(m.name), episode:bounded(e.name), episodeID:String(e.id), season:String(season), lane:bounded(e.server_type || e.server), server:bounded(e.server), url:url.origin+url.pathname,...movieIdentity(m)};
 }
 export function episodeNext(entries, current) {

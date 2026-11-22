@@ -83,7 +83,7 @@ export function watchNavigation(win,{page,onChange=()=>{},ownsPlayer=()=>false}=
   const nativeNext=event=>{
     if(event.data?.type!=='CHANGE_EPISODE' || !ownsPlayer())return;
     const site=detectSite(doc,win.location.href,page),origin=safeURL(site?.frame?.src)?.origin;
-    if(!site || !FRAME_ORIGINS.has(origin) || event.origin!==origin || event.source!==site.frame.contentWindow)return;
+    if(!site || !isFrameURL(site?.frame?.src) || event.origin!==origin || event.source!==site.frame.contentWindow)return;
     event.stopImmediatePropagation();
   };
   win.addEventListener('message',nativeNext,true);

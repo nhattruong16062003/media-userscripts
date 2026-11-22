@@ -1,14 +1,22 @@
 import {playerUIStyle} from './player-ui.js';
+import {isFrameURL} from './core.js';
 import {loadingPanel} from '../../shared/player/loading.js';
 export {loadingPanel,childLoading} from '../../shared/player/loading.js';
 
 // This guard is installed before the site descriptor/RSC arrives. CSS masks
-// the iframe in the first render, while the observer supplies our loading UI.
+// only permitted player iframes; unrecognized frames stay visible so playback
+// is never trapped behind an infinite spinner.
 export function frameLoading(win){
   const doc=win.document,selector='.player-ratio iframe#embed-player,iframe#player.player-iframe',records=new Map();let disposed=false;
   playerUIStyle(doc);doc.documentElement.dataset.rpFrameGuard='1';
   function prepare(frame,force=false){
     if(disposed || !frame?.isConnected)return null;
+    if(!isFrameURL(frame.src)){
+      const existing=records.get(frame);
+      if(existing){existing.panel?.dispose();existing.panel=null;existing.src=frame.src;existing.awaitingLoad=false;}
+      delete frame.dataset.rpDisplay;
+      return null;
+    }
     let record=records.get(frame);
     if(!record){record={src:null,panel:null,awaitingLoad:false,loaded:()=>{prepare(frame,true);record.awaitingLoad=false;}};records.set(frame,record);frame.addEventListener('load',record.loaded);}
     if(force || record.src!==frame.src || record.host!==frame.parentElement){

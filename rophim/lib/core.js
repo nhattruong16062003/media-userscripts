@@ -1,8 +1,15 @@
 // Permission boundaries only. Website names may change; source contracts select adapters.
 export const FRAME_ORIGINS = new Set(['https://player.phimapi.com', 'https://api.clubc.org', 'https://dora.nobitayeuxuka.xyz', 'https://api.rophim10.ink']);
+const ROPHIM_HOST = /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i;
 export function isFrameURL(value) {
   const url=safeURL(value);
-  return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin!=='https://api.rophim10.ink' || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
+  if (!url) return false;
+  if (FRAME_ORIGINS.has(url.origin)) return url.origin!=='https://api.rophim10.ink' || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname);
+  return ROPHIM_HOST.test(url.hostname) && /^\/embed\/\d+\/[1-9]\d*\/?$/.test(url.pathname);
+}
+export function isFrameOrigin(value) {
+  const url=safeURL(value);
+  return !!url && (FRAME_ORIGINS.has(url.origin) || isFrameURL(value));
 }
 export function safeURL(value, base) {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -10,7 +17,7 @@ export function safeURL(value, base) {
 }
 export function isSiteOrigin(value) {
   const url=safeURL(value);
-  return !!url && !FRAME_ORIGINS.has(url.origin) && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
+  return !!url && !FRAME_ORIGINS.has(url.origin) && !isFrameURL(value) && ROPHIM_HOST.test(url.hostname);
 }
 export const normalize = value => String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 export const bounded = (value, max = 200) => String(value || '').slice(0, max);

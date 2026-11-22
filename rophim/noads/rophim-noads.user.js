@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Chặn quảng cáo
 // @namespace    rophim-userscripts.local
-// @version      0.4.20
+// @version      0.4.21
 // @author       zic
 // @description  Chặn quảng cáo cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -20,9 +20,16 @@
 (() => {
   // rophim/lib/core.js
   var FRAME_ORIGINS = /* @__PURE__ */ new Set(["https://player.phimapi.com", "https://api.clubc.org", "https://dora.nobitayeuxuka.xyz", "https://api.rophim10.ink"]);
+  var ROPHIM_HOST = /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i;
   function isFrameURL(value) {
     const url = safeURL(value);
-    return !!url && FRAME_ORIGINS.has(url.origin) && (url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname));
+    if (!url) return false;
+    if (FRAME_ORIGINS.has(url.origin)) return url.origin !== "https://api.rophim10.ink" || /^\/embed\/[1-9]\d*\/?$/.test(url.pathname);
+    return ROPHIM_HOST.test(url.hostname) && /^\/embed\/\d+\/[1-9]\d*\/?$/.test(url.pathname);
+  }
+  function isFrameOrigin(value) {
+    const url = safeURL(value);
+    return !!url && (FRAME_ORIGINS.has(url.origin) || isFrameURL(value));
   }
   function safeURL(value, base) {
     if (typeof value !== "string" || !value.trim()) return null;
@@ -35,7 +42,7 @@
   }
   function isSiteOrigin(value) {
     const url = safeURL(value);
-    return !!url && !FRAME_ORIGINS.has(url.origin) && /(^|\.)[a-z\d-]*rophim[a-z\d-]*(?:\.[a-z\d-]+)+$/i.test(url.hostname);
+    return !!url && !FRAME_ORIGINS.has(url.origin) && !isFrameURL(value) && ROPHIM_HOST.test(url.hostname);
   }
   var normalize = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
   var bounded = (value, max = 200) => String(value || "").slice(0, max);
@@ -211,7 +218,7 @@
   }
   function startAds(win, page) {
     const top = win.parent === win;
-    if (top ? !isSiteOrigin(win.location.origin) : !FRAME_ORIGINS.has(win.location.origin)) return;
+    if (top ? !isSiteOrigin(win.location.origin) : !isFrameURL(win.location.href)) return;
     const kill = () => {
       try {
         win.sessionStorage.setItem("rophim-hide-all-ads", "1");
@@ -238,7 +245,7 @@
   }
 
   // shared/bridge/ownership.js
-  function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin = () => false }, start) {
+  function runFamily(win, { family, feature, isSiteURL, isFrameURL: isFrameURL2, isFrameOrigin: isFrameOrigin2 = () => false }, start) {
     const tag = "media-userscripts-owner-v1";
     let active = false, disposed = false, timer = 0, blankTimer = 0, blankTicks = 0;
     const challenge = Array.from(win.crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16).padStart(8, "0")).join("");
@@ -299,7 +306,7 @@
       const data = event.data;
       if (disposed || data?.tag !== tag || data.family !== family || data.feature !== feature) return;
       const expectedParent = parentOrigin();
-      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin(event.origin)) && (!expectedParent || expectedParent === event.origin);
+      const fromParent = win.parent !== win && event.source === win.parent && (isSiteURL(event.origin) || isFrameOrigin2(event.origin)) && (!expectedParent || expectedParent === event.origin);
       const frameReady = isFrameURL2(win.location.href);
       if (data.type === "probe" && !active && fromParent && frameReady) {
         ask();
@@ -791,7 +798,7 @@
   }
 
   // rophim/noads/entry.js
-  runFamily(window, { family: "rophim", feature: "noads", isSiteURL: isSiteOrigin, isFrameURL, isFrameOrigin: (value) => FRAME_ORIGINS.has(safeURL(value)?.origin) }, () => {
+  runFamily(window, { family: "rophim", feature: "noads", isSiteURL: isSiteOrigin, isFrameURL, isFrameOrigin }, () => {
     const page = typeof unsafeWindow === "undefined" ? window : unsafeWindow;
     installNavigationGuard(window, page, { isMediaFrame: (frame) => isFrameURL(frame.src) });
     startAds(window, page);
