@@ -160,8 +160,9 @@ function startMotchillPlayerController(sites) {
   const style = document.createElement('style');
   style.dataset.mcPlayerStyle = '2';
   style.textContent = `
-    .mc-shell{position:relative!important;isolation:isolate;background:#000;min-height:180px;aspect-ratio:16/9;width:100%;overflow:hidden}
-    .mc-shell:fullscreen{width:100vw!important;height:100vh!important;aspect-ratio:auto}
+    .mc-shell{position:relative!important;isolation:isolate;background:#000;min-height:180px;aspect-ratio:16/9;width:100%;overflow:hidden;box-sizing:border-box!important}
+    .mc-shell:fullscreen{width:100vw!important;height:100vh!important;min-height:0!important;max-width:none!important;max-height:none!important;padding:0!important;margin:0!important;border:0!important;aspect-ratio:auto!important;box-sizing:border-box!important}
+    .mc-shell:fullscreen::before,.mc-shell:fullscreen::after{display:none!important;content:none!important;padding:0!important}
     .mc-shell:not(.mc-shell-page)>.mc-media-host,.mc-player-stage>iframe[data-mc-managed]{width:100%!important;height:100%!important;position:absolute!important;inset:0!important;border:0!important}
     .mc-shell video{max-width:100%;max-height:100%}
     .mc-shell,.jwplayer,#player-wrap,.plyr,.video-js,.art-video-player{touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
