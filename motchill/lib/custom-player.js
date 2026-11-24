@@ -12,7 +12,7 @@ function createMotchillCustomPlayer(sites,bridge,hooks){
   const mobile=()=>window.matchMedia?.('(pointer: coarse)').matches===true || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const persistentProvider=()=>window.top!==window && mobile() && !!enhancementRoot() && candidate()?.kind==='jw' && typeof candidate()?.api.load==='function';
   const presentationRoot=found=>found?SharedPlayer.mediaPresentationRoot(window,found.video,enhancementRoot() || found.root || document.body):null;
-  const localPresentation=()=>{if(window.top===window || !mobile())return false;const found=candidate();return !!found && !!presentationRoot(found);};
+  const localPresentation=()=>{if(window.top===window || !mobile() || bridge.managed)return false;const found=candidate();return !!found && !!presentationRoot(found);};
   const waiting=new Map();
   let storage;try{storage=window.localStorage;}catch{/* storage disabled */}
   const audioPreferences=SharedPlayer.audioPreferenceStore(storage,'media-userscripts:motchill:audio:v1');

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - lịch sử xem
 // @namespace    motchill-history
-// @version      6.0.24
+// @version      6.0.25
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/history/motchill-history.user.js

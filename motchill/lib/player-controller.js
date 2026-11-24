@@ -148,7 +148,7 @@ function startMotchillPlayerController(sites) {
   const getDocument = () => {
     try { return currentFrame?.contentDocument || document; } catch (_) { return document; }
   };
-  const getPage = () => currentFrame ? bridge.getFrame(currentFrame)?.state?.page || currentPage : sites.adapter().read() || bridge.state()?.page || bridge.parentContext;
+  const getPage = () => currentFrame ? bridge.getFrame(currentFrame)?.state?.page || currentPage : (currentPage && currentPage.url === location.href ? currentPage : sites.adapter().read() || bridge.state()?.page || bridge.parentContext);
   learning = createMotchillPlayerLearning(sites, getPage, { isCurrent: () => bridge.role !== 'prepared' });
   customUI=typeof createMotchillCustomPlayer==='function'?createMotchillCustomPlayer(sites,bridge,{
     onNativeIntro:video=>learning.skipIntro(video,contextKey()),introSeconds:()=>learning.introEnd(),onIntro:()=>learning.skipIntro(media,contextKey()),
@@ -573,6 +573,10 @@ function startMotchillPlayerController(sites) {
     document.dispatchEvent(new CustomEvent('mc-player-controls-updated', { detail: page }));
   }
   function validateCandidate(candidate) {
+    if (candidate?.directJw) {
+      if (!shell?.isConnected || !media?.isConnected || typeof candidate.jwApi?.load !== 'function') throw new Error('Khung phát trực tiếp đã thay đổi');
+      return { managed: true, page: candidate.page };
+    }
     const current = candidate?.frame.isConnected && bridge.getFrame(candidate.frame);
     const state = current?.state;
     if (!current || current !== candidate.remote || !state?.managed || !state.page
@@ -597,16 +601,46 @@ function startMotchillPlayerController(sites) {
       if (!shell?.isConnected) throw new Error('Khung phát đã thay đổi');
       // Cache-busting chỉ trang tập để lấy token nguồn mới; không sửa token stream.
       if (fresh) url.searchParams.set('_mc_refresh', String(Date.now()));
-      const frame = document.createElement('iframe');
-      frame.dataset.mcManaged = 'episode'; frame.dataset.mcRole = 'prepared'; frame.dataset.mcStartZero = '1';
-      frame.className = 'mc-prepared'; frame.title = 'Chuẩn bị tập tiếp theo';
-      frame.allow = 'autoplay; fullscreen; picture-in-picture'; frame.allowFullscreen = true;
-      frame.src = url.href; stage.append(frame);
       const sourcePage = activePage();
       const requested = { ...sourcePage, ...target };
       const changingLanguage = target.language && sourcePage.language && target.language !== sourcePage.language;
       const preferredServer = target.serverKey || (changingLanguage ? '' : selectedServerKey
         || players.chosenServer(getDocument(), sites.detect(getDocument(), sourcePage.url), media)?.key) || '';
+      // Fast in-place JW playlist swap for direct same-origin m3u8 pages (e.g. ophim-classic/ophim):
+      // avoids hidden iframe Turnstile blocks, keeps the exact <video> and fullscreenElement intact.
+      if (!currentFrame && !media?.frame && typeof fetch === 'function') {
+        const jwRoot = media?.closest?.('.jwplayer');
+        let jwApi = null;
+        try { jwApi = jwRoot?.id && typeof jwplayer === 'function' ? jwplayer(jwRoot.id) : null; } catch (_) {}
+        if (jwApi && typeof jwApi.load === 'function') {
+          try {
+            const res = await fetch(url.href, { credentials: 'same-origin', signal });
+            if (res.ok) {
+              const html = await res.text();
+              if (html && html.length <= 2_500_000) {
+                const parsed = new DOMParser().parseFromString(html, 'text/html');
+                const nextFamily = sites.detect(parsed, url.href);
+                const nextPage = sites.read(parsed, url.href);
+                if (nextPage && sites.sameEpisode(requested, nextPage)) {
+                  const choices = players.serverChoices(parsed, nextFamily);
+                  const match = preferredServer
+                    ? choices.find((c) => c.key === preferredServer)
+                    : (choices.find((c) => c.selected) || choices[0]);
+                  const file = match?.source || '';
+                  if (match && (match.kind === 'm3u8' || /\.m3u8(?:[?#]|$)/i.test(file)) && /^https:\/\//i.test(file)) {
+                    return { directJw: true, jwApi, file, parsedDoc: parsed, target, page: nextPage, preferredServer: match.key || preferredServer, activated: false, prevFile: '' };
+                  }
+                }
+              }
+            }
+          } catch (e) { if (e?.name === 'AbortError') throw e; /* fall back to managed iframe */ }
+        }
+      }
+      const frame = document.createElement('iframe');
+      frame.dataset.mcManaged = 'episode'; frame.dataset.mcRole = 'prepared'; frame.dataset.mcStartZero = '1';
+      frame.className = 'mc-prepared'; frame.title = 'Chuẩn bị tập tiếp theo';
+      frame.allow = 'autoplay; fullscreen; picture-in-picture'; frame.allowFullscreen = true;
+      frame.src = url.href; stage.append(frame);
       const candidate = { frame, target, remote: null, page: null, activated: false, preferredServer, serverApplied: !preferredServer,
         serverFrom: null, serverExpectedSource: '', serverExpectedKind: '' };
       const abort = () => { if (!candidate.activated) frame.remove(); };
@@ -662,6 +696,29 @@ function startMotchillPlayerController(sites) {
     activate: async (candidate, _target, { signal }) => {
       validateCandidate(candidate);
       rollbackMedia = media; rollbackMuted = !!media?.muted; rollbackPaused = media?.paused !== false;
+      if (candidate.directJw) {
+        try { candidate.prevFile = candidate.jwApi.getPlaylistItem?.()?.file || ''; } catch (_) {}
+        candidate.jwApi.load([{ file: candidate.file }]);
+        await wait(() => {
+          validateCandidate(candidate);
+          const curFile = candidate.jwApi.getPlaylistItem?.()?.file || '';
+          return curFile === candidate.file && media.readyState >= 1 && Number.isFinite(media.duration) && media.duration > 0;
+        }, signal);
+        let resumedTo = 0;
+        const resume = candidate.target.resume;
+        if (['translation', 'server'].includes(candidate.target.intent) && resume && Number.isFinite(resume.position) && resume.position > 0 && Number.isFinite(resume.duration)
+          && Math.abs(media.duration - resume.duration) <= Math.max(30, media.duration * .03)) {
+          resumedTo = Math.min(resume.position, Math.max(0, media.duration - 1));
+        }
+        try { candidate.jwApi.seek?.(resumedTo); } catch (_) { media.currentTime = resumedTo; }
+        try { candidate.jwApi.setMute?.(rollbackMuted); } catch (_) { media.muted = rollbackMuted; }
+        if (['server', 'translation'].includes(candidate.target.intent) && rollbackPaused) {
+          try { candidate.jwApi.pause?.(true); } catch (_) { media.pause?.(); }
+        } else {
+          try { candidate.jwApi.play?.(true)?.catch?.(() => {}); } catch (_) { media.play?.()?.catch?.(() => {}); }
+        }
+        return { playing: true, startedAt: resumedTo, resumedTo };
+      }
       bridge.setRole(candidate.frame, 'current');
       candidate.remote.command('start-zero');
       await wait(() => {
@@ -684,6 +741,20 @@ function startMotchillPlayerController(sites) {
     commit: (candidate, target, _result, operation) => {
       if (operation?.signal?.aborted || operation?.isCurrent && !operation.isCurrent()) throw Object.assign(new Error('Tác vụ đã thay đổi'), { name: 'AbortError' });
       validateCandidate(candidate);
+      if (candidate.directJw) {
+        candidate.activated = true;
+        currentPage = { ...candidate.page, url: target.url };
+        selectedServerKey = candidate.preferredServer;
+        lastActionKey = ''; action.hidden = true; action.dataset.action = ''; action.textContent = '';
+        History.prototype.pushState.call(history, { ...history.state, mcEpisode: true }, '', target.url);
+        document.title = currentPage.title + ' · ' + currentPage.episode;
+        document.dispatchEvent(new CustomEvent('mc-episode-changed', { detail: currentPage }));
+        syncOuterControls(candidate.parsedDoc, currentPage);
+        rollbackMedia = null;
+        transitionTarget = null; autoSuppressed = false;
+        bridge.poll();
+        return;
+      }
       const previous = currentFrame;
       document.dispatchEvent(new Event('mc-before-server-change'));
       if (rollbackMedia) rollbackMedia.pause?.();
@@ -718,7 +789,10 @@ function startMotchillPlayerController(sites) {
       transitionTarget = null; autoSuppressed = false;
       bridge.poll();
     },
-    rollback: () => {
+    rollback: (candidate) => {
+      if (candidate?.directJw && candidate.prevFile && typeof candidate.jwApi?.load === 'function') {
+        try { candidate.jwApi.load([{ file: candidate.prevFile }]); } catch (_) {}
+      }
       if (rollbackMedia) { rollbackMedia.muted = rollbackMuted; if (!rollbackPaused) rollbackMedia.play()?.catch(() => {}); }
       rollbackMedia = null;
     },

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - mở bản trực tiếp
 // @namespace    motchill-source
-// @version      6.0.24
+// @version      6.0.25
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/source/motchill-source.user.js
