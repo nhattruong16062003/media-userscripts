@@ -2,14 +2,20 @@ const KEY='media.skip.prefs.v1';
 const MAX_MARKS=200;
 
 function readRaw(win){
-  try{if(typeof GM_getValue==='function'){const v=GM_getValue(KEY,null);if(v)return typeof v==='string'?JSON.parse(v):v;}}catch{/* unavailable */}
-  try{const v=win.localStorage?.getItem(KEY);if(v)return JSON.parse(v);}catch{/* blocked storage */}
+  for(const gm of [typeof GM_getValue==='function'?GM_getValue:null,win?.GM_getValue]){
+    try{if(typeof gm==='function'){const v=gm(KEY,null);if(v)return typeof v==='string'?JSON.parse(v):v;}}catch{/* unavailable */}
+  }
+  try{const v=win?.localStorage?.getItem(KEY);if(v)return JSON.parse(v);}catch{/* blocked storage */}
   return null;
 }
 function writeRaw(win,data){
   const json=JSON.stringify(data);
-  try{if(typeof GM_setValue==='function'){GM_setValue(KEY,json);return;}}catch{/* unavailable */}
-  try{win.localStorage?.setItem(KEY,json);}catch{/* blocked storage */}
+  let wroteGm=false;
+  for(const gm of [typeof GM_setValue==='function'?GM_setValue:null,win?.GM_setValue]){
+    try{if(typeof gm==='function'){gm(KEY,json);wroteGm=true;break;}}catch{/* unavailable */}
+  }
+  try{win?.localStorage?.setItem(KEY,json);}catch{/* blocked storage */}
+  return wroteGm;
 }
 function normalizeData(raw){
   const out={autoSkipIntro:false,autoSkipAd:false,adMarks:{}};

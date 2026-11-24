@@ -427,7 +427,11 @@ function startMotchillPlayerController(sites) {
     // Reparenting a loaded iframe recreates its browsing context. Adopt its
     // existing wrapper (or JW root) so current playback and bridge nonce survive.
     if (host.matches?.('.jwplayer,.art-video-player') || host.tagName === 'IFRAME' || host.querySelector?.('iframe')) {
-      shell = host.matches?.('.jwplayer,.art-video-player') ? host : host.parentElement;
+      const outerWrapper = host.matches?.('.jwplayer,.art-video-player')
+        && host.parentElement && !/^(HTML|BODY|MAIN)$/.test(host.parentElement.tagName)
+        && host.parentElement.matches?.('#player,#player-wrapper,#dooplay_player_response,.embed-responsive,.player-ratio,.player-box,.player-wrapper')
+        ? host.parentElement : null;
+      shell = outerWrapper || (host.matches?.('.jwplayer,.art-video-player') ? host : host.parentElement);
       shell.classList.add('mc-shell');
       baseHost = host === shell ? null : host;
       // A bare iframe can live beside episode links/servers in main/body. Keep

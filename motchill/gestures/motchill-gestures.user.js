@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Motchill - thao tác trình phát
 // @namespace    motchill-gestures
-// @version      6.0.22
+// @version      6.0.23
 // @author       zic
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/motchill
 // @updateURL    https://raw.githubusercontent.com/nhattruong16062003/media-userscripts/refs/heads/main/motchill/gestures/motchill-gestures.user.js
@@ -548,13 +548,14 @@ var SharedPlayer = (() => {
   .rp-player-shell .rp-lock{position:absolute;left:48px;top:50%;transform:translateY(-50%);width:48px;height:48px;padding:0;border-radius:50%;background:rgba(0,0,0,.12);border:.5px solid rgba(255,255,255,.35);color:#fff}.rp-player-shell .rp-lock svg{width:24px;height:24px}
   .rp-feedback-seek{position:absolute;top:40%;left:78%;transform:translate(-50%,-50%);pointer-events:none}.rp-feedback-seek svg{width:16px;height:16px}.rp-feedback-seek[data-side="right"] svg{animation:rp-nudge-right .35s ease-out}.rp-feedback-seek[data-side="left"] svg{animation:rp-nudge-left .35s ease-out}
   .rp-feedback-hold{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none}.rp-chevrons{display:flex}.rp-chevrons svg{width:9px;height:12px;fill:currentColor;stroke-width:0;margin-left:-1px;opacity:.3;animation:rp-run 1s ease-in-out infinite}.rp-chevrons svg:nth-child(2){animation-delay:.15s}.rp-chevrons svg:nth-child(3){animation-delay:.3s}
+  .rp-feedback-notice{position:absolute;left:50%;top:12%;transform:translate(-50%,-50%);pointer-events:none;max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis;animation:rp-notice-in .2s ease-out}.rp-feedback-notice svg{width:15px;height:15px;flex:0 0 auto}
   .rp-player-settings{position:absolute;bottom:64px;right:16px;z-index:2;width:224px;max-height:70%;overflow-y:auto;padding:4px 12px 10px;border:0;border-radius:2px;background:#1a1a1a;color:#fff;pointer-events:auto}.rp-player-settings-header{display:flex;align-items:center;justify-content:space-between;font-size:13px}.rp-player-speed-options{display:flex;flex-wrap:wrap;gap:4px}.rp-player-shell .rp-speed{padding:6px 10px;min-height:38px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:13px}.rp-player-shell .rp-speed[aria-pressed="true"]{background:#555}.rp-track-label{font-size:13px;margin:10px 0 4px}.rp-player-tracks .rp-speed{margin:2px}.rp-skip-section{margin-top:10px;padding-top:8px;border-top:1px solid #ffffff24;display:flex;flex-direction:column;gap:6px}.rp-skip-row{display:flex;gap:4px}.rp-player-shell .rp-skip-btn{width:100%;text-align:left;padding:7px 10px;min-height:36px;border:0;border-radius:2px;background:#303030;color:#eee;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:8px}.rp-player-shell .rp-skip-btn[aria-pressed="true"]{background:#2e6b40;color:#fff}.rp-player-shell .rp-skip-clear{flex:0 0 auto;width:auto;background:#552b2b}
   .rp-player-error{position:absolute;bottom:76px;left:12px;right:12px;padding:6px 10px;border-radius:4px;background:#151515ed;color:#fff;font-size:12px;pointer-events:none}
   .rp-player-shell[data-rp-chrome="false"] .rp-player-chrome,.rp-player-shell[data-rp-chrome="false"] .rp-center-play,.rp-player-shell[data-rp-chrome="false"][data-rp-locked="false"] .rp-lock,.rp-player-shell[data-rp-locked="true"] .rp-player-chrome,.rp-player-shell[data-rp-locked="true"] .rp-center-play{visibility:hidden;pointer-events:none}
-  @keyframes rp-run{0%,100%{opacity:.3;transform:translateX(0)}35%{opacity:1;transform:translateX(2px)}}@keyframes rp-nudge-right{from{transform:translateX(-4px);opacity:.3}to{transform:none;opacity:1}}@keyframes rp-nudge-left{from{transform:translateX(4px);opacity:.3}to{transform:none;opacity:1}}
+  @keyframes rp-run{0%,100%{opacity:.3;transform:translateX(0)}35%{opacity:1;transform:translateX(2px)}}@keyframes rp-nudge-right{from{transform:translateX(-4px);opacity:.3}to{transform:none;opacity:1}}@keyframes rp-nudge-left{from{transform:translateX(4px);opacity:.3}to{transform:none;opacity:1}}@keyframes rp-notice-in{from{opacity:0;transform:translate(-50%,-62%)}to{opacity:1;transform:translate(-50%,-50%)}}
   @media(max-width:480px){.rp-player-shell .rp-lock{left:24px}.rp-player-chrome{padding:8px 8px 0}.rp-player-shell .rp-icon:not(.rp-center-play):not(.rp-lock){min-width:36px;padding:6px}.rp-player-time{font-size:11px}.rp-player-line[data-rp-next-status="true"] .rp-player-time{display:none}.rp-player-shell .rp-pill{font-size:13px}}
   @media(pointer:coarse){.rp-player-shell .rp-icon{min-width:44px;min-height:44px}.rp-player-timeline{height:24px}.rp-context-action{bottom:96px;min-height:38px}.rp-player-settings{bottom:74px}}
-  @media(prefers-reduced-motion:reduce){.rp-chevrons svg,.rp-feedback-seek svg{animation:none;opacity:1}}
+  @media(prefers-reduced-motion:reduce){.rp-chevrons svg,.rp-feedback-seek svg,.rp-feedback-notice{animation:none;opacity:1}}
   `;
     (doc.head || doc.documentElement).append(style);
   }
@@ -1004,6 +1005,72 @@ var SharedPlayer = (() => {
     return Math.max(...samples.map((s) => s.bytes * 8 / s.duration));
   }
 
+  // shared/player/ssai-breaks.js
+  var AD_SEGMENT_RE = /\/v\d+\/[0-9a-f]{32}\/segment_\d{3,5}\.ts(?:[?#]|$)/i;
+  function fragUrl(frag) {
+    const raw = frag?.url || frag?.relurl || "";
+    return typeof raw === "string" ? raw : "";
+  }
+  function fragDir(url) {
+    if (!url) return "";
+    const clean = url.split(/[?#]/)[0];
+    const idx = clean.lastIndexOf("/");
+    return idx >= 0 ? clean.slice(0, idx + 1) : "";
+  }
+  function isUnencrypted(frag) {
+    const d = frag?.decryptdata;
+    if (!d) return true;
+    if (d.method && d.method !== "NONE") return false;
+    return !d.uri;
+  }
+  function detectHlsAdBreaks(fragments) {
+    if (!Array.isArray(fragments) || fragments.length < 5) return [];
+    const runs = [];
+    let current = null;
+    for (const frag of fragments) {
+      if (!frag || !Number.isFinite(frag.start) || !Number.isFinite(frag.duration) || frag.duration <= 0) continue;
+      const cc = Number.isFinite(frag.cc) ? frag.cc : 0;
+      if (!current || current.cc !== cc) {
+        current = { cc, start: frag.start, end: frag.start + frag.duration, duration: frag.duration, frags: [frag] };
+        runs.push(current);
+      } else {
+        current.end = frag.start + frag.duration;
+        current.duration += frag.duration;
+        current.frags.push(frag);
+      }
+    }
+    if (runs.length < 3) return [];
+    const breaks = [];
+    for (let i = 1; i < runs.length - 1; i++) {
+      const prev = runs[i - 1], run = runs[i], next = runs[i + 1];
+      if (run.duration < 15 || run.duration > 60 || run.frags.length < 2) continue;
+      const prevDir = fragDir(fragUrl(prev.frags.at(-1))), nextDir = fragDir(fragUrl(next.frags[0]));
+      if (prevDir !== nextDir) continue;
+      const allAd = run.frags.every((f) => {
+        const u = fragUrl(f);
+        return AD_SEGMENT_RE.test(u) && fragDir(u) !== prevDir && isUnencrypted(f);
+      });
+      if (allAd) breaks.push({ start: run.start, end: run.end, duration: Math.round(run.duration), source: "hls" });
+    }
+    return breaks;
+  }
+  var breakCache = /* @__PURE__ */ new WeakMap();
+  function readPlayerAdBreaks(candidate) {
+    if (!candidate || !candidate.video || candidate.video.nodeType !== 1) return [];
+    let hls = null;
+    try {
+      hls = accessibleHls(candidate);
+    } catch {
+      return [];
+    }
+    const fragments = hls?.levels?.[hls.currentLevel]?.details?.fragments;
+    if (!Array.isArray(fragments) || !fragments.length) return [];
+    if (breakCache.has(fragments)) return breakCache.get(fragments);
+    const found = detectHlsAdBreaks(fragments);
+    breakCache.set(fragments, found);
+    return found;
+  }
+
   // shared/player/buffering.js
   function bufferedAhead(video, time = video.currentTime) {
     if (!Number.isFinite(time) || time < 0) return 0;
@@ -1206,7 +1273,37 @@ var SharedPlayer = (() => {
           healthyFrames = false;
         }
       }
-      if (allowExpansion && enabled && ["1.6.5", "1.6.8", "1.7.3"].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && (!tuning || now - tuning.lastStep >= 15e3) && healthyFrames && qualityBaseline && stableSince !== null && now - stableSince >= 15e3 && time - stableTime >= 12 && Number.isFinite(video.duration) && video.duration > 0) {
+      const supportedHls = enabled && ["1.6.5", "1.6.8", "1.7.3"].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && Number.isFinite(video.duration) && video.duration > 0;
+      const adBreaks = supportedHls && status === "playing" && !video.seeking && video.playbackRate === 1 && !doc.hidden && now >= cooldownUntil ? readPlayerAdBreaks(candidate) : [];
+      const upcomingAd = adBreaks.find((b) => b.start > time && b.start - time <= 45) || null;
+      if (tuning?.ssai && !adBreaks.some((b) => b.end > time && b.start - time <= 45)) restore();
+      if (upcomingAd) {
+        const { loading: loadingBitrate, budget: bitrate } = bitrates();
+        let cachedSeconds = 0;
+        try {
+          for (let i = 0; i < video.buffered.length; i++) cachedSeconds += video.buffered.end(i) - video.buffered.start(i);
+        } catch {
+          cachedSeconds = Infinity;
+        }
+        const original = tuning ? { ...engine.config, ...tuning.before } : engine.config;
+        const plan = bufferExpansionPlan(original, bitrate, Math.max(0, cachedSeconds - ahead), loadingBitrate);
+        const native = hlsBufferTarget(engine.config, loadingBitrate), actual = engine.streamController?.getMaxBufferLength?.(loadingBitrate);
+        const owned = !tuning || Object.entries(tuning.after).every(([key, value]) => engine.config[key] === value);
+        if (!owned) {
+          limited = true;
+          restore();
+        } else if (plan && Number.isFinite(actual) && Math.abs(actual - native) < 0.01) {
+          const maximum = hlsBufferTarget({ ...original, ...plan.after }, loadingBitrate);
+          const desired = Math.ceil(upcomingAd.end + 10 - time);
+          const target = Math.min(maximum, desired);
+          if (target > native && engine.config.maxBufferLength < upcomingAd.end + 10 - time) {
+            const after = { maxBufferLength: Math.max(original.maxBufferLength, target), maxMaxBufferLength: Math.max(original.maxMaxBufferLength, target) };
+            Object.assign(engine.config, after);
+            tuning = { engine, before: plan.before, after, since: tuning?.since ?? now, lastStep: tuning?.lastStep ?? now, ssai: !tuning || !!tuning.ssai };
+            policy = "expanded";
+          }
+        }
+      } else if (allowExpansion && supportedHls && (!tuning || now - tuning.lastStep >= 15e3) && healthyFrames && qualityBaseline && stableSince !== null && now - stableSince >= 15e3 && time - stableTime >= 12) {
         const { loading: loadingBitrate, budget: bitrate } = bitrates();
         let cachedSeconds = 0;
         try {
@@ -1276,85 +1373,21 @@ var SharedPlayer = (() => {
     } };
   }
 
-  // shared/player/ssai-breaks.js
-  var AD_SEGMENT_RE = /\/v\d+\/[0-9a-f]{32}\/segment_\d{3,5}\.ts(?:[?#]|$)/i;
-  function fragUrl(frag) {
-    const raw = frag?.url || frag?.relurl || "";
-    return typeof raw === "string" ? raw : "";
-  }
-  function fragDir(url) {
-    if (!url) return "";
-    const clean = url.split(/[?#]/)[0];
-    const idx = clean.lastIndexOf("/");
-    return idx >= 0 ? clean.slice(0, idx + 1) : "";
-  }
-  function isUnencrypted(frag) {
-    const d = frag?.decryptdata;
-    if (!d) return true;
-    if (d.method && d.method !== "NONE") return false;
-    return !d.uri;
-  }
-  function detectHlsAdBreaks(fragments) {
-    if (!Array.isArray(fragments) || fragments.length < 5) return [];
-    const runs = [];
-    let current = null;
-    for (const frag of fragments) {
-      if (!frag || !Number.isFinite(frag.start) || !Number.isFinite(frag.duration) || frag.duration <= 0) continue;
-      const cc = Number.isFinite(frag.cc) ? frag.cc : 0;
-      if (!current || current.cc !== cc) {
-        current = { cc, start: frag.start, end: frag.start + frag.duration, duration: frag.duration, frags: [frag] };
-        runs.push(current);
-      } else {
-        current.end = frag.start + frag.duration;
-        current.duration += frag.duration;
-        current.frags.push(frag);
-      }
-    }
-    if (runs.length < 3) return [];
-    const breaks = [];
-    for (let i = 1; i < runs.length - 1; i++) {
-      const prev = runs[i - 1], run = runs[i], next = runs[i + 1];
-      if (run.duration < 15 || run.duration > 60 || run.frags.length < 2) continue;
-      const prevDir = fragDir(fragUrl(prev.frags.at(-1))), nextDir = fragDir(fragUrl(next.frags[0]));
-      if (prevDir !== nextDir) continue;
-      const allAd = run.frags.every((f) => {
-        const u = fragUrl(f);
-        return AD_SEGMENT_RE.test(u) && fragDir(u) !== prevDir && isUnencrypted(f);
-      });
-      if (allAd) breaks.push({ start: run.start, end: run.end, duration: Math.round(run.duration), source: "hls" });
-    }
-    return breaks;
-  }
-  var breakCache = /* @__PURE__ */ new WeakMap();
-  function readPlayerAdBreaks(candidate) {
-    if (!candidate || !candidate.video || candidate.video.nodeType !== 1) return [];
-    let hls = null;
-    try {
-      hls = accessibleHls(candidate);
-    } catch {
-      return [];
-    }
-    const fragments = hls?.levels?.[hls.currentLevel]?.details?.fragments;
-    if (!Array.isArray(fragments) || !fragments.length) return [];
-    if (breakCache.has(fragments)) return breakCache.get(fragments);
-    const found = detectHlsAdBreaks(fragments);
-    breakCache.set(fragments, found);
-    return found;
-  }
-
   // shared/player/skip-preferences.js
   var KEY = "media.skip.prefs.v1";
   var MAX_MARKS = 200;
   function readRaw(win) {
-    try {
-      if (typeof GM_getValue === "function") {
-        const v = GM_getValue(KEY, null);
-        if (v) return typeof v === "string" ? JSON.parse(v) : v;
+    for (const gm of [typeof GM_getValue === "function" ? GM_getValue : null, win?.GM_getValue]) {
+      try {
+        if (typeof gm === "function") {
+          const v = gm(KEY, null);
+          if (v) return typeof v === "string" ? JSON.parse(v) : v;
+        }
+      } catch {
       }
-    } catch {
     }
     try {
-      const v = win.localStorage?.getItem(KEY);
+      const v = win?.localStorage?.getItem(KEY);
       if (v) return JSON.parse(v);
     } catch {
     }
@@ -1362,17 +1395,22 @@ var SharedPlayer = (() => {
   }
   function writeRaw(win, data) {
     const json = JSON.stringify(data);
-    try {
-      if (typeof GM_setValue === "function") {
-        GM_setValue(KEY, json);
-        return;
+    let wroteGm = false;
+    for (const gm of [typeof GM_setValue === "function" ? GM_setValue : null, win?.GM_setValue]) {
+      try {
+        if (typeof gm === "function") {
+          gm(KEY, json);
+          wroteGm = true;
+          break;
+        }
+      } catch {
       }
-    } catch {
     }
     try {
-      win.localStorage?.setItem(KEY, json);
+      win?.localStorage?.setItem(KEY, json);
     } catch {
     }
+    return wroteGm;
   }
   function normalizeData(raw) {
     const out = { autoSkipIntro: false, autoSkipAd: false, adMarks: {} };
@@ -1531,7 +1569,7 @@ var SharedPlayer = (() => {
     const lockRecord = fullscreenLockRecord(doc);
     const fullscreenScope = () => inFullscreen() ? doc.fullscreenElement || root : null;
     locked = !!fullscreenScope() && (typeof options.initialLocked === "boolean" ? options.initialLocked : lockRecord.scope === fullscreenScope() && lockRecord.locked);
-    let hideTimer = 0, lockTimer = 0, tipTimer = 0, errorTimer = 0, nextErrorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
+    let hideTimer = 0, lockTimer = 0, tipTimer = 0, noticeTimer = 0, errorTimer = 0, nextErrorTimer = 0, nextTimer = 0, scrubTimer = 0, nextPending = null, nextError = null;
     const audio = options.audioPreferences ? audioPreferenceSession(win, player, options.audioPreferences) : null;
     const savedAttributes = new Map(["controls", "playsinline", "webkit-playsinline"].map((name) => [name, element?.getAttribute(name) ?? null]));
     const originalPosition = root.style.position;
@@ -1551,6 +1589,14 @@ var SharedPlayer = (() => {
     holdTip.hidden = true;
     holdTip.innerHTML = '2x <span class="rp-chevrons">' + Array(3).fill(playerIcon("play")).join("") + "</span>";
     shell.append(holdTip);
+    const notice = doc.createElement("output");
+    notice.className = "rp-feedback-notice rp-pill";
+    notice.setAttribute("role", "status");
+    notice.setAttribute("aria-live", "polite");
+    notice.hidden = true;
+    notice.innerHTML = playerIcon("forward") + "<span></span>";
+    const noticeSpan = notice.querySelector("span");
+    shell.append(notice);
     const chrome = doc.createElement("div");
     chrome.className = "rp-player-chrome";
     shell.append(chrome);
@@ -1687,11 +1733,11 @@ var SharedPlayer = (() => {
       const nowTime = player.state().time;
       if (pendingAdStart === null) {
         pendingAdStart = nowTime;
-        report("\u0110\xE3 \u0111\xE1nh d\u1EA5u b\u1EAFt \u0111\u1EA7u QC t\u1EA1i " + format(nowTime) + ". B\u1EA5m l\u1EA1i khi QC k\u1EBFt th\xFAc.");
+        notify("\u0110\xE3 \u0111\xE1nh d\u1EA5u b\u1EAFt \u0111\u1EA7u QC t\u1EA1i " + format(nowTime) + ". B\u1EA5m l\u1EA1i khi QC k\u1EBFt th\xFAc.");
       } else {
         const saved = skipPrefs.setAdMark(fk, pendingAdStart, nowTime);
         pendingAdStart = null;
-        if (saved) report("\u0110\xE3 l\u01B0u m\u1ED1c QC (+" + saved.duration + "s) cho c\xE1c t\u1EADp sau.");
+        if (saved) notify("\u0110\xE3 l\u01B0u m\u1ED1c QC (+" + saved.duration + "s) cho c\xE1c t\u1EADp sau.");
         else report("Kho\u1EA3ng QC ph\u1EA3i t\u1EEB 5 gi\xE2y \u0111\u1EBFn 3 ph\xFAt.");
       }
       show();
@@ -1702,7 +1748,7 @@ var SharedPlayer = (() => {
       pendingAdStart = null;
       const fk = filmKeyFromContext(context);
       if (fk) skipPrefs.clearAdMark(fk);
-      report("\u0110\xE3 x\xF3a m\u1ED1c QC c\u1EE7a phim n\xE0y.");
+      notify("\u0110\xE3 x\xF3a m\u1ED1c QC c\u1EE7a phim n\xE0y.");
       show();
       update();
     });
@@ -1748,6 +1794,12 @@ var SharedPlayer = (() => {
     error.setAttribute("role", "status");
     error.hidden = true;
     shell.append(error);
+    function notify(msg) {
+      text(noticeSpan, msg);
+      prop(notice, "hidden", false);
+      win.clearTimeout(noticeTimer);
+      noticeTimer = win.setTimeout(() => prop(notice, "hidden", true), 2500);
+    }
     function report(text2) {
       error.textContent = text2;
       error.hidden = false;
@@ -1813,14 +1865,14 @@ var SharedPlayer = (() => {
       }, 2500);
       applyChrome();
     }
-    function setLocked(value, notify = true) {
+    function setLocked(value, notify2 = true) {
       if (value && !inFullscreen()) return;
       cancelGestures();
       const changed2 = locked !== value;
       locked = value;
       prop(settings, "hidden", true);
       win.clearTimeout(lockTimer);
-      if (changed2 && notify) options.onLockChange?.(locked);
+      if (changed2 && notify2) options.onLockChange?.(locked);
       if (value) revealLock();
       else show();
       update();
@@ -1862,14 +1914,12 @@ var SharedPlayer = (() => {
           break;
         case "context":
           if (node.dataset.rpMode === "ad-hls" && activeAdTarget?.source === "hls") {
-            command("seek", Math.min(activeAdTarget.end, player.state().duration));
-            report("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o");
+            if (command("seek", Math.min(activeAdTarget.end + 2, player.state().duration - 0.5))) notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (" + activeAdTarget.duration + "s)");
           } else if (node.dataset.rpMode === "ad-mark" && activeAdTarget?.source === "mark") {
-            command("seek", Math.min(player.state().time + activeAdTarget.duration, player.state().duration));
-            report("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (+" + activeAdTarget.duration + "s)");
+            if (command("seek", Math.min(player.state().time + activeAdTarget.duration, player.state().duration - 0.5))) notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (+" + activeAdTarget.duration + "s)");
           } else if (node.dataset.rpMode === "intro") {
-            if (options.onIntro) options.onIntro();
-            else command("seek", Math.min(introEnd(), player.state().duration));
+            options.onIntro?.();
+            if (player.state().time < introEnd() - 5) command("seek", Math.min(introEnd(), player.state().duration));
           } else beginNext(node);
           break;
         case "next":
@@ -2132,23 +2182,28 @@ var SharedPlayer = (() => {
       prop(clearMarkBtn, "hidden", pendingAdStart === null && !userMark);
       prop(clearMarkBtn, "disabled", locked);
       const hlsBreaks = state.ready && !state.ad ? readPlayerAdBreaks(player) : [];
-      const hlsAd = hlsBreaks.find((b) => state.time >= b.start - 1 && state.time < b.end - 1) || null;
+      const hlsAd = hlsBreaks.find((b) => state.time >= b.start - 15 && state.time < b.end - 1) || null;
+      const autoHlsAd = sp.autoSkipAd ? hlsBreaks.find((b) => state.time >= b.start - 3 && state.time < b.end) || null : null;
       const markAd = !hlsAd && state.ready && !state.ad && userMark && state.time >= userMark.start - 30 && state.time <= userMark.start + Math.max(30, userMark.duration) ? { ...userMark, source: "mark" } : null;
       activeAdTarget = hlsAd || markAd;
-      const epKey = context ? [context.url, context.episodeID, context.lane].join("|") : "";
-      if (state.ready && !state.ad && !state.paused && sp.autoSkipAd && hlsAd && state.time >= hlsAd.start) {
-        const adKey = epKey + "|" + Math.round(hlsAd.start);
-        if (adKey !== lastAutoAdKey) {
+      const epKey = (context ? [context.url, context.episodeID, context.lane].join("|") : "") || player.fingerprint?.() || "current";
+      if (state.ready && !state.ad && !state.paused && sp.autoSkipAd && autoHlsAd) {
+        const adKey = epKey + "|" + Math.round(autoHlsAd.start);
+        if (adKey !== lastAutoAdKey && command("seek", Math.min(autoHlsAd.end + 2, state.duration - 0.5))) {
           lastAutoAdKey = adKey;
-          if (command("seek", Math.min(hlsAd.end, state.duration))) report("\u0110\xE3 t\u1EF1 b\u1ECF qua qu\u1EA3ng c\xE1o (" + hlsAd.duration + "s)");
+          notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (" + autoHlsAd.duration + "s)");
         }
       }
       const intro = state.ready && !state.ad && state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.ready && state.duration - state.time <= 180;
-      if (intro && !state.paused && sp.autoSkipIntro && epKey && autoIntroKey !== epKey) {
-        autoIntroKey = epKey;
-        if (options.onIntro) options.onIntro();
-        else command("seek", Math.min(introEnd(), state.duration));
-        report("\u0110\xE3 t\u1EF1 b\u1ECF qua gi\u1EDBi thi\u1EC7u");
+      const videoReady = video?.nodeType === 1 ? video.readyState >= 2 : !(video?.readyState < 2);
+      if (intro && !state.paused && sp.autoSkipIntro && videoReady && autoIntroKey !== epKey) {
+        options.onIntro?.();
+        const target = Math.min(introEnd(), state.duration);
+        const jumped = player.state().time >= introEnd() - 5 || command("seek", target);
+        if (jumped) {
+          autoIntroKey = epKey;
+          notify("\u0110\xE3 b\u1ECF qua gi\u1EDBi thi\u1EC7u");
+        }
       }
       const ctxMode = nextPending?.node === contextAction || nextError?.node === contextAction ? "next" : hlsAd ? "ad-hls" : markAd ? "ad-mark" : intro ? "intro" : "next";
       data(contextAction, "rpMode", ctxMode);
@@ -2251,7 +2306,7 @@ var SharedPlayer = (() => {
         offGestures();
         offPlayer?.();
         nativeObserver.disconnect();
-        for (const timer of [hideTimer, lockTimer, tipTimer, errorTimer, nextErrorTimer, nextTimer, scrubTimer]) win.clearTimeout(timer);
+        for (const timer of [hideTimer, lockTimer, tipTimer, noticeTimer, errorTimer, nextErrorTimer, nextTimer, scrubTimer]) win.clearTimeout(timer);
         for (const name of mediaEvents) video.removeEventListener(name, changed);
         for (const name of inputEvents) shell.removeEventListener(name, block);
         doc.removeEventListener("fullscreenchange", fsChanged);
@@ -5258,7 +5313,11 @@ function startMotchillPlayerController(sites) {
     // Reparenting a loaded iframe recreates its browsing context. Adopt its
     // existing wrapper (or JW root) so current playback and bridge nonce survive.
     if (host.matches?.('.jwplayer,.art-video-player') || host.tagName === 'IFRAME' || host.querySelector?.('iframe')) {
-      shell = host.matches?.('.jwplayer,.art-video-player') ? host : host.parentElement;
+      const outerWrapper = host.matches?.('.jwplayer,.art-video-player')
+        && host.parentElement && !/^(HTML|BODY|MAIN)$/.test(host.parentElement.tagName)
+        && host.parentElement.matches?.('#player,#player-wrapper,#dooplay_player_response,.embed-responsive,.player-ratio,.player-box,.player-wrapper')
+        ? host.parentElement : null;
+      shell = outerWrapper || (host.matches?.('.jwplayer,.art-video-player') ? host : host.parentElement);
       shell.classList.add('mc-shell');
       baseHost = host === shell ? null : host;
       // A bare iframe can live beside episode links/servers in main/body. Keep

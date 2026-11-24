@@ -1,6 +1,7 @@
 import {mediaNetworkProbe} from './media-network.js';
 import {accessibleHls} from '../engines/hls-access.js';
-import {bufferExpansionStep,hlsBufferTarget,observedMediaBitrate} from './buffer-policy.js';
+import {bufferExpansionPlan,bufferExpansionStep,hlsBufferTarget,observedMediaBitrate} from './buffer-policy.js';
+import {readPlayerAdBreaks} from './ssai-breaks.js';
 
 export function bufferedAhead(video,time=video.currentTime){
   if(!Number.isFinite(time) || time<0)return 0;
@@ -83,7 +84,30 @@ export function mediaLoadMonitor(candidate,{active=()=>true,allowExpansion=false
     }
     // Native quotas remain in charge. Unknown/live engines and startup/seek/
     // prepared frames must never receive a larger target or preload/play call.
-    if(allowExpansion && enabled && ['1.6.5','1.6.8','1.7.3'].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live===false && !limited && (!tuning || now-tuning.lastStep>=15000) && healthyFrames && qualityBaseline && stableSince!==null && now-stableSince>=15000 && time-stableTime>=12 && Number.isFinite(video.duration) && video.duration>0){
+    const supportedHls=enabled && ['1.6.5','1.6.8','1.7.3'].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live===false && !limited && Number.isFinite(video.duration) && video.duration>0;
+    const adBreaks=supportedHls && status==='playing' && !video.seeking && video.playbackRate===1 && !doc.hidden && now>=cooldownUntil?readPlayerAdBreaks(candidate):[];
+    const upcomingAd=adBreaks.find(b=>b.start>time && b.start-time<=45) || null;
+    if(tuning?.ssai && !adBreaks.some(b=>b.end>time && b.start-time<=45))restore();
+    if(upcomingAd){
+      const {loading:loadingBitrate,budget:bitrate}=bitrates();
+      let cachedSeconds=0;try{for(let i=0;i<video.buffered.length;i++)cachedSeconds+=video.buffered.end(i)-video.buffered.start(i);}catch{cachedSeconds=Infinity;}
+      const original=tuning?{...engine.config,...tuning.before}:engine.config;
+      const plan=bufferExpansionPlan(original,bitrate,Math.max(0,cachedSeconds-ahead),loadingBitrate);
+      const native=hlsBufferTarget(engine.config,loadingBitrate),actual=engine.streamController?.getMaxBufferLength?.(loadingBitrate);
+      const owned=!tuning || Object.entries(tuning.after).every(([key,value])=>engine.config[key]===value);
+      if(!owned){limited=true;restore();}
+      else if(plan && Number.isFinite(actual) && Math.abs(actual-native)<.01){
+        const maximum=hlsBufferTarget({...original,...plan.after},loadingBitrate);
+        const desired=Math.ceil(upcomingAd.end+10-time);
+        const target=Math.min(maximum,desired);
+        if(target>native && engine.config.maxBufferLength<upcomingAd.end+10-time){
+          const after={maxBufferLength:Math.max(original.maxBufferLength,target),maxMaxBufferLength:Math.max(original.maxMaxBufferLength,target)};
+          Object.assign(engine.config,after);
+          tuning={engine,before:plan.before,after,since:tuning?.since ?? now,lastStep:tuning?.lastStep ?? now,ssai:!tuning || !!tuning.ssai};
+          policy='expanded';
+        }
+      }
+    }else if(allowExpansion && supportedHls && (!tuning || now-tuning.lastStep>=15000) && healthyFrames && qualityBaseline && stableSince!==null && now-stableSince>=15000 && time-stableTime>=12){
       const {loading:loadingBitrate,budget:bitrate}=bitrates();
       let cachedSeconds=0;try{for(let i=0;i<video.buffered.length;i++)cachedSeconds+=video.buffered.end(i)-video.buffered.start(i);}catch{/* discarded source: no expansion */cachedSeconds=Infinity;}
       const original=tuning?{...engine.config,...tuning.before}:engine.config;

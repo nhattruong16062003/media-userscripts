@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Lịch sử xem
 // @namespace    rophim-userscripts.local
-// @version      0.4.22
+// @version      0.4.23
 // @author       zic
 // @description  Lịch sử xem cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -879,6 +879,72 @@
     return Math.max(...samples.map((s) => s.bytes * 8 / s.duration));
   }
 
+  // shared/player/ssai-breaks.js
+  var AD_SEGMENT_RE = /\/v\d+\/[0-9a-f]{32}\/segment_\d{3,5}\.ts(?:[?#]|$)/i;
+  function fragUrl(frag) {
+    const raw = frag?.url || frag?.relurl || "";
+    return typeof raw === "string" ? raw : "";
+  }
+  function fragDir(url) {
+    if (!url) return "";
+    const clean = url.split(/[?#]/)[0];
+    const idx = clean.lastIndexOf("/");
+    return idx >= 0 ? clean.slice(0, idx + 1) : "";
+  }
+  function isUnencrypted(frag) {
+    const d = frag?.decryptdata;
+    if (!d) return true;
+    if (d.method && d.method !== "NONE") return false;
+    return !d.uri;
+  }
+  function detectHlsAdBreaks(fragments) {
+    if (!Array.isArray(fragments) || fragments.length < 5) return [];
+    const runs = [];
+    let current = null;
+    for (const frag of fragments) {
+      if (!frag || !Number.isFinite(frag.start) || !Number.isFinite(frag.duration) || frag.duration <= 0) continue;
+      const cc = Number.isFinite(frag.cc) ? frag.cc : 0;
+      if (!current || current.cc !== cc) {
+        current = { cc, start: frag.start, end: frag.start + frag.duration, duration: frag.duration, frags: [frag] };
+        runs.push(current);
+      } else {
+        current.end = frag.start + frag.duration;
+        current.duration += frag.duration;
+        current.frags.push(frag);
+      }
+    }
+    if (runs.length < 3) return [];
+    const breaks = [];
+    for (let i = 1; i < runs.length - 1; i++) {
+      const prev = runs[i - 1], run = runs[i], next = runs[i + 1];
+      if (run.duration < 15 || run.duration > 60 || run.frags.length < 2) continue;
+      const prevDir = fragDir(fragUrl(prev.frags.at(-1))), nextDir = fragDir(fragUrl(next.frags[0]));
+      if (prevDir !== nextDir) continue;
+      const allAd = run.frags.every((f) => {
+        const u = fragUrl(f);
+        return AD_SEGMENT_RE.test(u) && fragDir(u) !== prevDir && isUnencrypted(f);
+      });
+      if (allAd) breaks.push({ start: run.start, end: run.end, duration: Math.round(run.duration), source: "hls" });
+    }
+    return breaks;
+  }
+  var breakCache = /* @__PURE__ */ new WeakMap();
+  function readPlayerAdBreaks(candidate) {
+    if (!candidate || !candidate.video || candidate.video.nodeType !== 1) return [];
+    let hls = null;
+    try {
+      hls = accessibleHls(candidate);
+    } catch {
+      return [];
+    }
+    const fragments = hls?.levels?.[hls.currentLevel]?.details?.fragments;
+    if (!Array.isArray(fragments) || !fragments.length) return [];
+    if (breakCache.has(fragments)) return breakCache.get(fragments);
+    const found = detectHlsAdBreaks(fragments);
+    breakCache.set(fragments, found);
+    return found;
+  }
+
   // shared/player/buffering.js
   function bufferedAhead(video, time = video.currentTime) {
     if (!Number.isFinite(time) || time < 0) return 0;
@@ -1081,7 +1147,37 @@
           healthyFrames = false;
         }
       }
-      if (allowExpansion && enabled && ["1.6.5", "1.6.8", "1.7.3"].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && (!tuning || now - tuning.lastStep >= 15e3) && healthyFrames && qualityBaseline && stableSince !== null && now - stableSince >= 15e3 && time - stableTime >= 12 && Number.isFinite(video.duration) && video.duration > 0) {
+      const supportedHls = enabled && ["1.6.5", "1.6.8", "1.7.3"].includes(engine?.constructor?.version) && engine.levels?.[engine.currentLevel]?.details?.live === false && !limited && Number.isFinite(video.duration) && video.duration > 0;
+      const adBreaks = supportedHls && status === "playing" && !video.seeking && video.playbackRate === 1 && !doc.hidden && now >= cooldownUntil ? readPlayerAdBreaks(candidate) : [];
+      const upcomingAd = adBreaks.find((b) => b.start > time && b.start - time <= 45) || null;
+      if (tuning?.ssai && !adBreaks.some((b) => b.end > time && b.start - time <= 45)) restore();
+      if (upcomingAd) {
+        const { loading: loadingBitrate, budget: bitrate } = bitrates();
+        let cachedSeconds = 0;
+        try {
+          for (let i = 0; i < video.buffered.length; i++) cachedSeconds += video.buffered.end(i) - video.buffered.start(i);
+        } catch {
+          cachedSeconds = Infinity;
+        }
+        const original = tuning ? { ...engine.config, ...tuning.before } : engine.config;
+        const plan = bufferExpansionPlan(original, bitrate, Math.max(0, cachedSeconds - ahead), loadingBitrate);
+        const native = hlsBufferTarget(engine.config, loadingBitrate), actual = engine.streamController?.getMaxBufferLength?.(loadingBitrate);
+        const owned = !tuning || Object.entries(tuning.after).every(([key, value]) => engine.config[key] === value);
+        if (!owned) {
+          limited = true;
+          restore();
+        } else if (plan && Number.isFinite(actual) && Math.abs(actual - native) < 0.01) {
+          const maximum = hlsBufferTarget({ ...original, ...plan.after }, loadingBitrate);
+          const desired = Math.ceil(upcomingAd.end + 10 - time);
+          const target = Math.min(maximum, desired);
+          if (target > native && engine.config.maxBufferLength < upcomingAd.end + 10 - time) {
+            const after = { maxBufferLength: Math.max(original.maxBufferLength, target), maxMaxBufferLength: Math.max(original.maxMaxBufferLength, target) };
+            Object.assign(engine.config, after);
+            tuning = { engine, before: plan.before, after, since: tuning?.since ?? now, lastStep: tuning?.lastStep ?? now, ssai: !tuning || !!tuning.ssai };
+            policy = "expanded";
+          }
+        }
+      } else if (allowExpansion && supportedHls && (!tuning || now - tuning.lastStep >= 15e3) && healthyFrames && qualityBaseline && stableSince !== null && now - stableSince >= 15e3 && time - stableTime >= 12) {
         const { loading: loadingBitrate, budget: bitrate } = bitrates();
         let cachedSeconds = 0;
         try {
