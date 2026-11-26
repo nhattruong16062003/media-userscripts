@@ -139,9 +139,9 @@ export function customPlayerControls(win,player,options={}) {
       case 'lock':setLocked(true);break;
       case 'settings':settings.hidden=!settings.hidden;show();break;
       case 'context':
-        if(node.dataset.rpMode==='ad-hls' && activeAdTarget?.source==='hls'){if(command('seek',Math.min(activeAdTarget.end+2,player.state().duration-0.5)))notify('Đã bỏ qua quảng cáo ('+activeAdTarget.duration+'s)');}
-        else if(node.dataset.rpMode==='ad-mark' && activeAdTarget?.source==='mark'){if(command('seek',Math.min(player.state().time+activeAdTarget.duration,player.state().duration-0.5)))notify('Đã bỏ qua quảng cáo (+'+activeAdTarget.duration+'s)');}
-        else if(node.dataset.rpMode==='intro'){options.onIntro?.();if(player.state().time<introEnd()-5)command('seek',Math.min(introEnd(),player.state().duration));}
+        if(node.dataset.rpMode==='ad-hls' && activeAdTarget?.source==='hls'){if(command('seek',Math.min(activeAdTarget.end+3,player.state().duration-0.5)))notify('Đã bỏ qua quảng cáo ('+activeAdTarget.duration+'s)');}
+        else if(node.dataset.rpMode==='ad-mark' && activeAdTarget?.source==='mark'){if(command('seek',Math.min(player.state().time+activeAdTarget.duration+3,player.state().duration-0.5)))notify('Đã bỏ qua quảng cáo (+'+activeAdTarget.duration+'s)');}
+        else if(node.dataset.rpMode==='intro'){if(options.onIntro)options.onIntro();else command('seek',Math.min(introEnd(),player.state().duration));}
         else beginNext(node);
         break;
       case 'next':beginNext(node);break;
@@ -217,20 +217,21 @@ export function customPlayerControls(win,player,options={}) {
     prop(clearMarkBtn,'hidden',pendingAdStart===null && !userMark);prop(clearMarkBtn,'disabled',locked);
     const hlsBreaks=state.ready && !state.ad?readPlayerAdBreaks(player):[];
     const hlsAd=hlsBreaks.find(b=>state.time>=b.start-15 && state.time<b.end-1) || null;
-    const autoHlsAd=sp.autoSkipAd?hlsBreaks.find(b=>state.time>=b.start-3 && state.time<b.end) || null:null;
+    const autoHlsAd=sp.autoSkipAd?hlsBreaks.find(b=>state.time>=b.start-5 && state.time<b.end) || null:null;
     const markAd=!hlsAd && state.ready && !state.ad && userMark && state.time>=userMark.start-30 && state.time<=userMark.start+Math.max(30,userMark.duration)?{...userMark,source:'mark'}:null;
+    const autoMarkAd=!autoHlsAd && sp.autoSkipAd && state.ready && !state.ad && userMark && state.time>=userMark.start-5 && state.time<userMark.start+userMark.duration?{...userMark,end:userMark.start+userMark.duration,source:'mark'}:null;
     activeAdTarget=hlsAd || markAd;
     const epKey=(context?[context.url,context.episodeID,context.lane].join('|'):'') || player.fingerprint?.() || 'current';
-    if(state.ready && !state.ad && !state.paused && sp.autoSkipAd && autoHlsAd){
-      const adKey=epKey+'|'+Math.round(autoHlsAd.start);
-      if(adKey!==lastAutoAdKey && command('seek',Math.min(autoHlsAd.end+2,state.duration-0.5))){lastAutoAdKey=adKey;notify('Đã bỏ qua quảng cáo ('+autoHlsAd.duration+'s)');}
+    const autoAd=autoHlsAd || autoMarkAd;
+    if(state.ready && !state.ad && !state.paused && sp.autoSkipAd && autoAd){
+      const adKey=epKey+'|'+autoAd.source+'|'+Math.round(autoAd.start);
+      if(adKey!==lastAutoAdKey && command('seek',Math.min(autoAd.end+3,state.duration-0.5))){lastAutoAdKey=adKey;notify('Đã bỏ qua quảng cáo ('+autoAd.duration+'s)');}
     }
     const intro=state.ready && !state.ad && state.time<introEnd()-5 && state.duration>=600,nearEnd=state.ready && state.duration-state.time<=180;
-    const videoReady=video?.nodeType===1?video.readyState>=2:!(video?.readyState<2);
-    if(intro && !state.paused && sp.autoSkipIntro && videoReady && autoIntroKey!==epKey){
-      options.onIntro?.();
+    const videoReady=video?.nodeType===1?video.readyState>=3:!(video?.readyState<2);
+    if(intro && !state.paused && sp.autoSkipIntro && videoReady && state.time>=0.5 && autoIntroKey!==epKey){
       const target=Math.min(introEnd(),state.duration);
-      const jumped=player.state().time>=introEnd()-5 || command('seek',target);
+      const jumped=options.onIntro?(options.onIntro(),true):command('seek',target);
       if(jumped){autoIntroKey=epKey;notify('Đã bỏ qua giới thiệu');}
     }
     const ctxMode=(nextPending?.node===contextAction || nextError?.node===contextAction)?'next':hlsAd?'ad-hls':markAd?'ad-mark':intro?'intro':'next';

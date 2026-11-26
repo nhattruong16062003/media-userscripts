@@ -58,7 +58,14 @@ function createMotchillPlayerLearning(sites, getPage, options = {}) {
     // Ignore an earlier seek reported at the same millisecond as this click.
     const previous = value?.frame ? value.state?.userSeek : userSeek;
     if (previous) intro.seen = [previous.at, previous.serial, previous.mediaId].join('|');
-    ignoredSeek = target; value.currentTime = target;
+    ignoredSeek = target;
+    let sought = false;
+    try {
+      const jwRoot = value.closest?.('.jwplayer');
+      const jwApi = jwRoot?.id && typeof jwplayer === 'function' ? jwplayer(jwRoot.id) : null;
+      if (jwApi && typeof jwApi.seek === 'function') { jwApi.seek(target); sought = true; }
+    } catch (_) {}
+    if (!sought) value.currentTime = target;
     introTimer = setTimeout(() => {
       poll(media, context);
       const result = intro;
@@ -698,11 +705,14 @@ function startMotchillPlayerController(sites) {
       rollbackMedia = media; rollbackMuted = !!media?.muted; rollbackPaused = media?.paused !== false;
       if (candidate.directJw) {
         try { candidate.prevFile = candidate.jwApi.getPlaylistItem?.()?.file || ''; } catch (_) {}
+        const prevSrc = media.currentSrc || media.src || '';
         candidate.jwApi.load([{ file: candidate.file }]);
         await wait(() => {
           validateCandidate(candidate);
           const curFile = candidate.jwApi.getPlaylistItem?.()?.file || '';
-          return curFile === candidate.file && media.readyState >= 1 && Number.isFinite(media.duration) && media.duration > 0;
+          const curSrc = media.currentSrc || media.src || '';
+          const switched = prevSrc ? (curSrc && curSrc !== prevSrc) || media.currentTime < 5 : true;
+          return curFile === candidate.file && switched && media.readyState >= 2 && Number.isFinite(media.duration) && media.duration > 0;
         }, signal);
         let resumedTo = 0;
         const resume = candidate.target.resume;

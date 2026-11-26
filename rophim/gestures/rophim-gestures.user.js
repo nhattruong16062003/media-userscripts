@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RoPhim — Thao tác trình phát
 // @namespace    rophim-userscripts.local
-// @version      0.4.25
+// @version      0.4.26
 // @author       zic
 // @description  Thao tác trình phát cho trang xem RoPhim.
 // @homepageURL  https://github.com/nhattruong16062003/media-userscripts/tree/main/rophim
@@ -741,7 +741,7 @@ SOFTWARE.
       if (owner && unwrap(owner.template?.$video) === rawVideo && !owner.isDestroy) return owner.hls;
       for (const { model, api } of jwOwners) {
         const provider = model.getVideo(), root = api.getContainer();
-        if (unwrap(provider?.video) === rawVideo && sameDoc(rawVideo) && unwrap(rawVideo.closest(".jwplayer")) === unwrap(root) && root?.contains(rawVideo)) return provider.hlsjs;
+        if (unwrap(provider?.video) === rawVideo && sameDoc(rawVideo) && unwrap(rawVideo.closest(".jwplayer")) === unwrap(root) && root?.contains(rawVideo)) return provider.hlsjs || provider.hls || null;
       }
       return null;
     }, win);
@@ -859,21 +859,96 @@ SOFTWARE.
     }
     return breaks;
   }
+  function parseM3u8Fragments(text, baseUrl) {
+    if (typeof text !== "string" || !text.includes("#EXTINF:")) return [];
+    const lines = text.split(/\r?\n/), fragments = [];
+    let cc = 0, t = 0, dur = 0, decryptdata = { method: "NONE", uri: null };
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith("#EXT-X-DISCONTINUITY")) {
+        cc++;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-KEY:")) {
+        const method = line.match(/METHOD=([^,\s]+)/i)?.[1] || "NONE";
+        const uri = line.match(/URI="([^"]+)"/i)?.[1] || null;
+        decryptdata = { method: method.toUpperCase(), uri };
+        continue;
+      }
+      if (line.startsWith("#EXTINF:")) {
+        dur = parseFloat(line.slice(8)) || 0;
+        continue;
+      }
+      if (!line.startsWith("#")) {
+        let url = line;
+        if (baseUrl) try {
+          url = new URL(line, baseUrl).href;
+        } catch {
+        }
+        if (dur > 0) {
+          fragments.push({ cc, start: t, duration: dur, url, decryptdata });
+          t += dur;
+        }
+        dur = 0;
+      }
+    }
+    return fragments;
+  }
   var breakCache = /* @__PURE__ */ new WeakMap();
+  var manifestCache = /* @__PURE__ */ new Map();
+  function fetchManifestBreaks(win, playlistUrl) {
+    if (!playlistUrl || typeof win?.fetch !== "function") return [];
+    const entry = manifestCache.get(playlistUrl);
+    if (entry) return entry.breaks;
+    const record = { breaks: [] };
+    manifestCache.set(playlistUrl, record);
+    if (manifestCache.size > 32) {
+      const first = manifestCache.keys().next().value;
+      manifestCache.delete(first);
+    }
+    const load = async (url, depth = 0) => {
+      const res = await win.fetch(url, { credentials: "omit" });
+      if (!res.ok) return [];
+      const text = await res.text();
+      if (text.length > 2e6) return [];
+      if (text.includes("#EXT-X-STREAM-INF") && depth < 2) {
+        const sub = text.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
+        if (sub) return load(new URL(sub, res.url || url).href, depth + 1);
+        return [];
+      }
+      return detectHlsAdBreaks(parseM3u8Fragments(text, res.url || url));
+    };
+    load(playlistUrl).then((found) => {
+      if (Array.isArray(found)) record.breaks = found;
+    }).catch(() => {
+    });
+    return record.breaks;
+  }
   function readPlayerAdBreaks(candidate) {
     if (!candidate || !candidate.video || candidate.video.nodeType !== 1) return [];
     let hls = null;
     try {
       hls = accessibleHls(candidate);
     } catch {
-      return [];
+      hls = null;
     }
     const fragments = hls?.levels?.[hls.currentLevel]?.details?.fragments;
-    if (!Array.isArray(fragments) || !fragments.length) return [];
-    if (breakCache.has(fragments)) return breakCache.get(fragments);
-    const found = detectHlsAdBreaks(fragments);
-    breakCache.set(fragments, found);
-    return found;
+    if (Array.isArray(fragments) && fragments.length) {
+      if (breakCache.has(fragments)) return breakCache.get(fragments);
+      const found = detectHlsAdBreaks(fragments);
+      breakCache.set(fragments, found);
+      return found;
+    }
+    let playlistUrl = "";
+    try {
+      const item = candidate.kind === "jw" ? candidate.api?.getPlaylistItem?.() : null;
+      const raw = item?.file || item?.sources?.[0]?.file || "";
+      if (/^https:\/\/[^"'\s]+\.m3u8(?:[?#]|$)/i.test(raw)) playlistUrl = raw;
+    } catch {
+    }
+    if (playlistUrl) return fetchManifestBreaks(candidate.video.ownerDocument?.defaultView, playlistUrl);
+    return [];
   }
 
   // shared/player/buffering.js
@@ -2539,12 +2614,12 @@ SOFTWARE.
           break;
         case "context":
           if (node.dataset.rpMode === "ad-hls" && activeAdTarget?.source === "hls") {
-            if (command("seek", Math.min(activeAdTarget.end + 2, player.state().duration - 0.5))) notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (" + activeAdTarget.duration + "s)");
+            if (command("seek", Math.min(activeAdTarget.end + 3, player.state().duration - 0.5))) notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (" + activeAdTarget.duration + "s)");
           } else if (node.dataset.rpMode === "ad-mark" && activeAdTarget?.source === "mark") {
-            if (command("seek", Math.min(player.state().time + activeAdTarget.duration, player.state().duration - 0.5))) notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (+" + activeAdTarget.duration + "s)");
+            if (command("seek", Math.min(player.state().time + activeAdTarget.duration + 3, player.state().duration - 0.5))) notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (+" + activeAdTarget.duration + "s)");
           } else if (node.dataset.rpMode === "intro") {
-            options.onIntro?.();
-            if (player.state().time < introEnd() - 5) command("seek", Math.min(introEnd(), player.state().duration));
+            if (options.onIntro) options.onIntro();
+            else command("seek", Math.min(introEnd(), player.state().duration));
           } else beginNext(node);
           break;
         case "next":
@@ -2808,23 +2883,24 @@ SOFTWARE.
       prop(clearMarkBtn, "disabled", locked);
       const hlsBreaks = state.ready && !state.ad ? readPlayerAdBreaks(player) : [];
       const hlsAd = hlsBreaks.find((b) => state.time >= b.start - 15 && state.time < b.end - 1) || null;
-      const autoHlsAd = sp.autoSkipAd ? hlsBreaks.find((b) => state.time >= b.start - 3 && state.time < b.end) || null : null;
+      const autoHlsAd = sp.autoSkipAd ? hlsBreaks.find((b) => state.time >= b.start - 5 && state.time < b.end) || null : null;
       const markAd = !hlsAd && state.ready && !state.ad && userMark && state.time >= userMark.start - 30 && state.time <= userMark.start + Math.max(30, userMark.duration) ? { ...userMark, source: "mark" } : null;
+      const autoMarkAd = !autoHlsAd && sp.autoSkipAd && state.ready && !state.ad && userMark && state.time >= userMark.start - 5 && state.time < userMark.start + userMark.duration ? { ...userMark, end: userMark.start + userMark.duration, source: "mark" } : null;
       activeAdTarget = hlsAd || markAd;
       const epKey = (context ? [context.url, context.episodeID, context.lane].join("|") : "") || player.fingerprint?.() || "current";
-      if (state.ready && !state.ad && !state.paused && sp.autoSkipAd && autoHlsAd) {
-        const adKey = epKey + "|" + Math.round(autoHlsAd.start);
-        if (adKey !== lastAutoAdKey && command("seek", Math.min(autoHlsAd.end + 2, state.duration - 0.5))) {
+      const autoAd = autoHlsAd || autoMarkAd;
+      if (state.ready && !state.ad && !state.paused && sp.autoSkipAd && autoAd) {
+        const adKey = epKey + "|" + autoAd.source + "|" + Math.round(autoAd.start);
+        if (adKey !== lastAutoAdKey && command("seek", Math.min(autoAd.end + 3, state.duration - 0.5))) {
           lastAutoAdKey = adKey;
-          notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (" + autoHlsAd.duration + "s)");
+          notify("\u0110\xE3 b\u1ECF qua qu\u1EA3ng c\xE1o (" + autoAd.duration + "s)");
         }
       }
       const intro = state.ready && !state.ad && state.time < introEnd() - 5 && state.duration >= 600, nearEnd = state.ready && state.duration - state.time <= 180;
-      const videoReady = video?.nodeType === 1 ? video.readyState >= 2 : !(video?.readyState < 2);
-      if (intro && !state.paused && sp.autoSkipIntro && videoReady && autoIntroKey !== epKey) {
-        options.onIntro?.();
+      const videoReady = video?.nodeType === 1 ? video.readyState >= 3 : !(video?.readyState < 2);
+      if (intro && !state.paused && sp.autoSkipIntro && videoReady && state.time >= 0.5 && autoIntroKey !== epKey) {
         const target = Math.min(introEnd(), state.duration);
-        const jumped = player.state().time >= introEnd() - 5 || command("seek", target);
+        const jumped = options.onIntro ? (options.onIntro(), true) : command("seek", target);
         if (jumped) {
           autoIntroKey = epKey;
           notify("\u0110\xE3 b\u1ECF qua gi\u1EDBi thi\u1EC7u");

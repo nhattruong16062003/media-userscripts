@@ -65,7 +65,7 @@ export function observeHlsOwners(win){
     if(owner && (unwrap(owner.template?.$video)===rawVideo) && !owner.isDestroy)return owner.hls;
     for(const {model,api} of jwOwners){
       const provider=model.getVideo(),root=api.getContainer();
-      if(unwrap(provider?.video)===rawVideo && sameDoc(rawVideo) && unwrap(rawVideo.closest('.jwplayer'))===unwrap(root) && root?.contains(rawVideo))return provider.hlsjs;
+      if(unwrap(provider?.video)===rawVideo && sameDoc(rawVideo) && unwrap(rawVideo.closest('.jwplayer'))===unwrap(root) && root?.contains(rawVideo))return provider.hlsjs || provider.hls || null;
     }
     return null;
   },win);
